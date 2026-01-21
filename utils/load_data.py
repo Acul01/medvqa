@@ -78,13 +78,33 @@ class MedicalVQALoader:
                 "format": "csv"
             }
         }
+        
+        # Mapping from lowercase to canonical names
+        self.dataset_name_mapping = {
+            "pathvqa": "PathVQA",
+            "slake": "SLAKE",
+            "vqarad": "VQA-Rad"
+        }
+    
+    def _normalize_dataset_name(self, dataset_name: str) -> str:
+        """Convert lowercase dataset name to canonical name"""
+        dataset_name_lower = dataset_name.lower()
+        if dataset_name_lower in self.dataset_name_mapping:
+            return self.dataset_name_mapping[dataset_name_lower]
+        # If already canonical, return as-is
+        if dataset_name in self.dataset_configs:
+            return dataset_name
+        raise ValueError(
+            f"Unknown dataset: {dataset_name}. "
+            f"Supported datasets: {list(self.dataset_name_mapping.keys())}"
+        )
     
     def load_dataset(self, dataset_name: str, split: str) -> List[VQASample]:
         """
         Load a specific dataset split.
         
         Args:
-            dataset_name: Name of the dataset ("PathVQA", "SLAKE", or "VQA-Rad")
+            dataset_name: Name of the dataset ("pathvqa", "slake", "vqarad" or canonical names)
             split: Split to load ("train", "validation", or "test")
             
         Returns:
@@ -94,6 +114,9 @@ class MedicalVQALoader:
             ValueError: If dataset_name or split is not supported
             FileNotFoundError: If annotation file is not found
         """
+        # Normalize dataset name (convert lowercase to canonical)
+        dataset_name = self._normalize_dataset_name(dataset_name)
+        
         if dataset_name not in self.dataset_configs:
             raise ValueError(
                 f"Unknown dataset: {dataset_name}. "
