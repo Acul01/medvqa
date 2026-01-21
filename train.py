@@ -71,7 +71,7 @@ def parse_args():
                        help="Save checkpoint every N steps")
     parser.add_argument("--eval_steps", type=int, default=500,
                        help="Evaluate every N steps")
-    parser.add_argument("--max_length", type=int, default=768,
+    parser.add_argument("--max_length", type=int, default=512,
                        help="Maximum sequence length (must accommodate image tokens + text, reduce if OOM)")
     parser.add_argument("--gradient_checkpointing", action="store_true",
                        help="Enable gradient checkpointing to save memory")
@@ -105,6 +105,21 @@ def main():
     # Set seed
     set_seed(args.seed)
     
+    # Check 8-bit optimizer availability
+    if args.use_8bit_optimizer and not BITSANDBYTES_AVAILABLE:
+        print("Warning: --use_8bit_optimizer requires bitsandbytes but it's not installed.")
+        print("Install with: pip install bitsandbytes")
+        print("Falling back to standard optimizer.")
+        args.use_8bit_optimizer = False
+    
+    # Memory optimization hint
+    if args.use_8bit_optimizer:
+        import os
+        if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+            print("Tip: If you encounter OOM errors with 8-bit optimizer, try:")
+            print("  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
+            print("This can help reduce memory fragmentation.")
+    
     # Determine model path
     if args.model_path is None:
         args.model_path = DEFAULT_MODEL_PATHS[args.model]
@@ -123,7 +138,8 @@ def main():
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_path,
         torch_dtype=torch.bfloat16 if args.bf16 else (torch.float16 if args.fp16 else torch.float32),
-        device_map="auto"
+        device_map="auto",
+        low_cpu_mem_usage=True
     )
     
     # Enable gradient checkpointing if requested (saves memory)
