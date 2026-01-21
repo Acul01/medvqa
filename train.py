@@ -14,6 +14,13 @@ from transformers.trainer_utils import set_seed
 
 from utils.dataset import create_dataset
 
+# Check for bitsandbytes (required for 8-bit optimizer)
+try:
+    import bitsandbytes as bnb
+    BITSANDBYTES_AVAILABLE = True
+except ImportError:
+    BITSANDBYTES_AVAILABLE = False
+
 
 # Default model paths for each model type
 DEFAULT_MODEL_PATHS = {
@@ -72,6 +79,8 @@ def parse_args():
                        help="Use mixed precision training")
     parser.add_argument("--bf16", action="store_true",
                        help="Use bfloat16 precision")
+    parser.add_argument("--use_8bit_optimizer", action="store_true",
+                       help="Use 8-bit optimizer (bitsandbytes) to save memory. Requires: pip install bitsandbytes")
     parser.add_argument("--dataloader_num_workers", type=int, default=4,
                        help="Number of dataloader workers")
     
@@ -208,7 +217,7 @@ def main():
         remove_unused_columns=False,
         report_to="tensorboard",
         seed=args.seed,
-        optim="adamw_torch",  # Use standard AdamW (8-bit optimizer requires bitsandbytes)
+        optim="adamw_8bit" if args.use_8bit_optimizer else "adamw_torch",  # 8-bit optimizer saves memory
         max_grad_norm=1.0,  # Gradient clipping
     )
     
