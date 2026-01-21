@@ -169,10 +169,16 @@ def main():
     
     print(f"Using {num_image_tokens} image tokens based on model configuration")
     
+    # Estimate minimum required max_length (image tokens + prefix + some text)
+    # USER: prefix is typically ~5-10 tokens, so we need at least num_image_tokens + 50
+    estimated_min_length = num_image_tokens + 50
+    
     # Warn if max_length might be too short for image tokens
-    if args.max_length < num_image_tokens + 100:
-        print(f"Warning: max_length ({args.max_length}) might be too short for {num_image_tokens} image tokens + text")
-        print(f"Consider increasing --max_length to at least {num_image_tokens + 200}")
+    if args.max_length < estimated_min_length:
+        print(f"ERROR: max_length ({args.max_length}) is too small for {num_image_tokens} image tokens!")
+        print(f"Minimum required: {estimated_min_length} (recommended: {num_image_tokens + 200})")
+        print(f"Please increase --max_length to at least {estimated_min_length}")
+        raise ValueError(f"max_length ({args.max_length}) must be at least {estimated_min_length} for {num_image_tokens} image tokens")
     
     # Create datasets
     print(f"Loading {args.dataset} dataset...")

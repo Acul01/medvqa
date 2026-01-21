@@ -179,18 +179,22 @@ class MedicalVQADataset(Dataset):
             input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids
             
             # Truncate carefully: keep user_prefix and image tokens, truncate rest
+            # CRITICAL: Image tokens must ALWAYS be preserved completely
+            prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
+            
+            # Ensure max_length is at least large enough for prefix + image tokens
+            if self.max_length < prefix_and_image_length:
+                # This is an error condition - max_length is too small
+                raise ValueError(
+                    f"max_length ({self.max_length}) is too small for {num_image_tokens} image tokens + "
+                    f"prefix ({len(user_prefix_ids)} tokens). "
+                    f"Minimum required: {prefix_and_image_length + 50} (recommended: {prefix_and_image_length + 200})"
+                )
+            
             if len(input_ids_list) > self.max_length:
-                # Keep: user_prefix + image_tokens, truncate rest
-                prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
-                if prefix_and_image_length < self.max_length:
-                    # Keep prefix + image tokens, truncate rest
-                    max_rest_length = self.max_length - prefix_and_image_length
-                    input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
-                else:
-                    # Even image tokens don't fit - this shouldn't happen with proper max_length
-                    # Reduce image tokens (shouldn't happen)
-                    available = self.max_length - len(user_prefix_ids)
-                    input_ids_list = user_prefix_ids + [image_token_id] * min(available, num_image_tokens)
+                # Keep prefix + image tokens, truncate rest
+                max_rest_length = self.max_length - prefix_and_image_length
+                input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
             
             # Pad to max_length
             if len(input_ids_list) < self.max_length:
@@ -288,14 +292,22 @@ class MedicalVQADataset(Dataset):
             input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids
             
             # Truncate if needed (keep prefix and image tokens)
+            # CRITICAL: Image tokens must ALWAYS be preserved completely
+            prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
+            
+            # Ensure max_length is at least large enough for prefix + image tokens
+            if self.max_length < prefix_and_image_length:
+                # This is an error condition - max_length is too small
+                raise ValueError(
+                    f"max_length ({self.max_length}) is too small for {num_image_tokens} image tokens + "
+                    f"prefix ({len(user_prefix_ids)} tokens). "
+                    f"Minimum required: {prefix_and_image_length + 50} (recommended: {prefix_and_image_length + 200})"
+                )
+            
             if len(input_ids_list) > self.max_length:
-                prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
-                if prefix_and_image_length < self.max_length:
-                    max_rest_length = self.max_length - prefix_and_image_length
-                    input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
-                else:
-                    available = self.max_length - len(user_prefix_ids)
-                    input_ids_list = user_prefix_ids + [image_token_id] * min(available, num_image_tokens)
+                # Keep prefix + image tokens, truncate rest
+                max_rest_length = self.max_length - prefix_and_image_length
+                input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
             
             # Pad to max_length
             if len(input_ids_list) < self.max_length:
