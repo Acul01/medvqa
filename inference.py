@@ -101,6 +101,21 @@ def main():
     
     processor = AutoProcessor.from_pretrained(args.model_path)
     
+    # Determine number of image tokens from model config
+    num_image_tokens = 576  # Default for LLaVA-1.5
+    if hasattr(model.config, 'image_grid_pinpoints'):
+        num_image_tokens = 576
+    elif hasattr(model.config, 'num_image_tokens'):
+        num_image_tokens = model.config.num_image_tokens
+    elif hasattr(model.config, 'vision_config'):
+        if hasattr(model.config.vision_config, 'image_size'):
+            image_size = model.config.vision_config.image_size
+            patch_size = getattr(model.config.vision_config, 'patch_size', 14)
+            num_patches_per_side = image_size // patch_size
+            num_image_tokens = num_patches_per_side * num_patches_per_side
+    
+    print(f"Using {num_image_tokens} image tokens based on model configuration")
+    
     # Create dataset
     print(f"Loading {args.dataset} {args.split} split...")
     dataset = create_dataset(
@@ -113,7 +128,8 @@ def main():
         max_length=args.max_length,
         for_training=False,  # Inference mode
         question_token=args.question_token,
-        answer_token=args.answer_token
+        answer_token=args.answer_token,
+        num_image_tokens=num_image_tokens
     )
     
     print(f"Dataset loaded: {len(dataset)} samples")

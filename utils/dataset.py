@@ -130,25 +130,11 @@ class MedicalVQADataset(Dataset):
         image = Image.open(image_path).convert("RGB")
         pixel_values = self.image_processor(image, return_tensors="pt")["pixel_values"].squeeze(0)
         
-        # Calculate number of image patches
-        # LLaVA vision tower typically outputs features with shape [batch, num_patches, hidden_dim]
-        # For CLIP-based vision towers: num_patches = (image_size / patch_size)^2 + 1 (for CLS token)
-        # We need to determine how many image token placeholders to insert
-        if len(pixel_values.shape) == 4:  # [batch, channels, height, width]
-            # This is raw image tensor, will be processed by vision tower
-            # Estimate patches: typically 14x14 = 196 patches for 224x224 image
-            # Or 24x24 = 576 patches for 336x336 image
-            # We'll calculate based on actual processed features later
-            num_image_tokens = None  # Will be determined after processing
-        else:
-            # Already processed features
-            num_image_tokens = pixel_values.shape[1] if len(pixel_values.shape) > 1 else 1
-        
         # Use the configured number of image tokens
         num_image_tokens = self.num_image_tokens
         
         # #region agent log
-        _log("debug-session", "run1", "B", "dataset.py:110", "Image processed", {"pixel_values_shape": list(pixel_values.shape), "num_image_tokens": num_image_tokens})
+        _log("debug-session", "run1", "B", "dataset.py:132", "Image processed", {"pixel_values_shape": list(pixel_values.shape), "num_image_tokens": num_image_tokens})
         # #endregion
         
         if self.for_training:
@@ -160,69 +146,65 @@ class MedicalVQADataset(Dataset):
             
             # Insert image token placeholders at the beginning of USER message
             # LLaVA expects multiple image tokens (one per image patch)
-            image_token_string = ""
-            if hasattr(self, 'image_token') and self.image_token:
-                # Repeat image token for each patch
-                image_token_string = " ".join([self.image_token] * num_image_tokens)
-            elif hasattr(self, 'image_token_id') and self.image_token_id is not None:
-                # Use "<image>" string, will be converted to token IDs
-                image_token_string = " ".join(["<image>"] * num_image_tokens)
-            else:
-                # Fallback: try "<image>"
-                image_token_string = " ".join(["<image>"] * num_image_tokens)
-            
-            # Insert image tokens at the start of USER message
-            if image_token_string:
-                full_prompt = full_prompt.replace(
-                    f"{self.formatter.user_prefix}",
-                    f"{self.formatter.user_prefix} {image_token_string}"
-                )
-            
-            # #region agent log
-            _log("debug-session", "run1", "A", "dataset.py:130", "Prompt formatted", {"prompt_preview": full_prompt[:200], "has_image_token": "<image>" in full_prompt or (hasattr(self, 'image_token') and self.image_token and self.image_token in full_prompt)})
-            # #endregion
-            
-            # Tokenize full prompt
-            full_encoding = self.tokenizer(
-                full_prompt,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_length
+            # We'll insert them directly as token IDs to avoid tokenization issues
+            # First, tokenize the prompt without image tokens
+            user_prefix_ids = self.tokenizer.encode(
+                self.formatter.user_prefix,
+                add_special_tokens=False
             )
             
-            # If we have image_token_id but it's not in the tokenized sequence, insert it manually
-            if hasattr(self, 'image_token_id') and self.image_token_id is not None:
-                input_ids_list = full_encoding["input_ids"].squeeze(0).tolist()
-                # Count how many image tokens are already in the sequence
-                num_existing_image_tokens = input_ids_list.count(self.image_token_id)
-                
-                if num_existing_image_tokens < num_image_tokens:
-                    # Need to insert more image tokens
-                    user_prefix_ids = self.tokenizer.encode(
-                        self.formatter.user_prefix,
-                        add_special_tokens=False
-                    )
-                    if user_prefix_ids:
-                        # Find first occurrence of user prefix
-                        for i in range(len(input_ids_list) - len(user_prefix_ids) + 1):
-                            if input_ids_list[i:i+len(user_prefix_ids)] == user_prefix_ids:
-                                # Insert remaining image tokens after user prefix
-                                tokens_to_insert = num_image_tokens - num_existing_image_tokens
-                                for j in range(tokens_to_insert):
-                                    input_ids_list.insert(i + len(user_prefix_ids) + j, self.image_token_id)
-                                # Truncate if needed
-                                if len(input_ids_list) > self.max_length:
-                                    input_ids_list = input_ids_list[:self.max_length]
-                                # Update encoding
-                                full_encoding["input_ids"] = torch.tensor([input_ids_list])
-                                break
+            # Tokenize the rest of the prompt
+            rest_of_prompt = full_prompt.replace(f"{self.formatter.user_prefix}", "").strip()
+            rest_ids = self.tokenizer.encode(rest_of_prompt, add_special_tokens=False)
             
-            input_ids = full_encoding["input_ids"].squeeze(0)
-            attention_mask = full_encoding["attention_mask"].squeeze(0)
+            # Get the image token ID
+            image_token_id = None
+            if hasattr(self, 'image_token_id') and self.image_token_id is not None:
+                image_token_id = self.image_token_id
+            else:
+                # Try to encode "<image>" to get the token ID
+                try:
+                    image_token_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
+                    if image_token_ids:
+                        image_token_id = image_token_ids[0]
+                except:
+                    pass
+            
+            if image_token_id is None:
+                # Last resort: try common LLaVA image token IDs
+                # LLaVA-1.5 typically uses 32000
+                image_token_id = 32000
+            
+            # Build input_ids with image tokens inserted
+            input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids
+            
+            # Truncate carefully: keep user_prefix and image tokens, truncate rest
+            if len(input_ids_list) > self.max_length:
+                # Keep: user_prefix + image_tokens, truncate rest
+                prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
+                if prefix_and_image_length < self.max_length:
+                    # Keep prefix + image tokens, truncate rest
+                    max_rest_length = self.max_length - prefix_and_image_length
+                    input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
+                else:
+                    # Even image tokens don't fit - this shouldn't happen with proper max_length
+                    # Reduce image tokens (shouldn't happen)
+                    available = self.max_length - len(user_prefix_ids)
+                    input_ids_list = user_prefix_ids + [image_token_id] * min(available, num_image_tokens)
+            
+            # Pad to max_length
+            if len(input_ids_list) < self.max_length:
+                input_ids_list = input_ids_list + [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids_list))
+            
+            # Create encoding from list
+            input_ids = torch.tensor([input_ids_list])
+            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
+            input_ids = input_ids.squeeze(0)
+            attention_mask = attention_mask.squeeze(0)
             
             # #region agent log
-            _log("debug-session", "run1", "A", "dataset.py:107", "Text tokenized", {"input_ids_shape": list(input_ids.shape), "input_ids_sample": input_ids[:20].tolist() if len(input_ids) > 20 else input_ids.tolist()})
+            num_inserted = input_ids.tolist().count(image_token_id)
+            _log("debug-session", "run1", "A", "dataset.py:185", "Text tokenized with image tokens", {"input_ids_shape": list(input_ids.shape), "num_image_tokens_inserted": num_inserted, "expected": num_image_tokens, "image_token_id": image_token_id})
             # #endregion
             
             # Create labels: only compute loss for tokens after answer_token
@@ -277,53 +259,51 @@ class MedicalVQADataset(Dataset):
                 question=sample.question
             )
             
-            # Insert image token placeholders at the beginning of USER message
-            image_token_string = ""
-            if hasattr(self, 'image_token') and self.image_token:
-                image_token_string = " ".join([self.image_token] * num_image_tokens)
-            elif hasattr(self, 'image_token_id') and self.image_token_id is not None:
-                image_token_string = " ".join(["<image>"] * num_image_tokens)
-            else:
-                image_token_string = " ".join(["<image>"] * num_image_tokens)
-            
-            if image_token_string:
-                prompt = prompt.replace(
-                    f"{self.formatter.user_prefix}",
-                    f"{self.formatter.user_prefix} {image_token_string}"
-                )
-            
-            # Tokenize text
-            text_encoding = self.tokenizer(
-                prompt,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_length
+            # Insert image token placeholders directly as token IDs (same as training)
+            user_prefix_ids = self.tokenizer.encode(
+                self.formatter.user_prefix,
+                add_special_tokens=False
             )
             
-            # Insert image token IDs if needed (same as training)
+            # Get the image token ID
+            image_token_id = None
             if hasattr(self, 'image_token_id') and self.image_token_id is not None:
-                input_ids_list = text_encoding["input_ids"].squeeze(0).tolist()
-                num_existing_image_tokens = input_ids_list.count(self.image_token_id)
-                
-                if num_existing_image_tokens < num_image_tokens:
-                    user_prefix_ids = self.tokenizer.encode(
-                        self.formatter.user_prefix,
-                        add_special_tokens=False
-                    )
-                    if user_prefix_ids:
-                        for i in range(len(input_ids_list) - len(user_prefix_ids) + 1):
-                            if input_ids_list[i:i+len(user_prefix_ids)] == user_prefix_ids:
-                                tokens_to_insert = num_image_tokens - num_existing_image_tokens
-                                for j in range(tokens_to_insert):
-                                    input_ids_list.insert(i + len(user_prefix_ids) + j, self.image_token_id)
-                                if len(input_ids_list) > self.max_length:
-                                    input_ids_list = input_ids_list[:self.max_length]
-                                text_encoding["input_ids"] = torch.tensor([input_ids_list])
-                                break
+                image_token_id = self.image_token_id
+            else:
+                try:
+                    image_token_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
+                    if image_token_ids:
+                        image_token_id = image_token_ids[0]
+                except:
+                    pass
             
-            input_ids = text_encoding["input_ids"].squeeze(0)
-            attention_mask = text_encoding["attention_mask"].squeeze(0)
+            if image_token_id is None:
+                image_token_id = 32000  # Default LLaVA image token ID
+            
+            # Tokenize the prompt without USER prefix
+            prompt_without_prefix = prompt.replace(f"{self.formatter.user_prefix}", "").strip()
+            rest_ids = self.tokenizer.encode(prompt_without_prefix, add_special_tokens=False)
+            
+            # Build input_ids: [user_prefix] + [image_token] * num_image_tokens + [rest_of_prompt]
+            input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids
+            
+            # Truncate if needed (keep prefix and image tokens)
+            if len(input_ids_list) > self.max_length:
+                prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
+                if prefix_and_image_length < self.max_length:
+                    max_rest_length = self.max_length - prefix_and_image_length
+                    input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
+                else:
+                    available = self.max_length - len(user_prefix_ids)
+                    input_ids_list = user_prefix_ids + [image_token_id] * min(available, num_image_tokens)
+            
+            # Pad to max_length
+            if len(input_ids_list) < self.max_length:
+                input_ids_list = input_ids_list + [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids_list))
+            
+            # Create tensors
+            input_ids = torch.tensor([input_ids_list]).squeeze(0)
+            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
             labels = None  # No labels for inference
         
         result = {

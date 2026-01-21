@@ -64,8 +64,8 @@ def parse_args():
                        help="Save checkpoint every N steps")
     parser.add_argument("--eval_steps", type=int, default=500,
                        help="Evaluate every N steps")
-    parser.add_argument("--max_length", type=int, default=512,
-                       help="Maximum sequence length")
+    parser.add_argument("--max_length", type=int, default=2048,
+                       help="Maximum sequence length (increased to accommodate image tokens)")
     parser.add_argument("--fp16", action="store_true",
                        help="Use mixed precision training")
     parser.add_argument("--bf16", action="store_true",
@@ -117,6 +117,26 @@ def main():
     
     processor = AutoProcessor.from_pretrained(args.model_path)
     
+    # Determine number of image tokens from model config
+    # LLaVA models typically have this in the config
+    num_image_tokens = 576  # Default for LLaVA-1.5
+    if hasattr(model.config, 'image_grid_pinpoints'):
+        # LLaVA-1.5 uses image_grid_pinpoints to determine image size
+        # Default is usually [[336, 672], [672, 336], [672, 672]] for 336x336 base
+        # Which results in 576 tokens (24x24 patches)
+        num_image_tokens = 576
+    elif hasattr(model.config, 'num_image_tokens'):
+        num_image_tokens = model.config.num_image_tokens
+    elif hasattr(model.config, 'vision_config'):
+        # Try to calculate from vision config
+        if hasattr(model.config.vision_config, 'image_size'):
+            image_size = model.config.vision_config.image_size
+            patch_size = getattr(model.config.vision_config, 'patch_size', 14)
+            num_patches_per_side = image_size // patch_size
+            num_image_tokens = num_patches_per_side * num_patches_per_side
+    
+    print(f"Using {num_image_tokens} image tokens based on model configuration")
+    
     # Create datasets
     print(f"Loading {args.dataset} dataset...")
     train_dataset = create_dataset(
@@ -129,7 +149,8 @@ def main():
         max_length=args.max_length,
         for_training=True,
         question_token=args.question_token,
-        answer_token=args.answer_token
+        answer_token=args.answer_token,
+        num_image_tokens=num_image_tokens
     )
     
     # Validation dataset (if available)
@@ -145,7 +166,8 @@ def main():
             max_length=args.max_length,
             for_training=True,
             question_token=args.question_token,
-            answer_token=args.answer_token
+            answer_token=args.answer_token,
+            num_image_tokens=num_image_tokens
         )
         print(f"Validation dataset loaded: {len(val_dataset)} samples")
     except Exception as e:
