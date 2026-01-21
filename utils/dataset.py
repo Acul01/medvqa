@@ -359,7 +359,8 @@ def create_dataset(
     max_length: int = 512,
     for_training: bool = True,
     question_token: str = "<question>",
-    answer_token: str = "<answer>"
+    answer_token: str = "<answer>",
+    num_image_tokens: int = 576  # Number of image tokens (patches) - default for LLaVA-1.5
 ) -> MedicalVQADataset:
     """
     Convenience function to create a dataset.
