@@ -40,8 +40,17 @@ Das Projekt unterstützt drei Medical VQA Datensätze:
 ### Abhängigkeiten
 
 ```bash
-pip install torch transformers pillow pandas tqdm
+pip install torch transformers pillow pandas tqdm nltk
 ```
+
+Nach der Installation von nltk, müssen die benötigten Daten heruntergeladen werden:
+
+```python
+import nltk
+nltk.download('punkt')
+```
+
+Oder alternativ beim ersten Ausführen von `evaluate.py` wird automatisch nach den Daten gesucht.
 
 ## Data Loader
 
@@ -224,8 +233,9 @@ python evaluate.py \
 
 - **Exact Match Accuracy**: Prozent der exakt übereinstimmenden Antworten
 - **Contains Accuracy**: Prozent der Antworten, die die Ground Truth enthalten (oder umgekehrt)
+- **BLEU Score**: BLEU-Score (0.0 bis 1.0) zur Bewertung der Ähnlichkeit zwischen generierter und Ground-Truth-Antwort
 
-Die Evaluation normalisiert Antworten (lowercase, entfernt Interpunktion) für den Vergleich.
+Die Evaluation normalisiert Antworten (lowercase, entfernt Interpunktion) für den Vergleich. Der BLEU-Score verwendet N-gram Overlap zur Bewertung der Textqualität.
 
 ## Workflow-Beispiel
 

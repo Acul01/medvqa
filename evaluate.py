@@ -1,6 +1,6 @@
 """
 Evaluation script for Medical VQA predictions
-Computes accuracy and other metrics
+Computes accuracy, BLEU score and other metrics
 """
 
 import argparse
@@ -8,6 +8,14 @@ import json
 from pathlib import Path
 from typing import List, Dict
 import re
+
+try:
+    from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+    print("Warning: nltk not available. BLEU score will not be computed.")
+    print("Install with: pip install nltk")
 
 
 def normalize_answer(answer: str) -> str:
@@ -40,6 +48,39 @@ def contains_answer(predicted: str, ground_truth: str) -> bool:
     return gt_norm in pred_norm or pred_norm in gt_norm
 
 
+def compute_bleu_score(predicted: str, ground_truth: str) -> float:
+    """
+    Compute BLEU score between predicted and ground truth answer.
+    
+    Args:
+        predicted: Predicted answer
+        ground_truth: Ground truth answer
+        
+    Returns:
+        BLEU score (0.0 to 1.0)
+    """
+    if not NLTK_AVAILABLE:
+        return 0.0
+    
+    # Tokenize answers into words
+    predicted_tokens = predicted.lower().split()
+    ground_truth_tokens = ground_truth.lower().split()
+    
+    # Use smoothing function to avoid zero scores
+    smoothing = SmoothingFunction().method1
+    
+    # Compute BLEU score (using 4-gram BLEU)
+    try:
+        bleu = sentence_bleu(
+            [ground_truth_tokens],
+            predicted_tokens,
+            smoothing_function=smoothing
+        )
+        return bleu
+    except:
+        return 0.0
+
+
 def evaluate_predictions(results: List[Dict]) -> Dict[str, float]:
     """
     Evaluate predictions against ground truth.
@@ -53,6 +94,7 @@ def evaluate_predictions(results: List[Dict]) -> Dict[str, float]:
     exact_matches = 0
     contains_matches = 0
     total = 0
+    bleu_scores = []
     
     for result in results:
         if result.get("ground_truth_answer") is None:
@@ -67,11 +109,19 @@ def evaluate_predictions(results: List[Dict]) -> Dict[str, float]:
         if contains_answer(predicted, ground_truth):
             contains_matches += 1
         
+        # Compute BLEU score
+        bleu = compute_bleu_score(predicted, ground_truth)
+        bleu_scores.append(bleu)
+        
         total += 1
+    
+    # Compute average BLEU score
+    avg_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0.0
     
     metrics = {
         "exact_match_accuracy": exact_matches / total if total > 0 else 0.0,
         "contains_accuracy": contains_matches / total if total > 0 else 0.0,
+        "bleu_score": avg_bleu,
         "total_samples": total,
     }
     
@@ -111,6 +161,10 @@ def main():
     print(f"Total samples: {metrics['total_samples']}")
     print(f"Exact Match Accuracy: {metrics['exact_match_accuracy']:.4f} ({metrics['exact_match_accuracy']*100:.2f}%)")
     print(f"Contains Accuracy: {metrics['contains_accuracy']:.4f} ({metrics['contains_accuracy']*100:.2f}%)")
+    if NLTK_AVAILABLE:
+        print(f"BLEU Score: {metrics['bleu_score']:.4f}")
+    else:
+        print(f"BLEU Score: N/A (nltk not installed)")
     print("=" * 60)
     
     # Save metrics
