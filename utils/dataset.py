@@ -61,6 +61,7 @@ class MedicalVQADataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.for_training = for_training
+        self.num_image_tokens = num_image_tokens  # Store number of image tokens needed
         
         # Initialize prompt formatter
         self.formatter = PromptFormatter(
