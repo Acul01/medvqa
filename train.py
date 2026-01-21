@@ -64,8 +64,10 @@ def parse_args():
                        help="Save checkpoint every N steps")
     parser.add_argument("--eval_steps", type=int, default=500,
                        help="Evaluate every N steps")
-    parser.add_argument("--max_length", type=int, default=2048,
-                       help="Maximum sequence length (increased to accommodate image tokens)")
+    parser.add_argument("--max_length", type=int, default=1024,
+                       help="Maximum sequence length (must accommodate image tokens + text)")
+    parser.add_argument("--gradient_checkpointing", action="store_true",
+                       help="Enable gradient checkpointing to save memory")
     parser.add_argument("--fp16", action="store_true",
                        help="Use mixed precision training")
     parser.add_argument("--bf16", action="store_true",
@@ -115,6 +117,11 @@ def main():
         device_map="auto"
     )
     
+    # Enable gradient checkpointing if requested (saves memory)
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        print("Gradient checkpointing enabled (saves memory)")
+    
     processor = AutoProcessor.from_pretrained(args.model_path)
     
     # Determine number of image tokens from model config
@@ -136,6 +143,11 @@ def main():
             num_image_tokens = num_patches_per_side * num_patches_per_side
     
     print(f"Using {num_image_tokens} image tokens based on model configuration")
+    
+    # Warn if max_length might be too short for image tokens
+    if args.max_length < num_image_tokens + 100:
+        print(f"Warning: max_length ({args.max_length}) might be too short for {num_image_tokens} image tokens + text")
+        print(f"Consider increasing --max_length to at least {num_image_tokens + 200}")
     
     # Create datasets
     print(f"Loading {args.dataset} dataset...")
