@@ -64,8 +64,8 @@ def parse_args():
                        help="Save checkpoint every N steps")
     parser.add_argument("--eval_steps", type=int, default=500,
                        help="Evaluate every N steps")
-    parser.add_argument("--max_length", type=int, default=1024,
-                       help="Maximum sequence length (must accommodate image tokens + text)")
+    parser.add_argument("--max_length", type=int, default=768,
+                       help="Maximum sequence length (must accommodate image tokens + text, reduce if OOM)")
     parser.add_argument("--gradient_checkpointing", action="store_true",
                        help="Enable gradient checkpointing to save memory")
     parser.add_argument("--fp16", action="store_true",
@@ -208,6 +208,8 @@ def main():
         remove_unused_columns=False,
         report_to="tensorboard",
         seed=args.seed,
+        optim="adamw_torch",  # Use standard AdamW (8-bit optimizer requires bitsandbytes)
+        max_grad_norm=1.0,  # Gradient clipping
     )
     
     # #region agent log
