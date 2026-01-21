@@ -174,14 +174,18 @@ class MedicalVQADataset(Dataset):
             "pixel_values": pixel_values,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "image_path": str(image_path),
-            "question": sample.question,
-            "answer": sample.answer if self.for_training else None,
         }
         
         # Add labels for training
         if labels is not None:
             result["labels"] = labels
+        
+        # Add metadata fields only for inference (not for training)
+        # These cause issues with the Trainer's data collator
+        if not self.for_training:
+            result["image_path"] = str(image_path)
+            result["question"] = sample.question
+            result["answer"] = sample.answer
         
         return result
 
