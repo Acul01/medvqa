@@ -7,9 +7,20 @@ from torch.utils.data import Dataset
 from PIL import Image
 from pathlib import Path
 from typing import Dict, List, Optional
+import json
+import os
 
 from utils.load_data import VQASample, MedicalVQALoader
 from utils.prompt_formatter import PromptFormatter
+
+# #region agent log
+LOG_PATH = "/Users/luca/Desktop/Thesis+Work/medvqa/.cursor/debug.log"
+def _log(session_id, run_id, hypothesis_id, location, message, data):
+    try:
+        with open(LOG_PATH, "a") as f:
+            f.write(json.dumps({"sessionId": session_id, "runId": run_id, "hypothesisId": hypothesis_id, "location": location, "message": message, "data": data, "timestamp": os.times().elapsed}) + "\n")
+    except: pass
+# #endregion
 
 
 class MedicalVQADataset(Dataset):
@@ -60,6 +71,37 @@ class MedicalVQADataset(Dataset):
         # Set tokenizer padding
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        
+        # Get image token placeholder from tokenizer (LLaVA uses special image tokens)
+        # Try to find image token - LLaVA typically uses "<image>" or similar
+        self.image_token = None
+        if hasattr(tokenizer, 'image_token_id') and tokenizer.image_token_id is not None:
+            # Tokenizer has explicit image token ID
+            self.image_token_id = tokenizer.image_token_id
+        else:
+            # Try to find image token by encoding "<image>"
+            try:
+                image_token_ids = tokenizer.encode("<image>", add_special_tokens=False)
+                if image_token_ids:
+                    self.image_token_id = image_token_ids[0]
+                    self.image_token = "<image>"
+            except:
+                pass
+            
+            # If still not found, try common LLaVA image token IDs
+            if self.image_token_id is None:
+                # LLaVA-1.5 typically uses token ID 32000 or similar
+                # Try to find it by checking if tokenizer has vocab with image-related tokens
+                if hasattr(tokenizer, 'vocab'):
+                    for token, token_id in tokenizer.vocab.items():
+                        if 'image' in token.lower() or token == '<image>':
+                            self.image_token_id = token_id
+                            self.image_token = token
+                            break
+        
+        # #region agent log
+        _log("debug-session", "run1", "C", "dataset.py:95", "Image token detection", {"image_token": self.image_token, "image_token_id": self.image_token_id if hasattr(self, 'image_token_id') else None})
+        # #endregion
     
     def __len__(self) -> int:
         return len(self.samples)
@@ -86,12 +128,36 @@ class MedicalVQADataset(Dataset):
         image = Image.open(image_path).convert("RGB")
         pixel_values = self.image_processor(image, return_tensors="pt")["pixel_values"].squeeze(0)
         
+        # #region agent log
+        _log("debug-session", "run1", "B", "dataset.py:87", "Image processed", {"pixel_values_shape": list(pixel_values.shape) if hasattr(pixel_values, 'shape') else str(type(pixel_values))})
+        # #endregion
+        
         if self.for_training:
             # TRAINING: Format [question_token; question; answer_token; answer]
             full_prompt = self.formatter.format_training_prompt(
                 question=sample.question,
                 answer=sample.answer
             )
+            
+            # Insert image token placeholder at the beginning of USER message
+            # LLaVA expects image tokens before the text
+            if hasattr(self, 'image_token') and self.image_token:
+                # Insert image token at the start of USER message
+                full_prompt = full_prompt.replace(
+                    f"{self.formatter.user_prefix}",
+                    f"{self.formatter.user_prefix} {self.image_token}"
+                )
+            elif hasattr(self, 'image_token_id') and self.image_token_id is not None:
+                # If we have image_token_id but no string token, we'll insert it during tokenization
+                # For now, try to insert "<image>" string
+                full_prompt = full_prompt.replace(
+                    f"{self.formatter.user_prefix}",
+                    f"{self.formatter.user_prefix} <image>"
+                )
+            
+            # #region agent log
+            _log("debug-session", "run1", "A", "dataset.py:130", "Prompt formatted", {"prompt_preview": full_prompt[:200], "has_image_token": "<image>" in full_prompt or (hasattr(self, 'image_token') and self.image_token and self.image_token in full_prompt)})
+            # #endregion
             
             # Tokenize full prompt
             full_encoding = self.tokenizer(
@@ -102,8 +168,35 @@ class MedicalVQADataset(Dataset):
                 max_length=self.max_length
             )
             
+            # If we have image_token_id but it's not in the tokenized sequence, insert it manually
+            if hasattr(self, 'image_token_id') and self.image_token_id is not None:
+                input_ids_list = full_encoding["input_ids"].squeeze(0).tolist()
+                # Check if image token is already in the sequence
+                if self.image_token_id not in input_ids_list:
+                    # Find USER prefix position and insert image token after it
+                    user_prefix_ids = self.tokenizer.encode(
+                        self.formatter.user_prefix,
+                        add_special_tokens=False
+                    )
+                    if user_prefix_ids:
+                        # Find first occurrence of user prefix
+                        for i in range(len(input_ids_list) - len(user_prefix_ids) + 1):
+                            if input_ids_list[i:i+len(user_prefix_ids)] == user_prefix_ids:
+                                # Insert image token after user prefix
+                                input_ids_list.insert(i + len(user_prefix_ids), self.image_token_id)
+                                # Truncate if needed
+                                if len(input_ids_list) > self.max_length:
+                                    input_ids_list = input_ids_list[:self.max_length]
+                                # Update encoding
+                                full_encoding["input_ids"] = torch.tensor([input_ids_list])
+                                break
+            
             input_ids = full_encoding["input_ids"].squeeze(0)
             attention_mask = full_encoding["attention_mask"].squeeze(0)
+            
+            # #region agent log
+            _log("debug-session", "run1", "A", "dataset.py:107", "Text tokenized", {"input_ids_shape": list(input_ids.shape), "input_ids_sample": input_ids[:20].tolist() if len(input_ids) > 20 else input_ids.tolist()})
+            # #endregion
             
             # Create labels: only compute loss for tokens after answer_token
             labels = input_ids.clone()
@@ -157,6 +250,18 @@ class MedicalVQADataset(Dataset):
                 question=sample.question
             )
             
+            # Insert image token placeholder at the beginning of USER message
+            if hasattr(self, 'image_token') and self.image_token:
+                prompt = prompt.replace(
+                    f"{self.formatter.user_prefix}",
+                    f"{self.formatter.user_prefix} {self.image_token}"
+                )
+            elif hasattr(self, 'image_token_id') and self.image_token_id is not None:
+                prompt = prompt.replace(
+                    f"{self.formatter.user_prefix}",
+                    f"{self.formatter.user_prefix} <image>"
+                )
+            
             # Tokenize text
             text_encoding = self.tokenizer(
                 prompt,
@@ -165,6 +270,23 @@ class MedicalVQADataset(Dataset):
                 truncation=True,
                 max_length=self.max_length
             )
+            
+            # Insert image token ID if needed (same as training)
+            if hasattr(self, 'image_token_id') and self.image_token_id is not None:
+                input_ids_list = text_encoding["input_ids"].squeeze(0).tolist()
+                if self.image_token_id not in input_ids_list:
+                    user_prefix_ids = self.tokenizer.encode(
+                        self.formatter.user_prefix,
+                        add_special_tokens=False
+                    )
+                    if user_prefix_ids:
+                        for i in range(len(input_ids_list) - len(user_prefix_ids) + 1):
+                            if input_ids_list[i:i+len(user_prefix_ids)] == user_prefix_ids:
+                                input_ids_list.insert(i + len(user_prefix_ids), self.image_token_id)
+                                if len(input_ids_list) > self.max_length:
+                                    input_ids_list = input_ids_list[:self.max_length]
+                                text_encoding["input_ids"] = torch.tensor([input_ids_list])
+                                break
             
             input_ids = text_encoding["input_ids"].squeeze(0)
             attention_mask = text_encoding["attention_mask"].squeeze(0)
@@ -179,6 +301,10 @@ class MedicalVQADataset(Dataset):
         # Add labels for training
         if labels is not None:
             result["labels"] = labels
+        
+        # #region agent log
+        _log("debug-session", "run1", "D", "dataset.py:177", "Dataset item created", {"has_pixel_values": "pixel_values" in result, "has_input_ids": "input_ids" in result, "input_ids_shape": list(result["input_ids"].shape) if "input_ids" in result else None, "pixel_values_shape": list(result["pixel_values"].shape) if "pixel_values" in result else None})
+        # #endregion
         
         # Add metadata fields only for inference (not for training)
         # These cause issues with the Trainer's data collator
