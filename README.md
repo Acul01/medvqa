@@ -34,23 +34,6 @@ Das Projekt unterstützt drei Medical VQA Datensätze:
   - `vqarad_images/`: Enthält die Bilder
 - **CSV-Spalten**: `split`, `image_path`, `question`, `answer`
 
-## Projektstruktur
-
-```
-medvqa/
-├── data/                          # Datensätze (nicht im Repo, wegen Größe)
-│   ├── PathVQA/
-│   ├── SLAKE/
-│   └── VQA-Rad/
-├── utils/
-│   ├── load_data.py              # Einheitlicher Data Loader
-│   ├── prompt_formatter.py       # Prompt-Formatierung für LLaVA
-│   └── dataset.py                 # PyTorch Dataset Klasse
-├── train.py                       # Training Script
-├── inference.py                   # Inference Script
-├── evaluate.py                    # Evaluation Script
-└── README.md                      # Diese Datei
-```
 
 ## Installation
 
@@ -59,10 +42,6 @@ medvqa/
 ```bash
 pip install torch transformers pillow pandas tqdm
 ```
-
-### Setup auf Cluster
-
-Für die Verwendung auf dem Cluster siehe `setup_medvqa.sh`.
 
 ## Data Loader
 
@@ -351,11 +330,3 @@ Die Tokens `<question>` und `<answer>` können über Parameter angepasst werden.
 - Reduziere `--per_device_train_batch_size`
 - Erhöhe `--gradient_accumulation_steps`
 - Aktiviere `--fp16` oder `--bf16` für Mixed Precision
-
-## Lizenz
-
-Siehe LICENSE-Datei (falls vorhanden).
-
-## Kontakt
-
-Für Fragen oder Probleme, bitte ein Issue erstellen.
