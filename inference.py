@@ -99,7 +99,14 @@ def main():
     )
     model.eval()
     
-    processor = AutoProcessor.from_pretrained(args.model_path)
+    # Load processor - use original model if trained model doesn't have processor config
+    processor_path = args.model_path
+    if Path(args.model_path).exists() and not Path(args.model_path, "preprocessor_config.json").exists():
+        # Trained model doesn't have processor config, use original model
+        processor_path = DEFAULT_MODEL_PATHS[args.model]
+        print(f"Processor config not found in trained model, loading from original model: {processor_path}")
+    
+    processor = AutoProcessor.from_pretrained(processor_path)
     
     # Determine number of image tokens from model config
     num_image_tokens = 576  # Default for LLaVA-1.5

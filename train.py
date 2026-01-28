@@ -292,6 +292,7 @@ def main():
         seed=args.seed,
         optim="adamw_8bit" if args.use_8bit_optimizer else "adamw_torch",  # 8-bit optimizer saves memory
         max_grad_norm=1.0,  # Gradient clipping
+        save_only_model=True,  # Speichert nur das Modell, nicht Optimizer-State (spart ~27GB pro Checkpoint)
     )
     
     # #region agent log
