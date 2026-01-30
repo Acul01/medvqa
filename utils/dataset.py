@@ -28,7 +28,8 @@ class MedicalVQADataset(Dataset):
     PyTorch Dataset for Medical VQA tasks.
     
     Formats data for LLaVA/LLaVA-Med models with question/answer tokens.
-    For training: Labels are set so that loss is only computed for tokens after answer_token.
+    Format: USER: [question_token; question; answer_token] ASSISTANT: [answer]
+    For training: Labels are set so that loss is only computed for tokens after ASSISTANT:.
     """
     
     def __init__(
@@ -138,7 +139,7 @@ class MedicalVQADataset(Dataset):
         # #endregion
         
         if self.for_training:
-            # TRAINING: Format [question_token; question; answer_token; answer]
+            # TRAINING: Format USER: [question_token; question; answer_token] ASSISTANT: [answer]
             full_prompt = self.formatter.format_training_prompt(
                 question=sample.question,
                 answer=sample.answer

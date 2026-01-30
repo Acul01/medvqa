@@ -1,8 +1,8 @@
 """
 Prompt formatting for LLaVA and LLaVA-Med models
 
-Format: [question_token; question; answer_token; answer]
-For inference: answer is removed, model generates after answer_token
+Format: USER: [question_token; question; answer_token] ASSISTANT: [answer]
+For inference: answer is removed, model generates after ASSISTANT:
 """
 
 from typing import Optional
@@ -51,7 +51,7 @@ class PromptFormatter:
         """
         Format prompt for training (includes answer).
         
-        Format: [question_token; question; answer_token; answer]
+        Format: USER: [question_token; question; answer_token] ASSISTANT: [answer]
         
         Args:
             question: The question to ask
@@ -61,10 +61,10 @@ class PromptFormatter:
         Returns:
             Formatted prompt string
         """
-        # Format: [question_token; question; answer_token; answer]
-        prompt = f"{self.question_token} {question} {self.answer_token} {answer}"
+        # Format: [question_token; question; answer_token] (answer only after ASSISTANT:)
+        prompt = f"{self.question_token} {question} {self.answer_token}"
         
-        # Wrap in LLaVA conversation format
+        # Wrap in LLaVA conversation format - answer comes after ASSISTANT:
         conversation = f"{self.user_prefix} {prompt}\n{self.assistant_prefix} {answer}"
         
         return conversation
