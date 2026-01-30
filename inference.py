@@ -51,8 +51,8 @@ def parse_args():
                        help="Temperature for generation")
     parser.add_argument("--top_p", type=float, default=0.9,
                        help="Top-p for generation")
-    parser.add_argument("--do_sample", action="store_true",
-                       help="Use sampling for generation")
+    parser.add_argument("--do_sample", action="store_true", default=True,
+                       help="Use sampling for generation (default: True)")
     parser.add_argument("--num_beams", type=int, default=1,
                        help="Number of beams for beam search")
     
@@ -170,19 +170,33 @@ def main():
             attention_mask = batch["attention_mask"].to(device)
             
             # Generate
-            outputs = model.generate(
-                input_ids=input_ids,
-                pixel_values=pixel_values,
-                attention_mask=attention_mask,
-                max_new_tokens=args.max_new_tokens,
-                max_length=args.max_length,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                do_sample=args.do_sample,
-                num_beams=args.num_beams,
-                pad_token_id=processor.tokenizer.pad_token_id,
-                eos_token_id=processor.tokenizer.eos_token_id,
-            )
+            # Use sampling by default if not specified, or use greedy if do_sample is False
+            generation_kwargs = {
+                "input_ids": input_ids,
+                "pixel_values": pixel_values,
+                "attention_mask": attention_mask,
+                "max_new_tokens": args.max_new_tokens,
+                "pad_token_id": processor.tokenizer.pad_token_id,
+                "eos_token_id": processor.tokenizer.eos_token_id,
+            }
+            
+            # Use sampling by default for better generation
+            # Enable sampling unless explicitly disabled
+            use_sampling = args.do_sample if hasattr(args, 'do_sample') else True
+            if use_sampling:
+                generation_kwargs.update({
+                    "temperature": args.temperature,
+                    "top_p": args.top_p,
+                    "do_sample": True,
+                })
+            else:
+                generation_kwargs["do_sample"] = False
+            
+            # Add beam search if num_beams > 1
+            if args.num_beams > 1:
+                generation_kwargs["num_beams"] = args.num_beams
+            
+            outputs = model.generate(**generation_kwargs)
             
             # Decode generated text
             generated_texts = processor.batch_decode(outputs, skip_special_tokens=True)

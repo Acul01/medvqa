@@ -21,14 +21,6 @@ try:
 except ImportError:
     BITSANDBYTES_AVAILABLE = False
 
-# Check for PEFT (required for LoRA)
-try:
-    from peft import LoraConfig, get_peft_model, TaskType
-    PEFT_AVAILABLE = True
-except ImportError:
-    PEFT_AVAILABLE = False
-
-
 # Default model paths for each model type
 DEFAULT_MODEL_PATHS = {
     "llava": "llava-hf/llava-1.5-7b-hf",
@@ -88,16 +80,6 @@ def parse_args():
                        help="Use bfloat16 precision")
     parser.add_argument("--use_8bit_optimizer", action="store_true",
                        help="Use 8-bit optimizer (bitsandbytes) to save memory. Requires: pip install bitsandbytes")
-    parser.add_argument("--use_lora", action="store_true",
-                       help="Use LoRA (Low-Rank Adaptation) for efficient fine-tuning. Requires: pip install peft")
-    parser.add_argument("--lora_r", type=int, default=16,
-                       help="LoRA rank (lower = less parameters, less memory)")
-    parser.add_argument("--lora_alpha", type=int, default=32,
-                       help="LoRA alpha (scaling factor, typically 2x lora_r)")
-    parser.add_argument("--lora_dropout", type=float, default=0.1,
-                       help="LoRA dropout rate")
-    parser.add_argument("--lora_target_modules", type=str, nargs="+", default=None,
-                       help="Target modules for LoRA (default: q_proj, v_proj for LLaMA-based models)")
     parser.add_argument("--dataloader_num_workers", type=int, default=4,
                        help="Number of dataloader workers")
     
@@ -163,40 +145,6 @@ def main():
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled (saves memory)")
-    
-    # Apply LoRA if requested
-    if args.use_lora:
-        print("Applying LoRA (Low-Rank Adaptation)...")
-        
-        # Determine target modules for LoRA
-        # For LLaVA models, we typically target the language model's attention layers
-        if args.lora_target_modules is None:
-            # Default target modules for LLaMA-based models (used in LLaVA)
-            target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
-            # For some models, we might also want to target gate_proj, up_proj, down_proj
-            # But let's start with attention layers only for memory efficiency
-        else:
-            target_modules = args.lora_target_modules
-        
-        print(f"LoRA target modules: {target_modules}")
-        print(f"LoRA rank: {args.lora_r}, alpha: {args.lora_alpha}, dropout: {args.lora_dropout}")
-        
-        # Create LoRA config
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,  # Causal language modeling task
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            target_modules=target_modules,
-            bias="none",  # Don't train bias parameters
-        )
-        
-        # Apply LoRA to model
-        model = get_peft_model(model, lora_config)
-        
-        # Print trainable parameters
-        model.print_trainable_parameters()
-        print("LoRA applied successfully!")
     
     processor = AutoProcessor.from_pretrained(args.model_path)
     
@@ -331,11 +279,6 @@ def main():
     print(f"Saving final model to {args.output_dir}")
     trainer.save_model()
     trainer.save_state()
-    
-    # If using LoRA, save adapter separately
-    if args.use_lora:
-        print("Saving LoRA adapter weights...")
-        model.save_pretrained(args.output_dir)
     
     print("Training completed!")
     print(f"Training loss: {train_result.training_loss}")
