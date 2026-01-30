@@ -265,12 +265,12 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        tokenizer=processor.tokenizer,
+        processing_class=processor.tokenizer,
     )
     
     # Train
     print("Starting training...")
-    print(f"Training format: [question_token; question; answer_token; answer]")
+    print(f"Training format: USER: [question_token; question; answer_token] ASSISTANT: [answer]")
     print(f"Loss will be computed only for tokens after {args.answer_token}")
     
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
