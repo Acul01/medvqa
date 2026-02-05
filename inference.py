@@ -62,11 +62,11 @@ def parse_args():
     parser.add_argument("--dataloader_num_workers", type=int, default=4,
                        help="Number of dataloader workers")
     
-    # Prompt tokens
+    # Prompt tokens (deprecated - kept for backward compatibility, not used in standard LLaVA format)
     parser.add_argument("--question_token", type=str, default="<question>",
-                       help="Token marking question start")
+                       help="Token marking question start (deprecated, not used in standard LLaVA format)")
     parser.add_argument("--answer_token", type=str, default="<answer>",
-                       help="Token marking answer start")
+                       help="Token marking answer start (deprecated, not used in standard LLaVA format)")
     
     return parser.parse_args()
 
@@ -140,8 +140,8 @@ def main():
     )
     
     print(f"Dataset loaded: {len(dataset)} samples")
-    print(f"Inference format: [question_token; question; answer_token]")
-    print(f"Model will generate answer after {args.answer_token}")
+    print(f"Inference format: USER: <image>\\n[question]\\nASSISTANT:")
+    print(f"Model will generate answer after ASSISTANT:")
     
     # Create dataloader
     dataloader = DataLoader(

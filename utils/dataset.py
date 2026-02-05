@@ -27,8 +27,8 @@ class MedicalVQADataset(Dataset):
     """
     PyTorch Dataset for Medical VQA tasks.
     
-    Formats data for LLaVA/LLaVA-Med models with question/answer tokens.
-    Format: USER: [question_token; question; answer_token] ASSISTANT: [answer]
+    Formats data for LLaVA/LLaVA-Med models using standard LLaVA format.
+    Format: USER: <image>\n[question]\nASSISTANT: [answer]
     For training: Labels are set so that loss is only computed for tokens after ASSISTANT:.
     """
     
@@ -54,8 +54,8 @@ class MedicalVQADataset(Dataset):
             model_type: "llava" or "llava_med"
             max_length: Maximum sequence length for tokenization
             for_training: If True, include answers in prompts; if False, prepare for inference
-            question_token: Token marking question start
-            answer_token: Token marking answer start
+            question_token: Token marking question start (deprecated, kept for compatibility)
+            answer_token: Token marking answer start (deprecated, kept for compatibility)
         """
         self.samples = samples
         self.image_processor = image_processor
@@ -139,7 +139,7 @@ class MedicalVQADataset(Dataset):
         # #endregion
         
         if self.for_training:
-            # TRAINING: Format USER: [question_token; question; answer_token] ASSISTANT: [answer]
+            # TRAINING: Format USER: <image>\n[question]\nASSISTANT: [answer]
             full_prompt = self.formatter.format_training_prompt(
                 question=sample.question,
                 answer=sample.answer
@@ -212,54 +212,41 @@ class MedicalVQADataset(Dataset):
             _log("debug-session", "run1", "A", "dataset.py:185", "Text tokenized with image tokens", {"input_ids_shape": list(input_ids.shape), "num_image_tokens_inserted": num_inserted, "expected": num_image_tokens, "image_token_id": image_token_id})
             # #endregion
             
-            # Create labels: only compute loss for tokens after answer_token
+            # Create labels: only compute loss for tokens after ASSISTANT:
+            # Standard LLaVA format: loss is computed only for the answer part
             labels = input_ids.clone()
             
-            # Find position of answer_token in tokenized sequence
-            # Tokenize answer_token separately to find its token IDs
-            answer_token_text = self.formatter.answer_token
-            answer_token_ids = self.tokenizer.encode(
-                answer_token_text,
+            # Find position of ASSISTANT: prefix in tokenized sequence
+            # This is where the answer starts - loss should only be computed from here
+            assistant_prefix_ids = self.tokenizer.encode(
+                self.formatter.assistant_prefix,
                 add_special_tokens=False
             )
             
-            # Find where answer_token appears in the sequence
-            answer_token_start_idx = None
+            # Find where ASSISTANT: appears in the sequence
+            answer_start_idx = None
             input_ids_list = input_ids.tolist()
             
-            for i in range(len(input_ids_list) - len(answer_token_ids) + 1):
-                if input_ids_list[i:i+len(answer_token_ids)] == answer_token_ids:
-                    answer_token_start_idx = i + len(answer_token_ids)
+            for i in range(len(input_ids_list) - len(assistant_prefix_ids) + 1):
+                if input_ids_list[i:i+len(assistant_prefix_ids)] == assistant_prefix_ids:
+                    # Start loss computation after ASSISTANT: prefix
+                    answer_start_idx = i + len(assistant_prefix_ids)
                     break
             
-            if answer_token_start_idx is not None:
-                # Set labels to -100 (ignored in loss) for everything before answer_token
-                labels[:answer_token_start_idx] = -100
-                # Keep labels for answer part (after answer_token)
+            if answer_start_idx is not None:
+                # Set labels to -100 (ignored in loss) for everything before ASSISTANT:
+                labels[:answer_start_idx] = -100
+                # Keep labels for answer part (after ASSISTANT:)
             else:
-                # Fallback: if answer_token not found, try to find assistant prefix
-                # This handles cases where tokenization splits the token differently
-                assistant_prefix_ids = self.tokenizer.encode(
-                    self.formatter.assistant_prefix,
-                    add_special_tokens=False
-                )
-                for i in range(len(input_ids_list) - len(assistant_prefix_ids) + 1):
-                    if input_ids_list[i:i+len(assistant_prefix_ids)] == assistant_prefix_ids:
-                        # Start loss computation after assistant prefix
-                        answer_token_start_idx = i + len(assistant_prefix_ids)
-                        labels[:answer_token_start_idx] = -100
-                        break
-                
-                if answer_token_start_idx is None:
-                    # Last resort: set all to -100 except last part (likely the answer)
-                    # This shouldn't happen, but safety check
-                    labels[:len(labels)//2] = -100
+                # Fallback: if ASSISTANT: not found, set all to -100 except last part (likely the answer)
+                # This shouldn't happen with proper formatting, but safety check
+                labels[:len(labels)//2] = -100
             
             # Set padding tokens to -100 (ignored in loss)
             labels[labels == self.tokenizer.pad_token_id] = -100
             
         else:
-            # INFERENCE: Format [question_token; question; answer_token]
+            # INFERENCE: Format USER: <image>\n[question]\nASSISTANT:
             prompt = self.formatter.format_inference_prompt(
                 question=sample.question
             )

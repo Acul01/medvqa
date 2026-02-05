@@ -83,11 +83,11 @@ def parse_args():
     parser.add_argument("--dataloader_num_workers", type=int, default=4,
                        help="Number of dataloader workers")
     
-    # Prompt tokens
+    # Prompt tokens (deprecated - kept for backward compatibility, not used in standard LLaVA format)
     parser.add_argument("--question_token", type=str, default="<question>",
-                       help="Token marking question start")
+                       help="Token marking question start (deprecated, not used in standard LLaVA format)")
     parser.add_argument("--answer_token", type=str, default="<answer>",
-                       help="Token marking answer start")
+                       help="Token marking answer start (deprecated, not used in standard LLaVA format)")
     
     # Other
     parser.add_argument("--seed", type=int, default=42,
@@ -270,8 +270,8 @@ def main():
     
     # Train
     print("Starting training...")
-    print(f"Training format: USER: [question_token; question; answer_token] ASSISTANT: [answer]")
-    print(f"Loss will be computed only for tokens after {args.answer_token}")
+    print(f"Training format: USER: <image>\\n[question]\\nASSISTANT: [answer]")
+    print(f"Loss will be computed only for tokens after ASSISTANT:")
     
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     

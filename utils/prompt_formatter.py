@@ -1,11 +1,12 @@
 """
 Prompt formatting for LLaVA and LLaVA-Med models
 
-Format: USER: [question_token; question; answer_token] ASSISTANT: [answer]
+Standard LLaVA format: USER: <image>\n[question]\nASSISTANT: [answer]
 For inference: answer is removed, model generates after ASSISTANT:
+Note: Image tokens are inserted by the dataset after "USER:"
 """
 
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 
 class PromptFormatter:
@@ -51,7 +52,8 @@ class PromptFormatter:
         """
         Format prompt for training (includes answer).
         
-        Format: USER: [question_token; question; answer_token] ASSISTANT: [answer]
+        Format: USER: [question]\nASSISTANT: [answer]
+        Note: Image tokens are inserted by the dataset after "USER:"
         
         Args:
             question: The question to ask
@@ -61,11 +63,9 @@ class PromptFormatter:
         Returns:
             Formatted prompt string
         """
-        # Format: [question_token; question; answer_token] (answer only after ASSISTANT:)
-        prompt = f"{self.question_token} {question} {self.answer_token}"
-        
-        # Wrap in LLaVA conversation format - answer comes after ASSISTANT:
-        conversation = f"{self.user_prefix} {prompt}\n{self.assistant_prefix} {answer}"
+        # Standard LLaVA format: USER: [question]\nASSISTANT: [answer]
+        # Image tokens are inserted by dataset after "USER:"
+        conversation = f"{self.user_prefix} {question}\n{self.assistant_prefix} {answer}"
         
         return conversation
     
@@ -77,7 +77,8 @@ class PromptFormatter:
         """
         Format prompt for inference (answer removed, model generates).
         
-        Format: [question_token; question; answer_token]
+        Format: USER: [question]\nASSISTANT:
+        Note: Image tokens are inserted by the dataset after "USER:"
         
         Args:
             question: The question to ask
@@ -86,11 +87,9 @@ class PromptFormatter:
         Returns:
             Formatted prompt string without answer
         """
-        # Format: [question_token; question; answer_token] (no answer)
-        prompt = f"{self.question_token} {question} {self.answer_token}"
-        
-        # Wrap in LLaVA conversation format
-        conversation = f"{self.user_prefix} {prompt}\n{self.assistant_prefix}"
+        # Standard LLaVA format: USER: [question]\nASSISTANT:
+        # Image tokens are inserted by dataset after "USER:"
+        conversation = f"{self.user_prefix} {question}\n{self.assistant_prefix}"
         
         return conversation
     
@@ -136,6 +135,90 @@ class PromptFormatter:
             answer = answer.replace(self.assistant_prefix, "").strip()
         
         return answer
+    
+    def format_chat_template_training(
+        self,
+        question: str,
+        answer: str,
+        image_path: Optional[str] = None
+    ) -> list:
+        """
+        Format conversation in chat template format for training.
+        
+        Format matches HuggingFace transformers apply_chat_template format:
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "What's shown in this image?"},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "This image shows..."},]
+            },
+        ]
+        
+        Args:
+            question: The question to ask
+            answer: The ground truth answer
+            image_path: Optional path to image (for reference, not used in template)
+            
+        Returns:
+            List of conversation dictionaries
+        """
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": question},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": answer},]
+            },
+        ]
+        return conversation
+    
+    def format_chat_template_inference(
+        self,
+        question: str,
+        image_path: Optional[str] = None
+    ) -> list:
+        """
+        Format conversation in chat template format for inference.
+        
+        Format matches HuggingFace transformers apply_chat_template format:
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "What's shown in this image?"},
+                ],
+            },
+        ]
+        
+        Args:
+            question: The question to ask
+            image_path: Optional path to image (for reference, not used in template)
+            
+        Returns:
+            List of conversation dictionaries
+        """
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": question},
+                ],
+            },
+        ]
+        return conversation
 
 
 # Convenience functions
@@ -179,3 +262,58 @@ def format_llava_med_prompt(question: str, answer: Optional[str] = None, for_tra
         return formatter.format_training_prompt(question, answer)
     else:
         return formatter.format_inference_prompt(question)
+
+
+# Chat template convenience functions
+def format_llava_chat_template(
+    question: str,
+    answer: Optional[str] = None,
+    for_training: bool = True,
+    image_path: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Format LLaVA conversation in chat template format.
+    
+    Args:
+        question: The question to ask
+        answer: The answer (required if for_training=True)
+        for_training: If True, include answer; if False, prepare for inference
+        image_path: Optional path to image (for reference)
+        
+    Returns:
+        List of conversation dictionaries in chat template format
+    """
+    formatter = PromptFormatter(model_type="llava")
+    if for_training:
+        if answer is None:
+            raise ValueError("Answer required for training prompt")
+        return formatter.format_chat_template_training(question, answer, image_path)
+    else:
+        return formatter.format_chat_template_inference(question, image_path)
+
+
+def format_llava_med_chat_template(
+    question: str,
+    answer: Optional[str] = None,
+    for_training: bool = True,
+    image_path: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Format LLaVA-Med conversation in chat template format.
+    
+    Args:
+        question: The question to ask
+        answer: The answer (required if for_training=True)
+        for_training: If True, include answer; if False, prepare for inference
+        image_path: Optional path to image (for reference)
+        
+    Returns:
+        List of conversation dictionaries in chat template format
+    """
+    formatter = PromptFormatter(model_type="llava_med")
+    if for_training:
+        if answer is None:
+            raise ValueError("Answer required for training prompt")
+        return formatter.format_chat_template_training(question, answer, image_path)
+    else:
+        return formatter.format_chat_template_inference(question, image_path)

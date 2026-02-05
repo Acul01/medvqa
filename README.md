@@ -4,7 +4,7 @@ Einheitliches Framework für Training und Evaluation von LLaVA und LLaVA-Med Mod
 
 ## Übersicht
 
-Dieses Projekt ermöglicht das Fine-Tuning von Vision-Language Modellen (LLaVA und LLaVA-Med) auf verschiedenen Medical VQA Datensätzen. Die Modelle werden als Text-Vervollständigung trainiert mit dem Schema: `[question_token; question; answer_token; answer]`.
+Dieses Projekt ermöglicht das Fine-Tuning von Vision-Language Modellen (LLaVA und LLaVA-Med) auf verschiedenen Medical VQA Datensätzen. Die Modelle werden im Standard-LLaVA-Format trainiert: `USER: <image>\n[question]\nASSISTANT: [answer]`.
 
 ## Unterstützte Datensätze
 
@@ -90,12 +90,15 @@ Das Training erfolgt als Fine-Tuning eines vortrainierten Modells (LLaVA oder LL
 
 ### Prompt-Format
 
-**Training**: `[question_token; question; answer_token; answer]`
-- Das Modell lernt, die Antwort nach `answer_token` zu generieren
-- Der Loss wird nur für Tokens nach `answer_token` berechnet
+Das Projekt verwendet das Standard-LLaVA-Format gemäß der offiziellen Dokumentation:
 
-**Inference**: `[question_token; question; answer_token]`
-- Das Modell generiert die Antwort nach `answer_token`
+**Training**: `USER: <image>\n[question]\nASSISTANT: [answer]`
+- Das Bild wird als `<image>` Token eingefügt (576 Tokens für LLaVA-1.5)
+- Das Modell lernt, die Antwort nach `ASSISTANT:` zu generieren
+- Der Loss wird nur für Tokens nach `ASSISTANT:` berechnet
+
+**Inference**: `USER: <image>\n[question]\nASSISTANT:`
+- Das Modell generiert die Antwort nach `ASSISTANT:`
 
 ### Verwendung
 
@@ -151,9 +154,9 @@ python train.py \
 - `--max_length`: Maximale Sequenzlänge (default: `512`)
 - `--fp16` / `--bf16`: Mixed Precision Training
 
-**Prompt-Tokens:**
-- `--question_token`: Token für Frage-Start (default: `<question>`)
-- `--answer_token`: Token für Antwort-Start (default: `<answer>`)
+**Prompt-Tokens (deprecated):**
+- `--question_token`: Token für Frage-Start (deprecated, nicht verwendet im Standard-LLaVA-Format)
+- `--answer_token`: Token für Antwort-Start (deprecated, nicht verwendet im Standard-LLaVA-Format)
 
 ## Inference
 
@@ -301,13 +304,14 @@ Nach dem Training werden Modelle im `--output_dir` gespeichert und können direk
 
 ### Label-Behandlung beim Training
 
-Beim Training werden Labels so gesetzt, dass der Loss nur für Tokens nach `answer_token` berechnet wird:
+Beim Training werden Labels so gesetzt, dass der Loss nur für Tokens nach `ASSISTANT:` berechnet wird:
 
 ```python
 # Beispiel für Labels:
-# Input:  [question_token; question; answer_token; answer]
+# Input:  USER: <image>\n[question]\nASSISTANT: [answer]
 # Labels: [-100, -100, ..., -100, token_id("answer"), ...]
 #         ↑ ignoriert im Loss    ↑ nur diese zählen
+#         (alles vor ASSISTANT:)  (nur die Antwort)
 ```
 
 Dies stellt sicher, dass das Modell nur lernt, Antworten zu generieren, nicht die Frage zu wiederholen.
