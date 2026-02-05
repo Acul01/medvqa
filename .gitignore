@@ -3,3 +3,4 @@ data/
 # Guide-Dateien (persönliche Notizen)
 general_guide.md
 HPC_JUPYTERLAB_GPU_ANLEITUNG.md
+setup.txt
