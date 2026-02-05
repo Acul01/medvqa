@@ -1,5 +1,24 @@
 data/
 
+# Trainings-Outputs (können sehr groß sein!)
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Ergebnisse
+results_*.json
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
 # Guide-Dateien (persönliche Notizen)
 general_guide.md
 HPC_JUPYTERLAB_GPU_ANLEITUNG.md
