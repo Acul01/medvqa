@@ -43,3 +43,9 @@ python inference.py \
     --max_new_tokens 128 \
     --output_file results_test_llava_vqarad.json \
     --dataloader_num_workers 1
+
+python inference.py \
+    --model llava \
+    --dataset vqarad \
+    --split test \
+    --output_file results_test.json
