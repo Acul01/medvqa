@@ -131,7 +131,7 @@ def main():
         data_root=args.data_root,
         image_processor=processor.image_processor,
         tokenizer=processor.tokenizer,
-        model_type=args.model,
+        model_id=args.model_path,  # Use model_path (model_id) instead of model_type
         max_length=args.max_length,
         for_training=False,  # Inference mode
         question_token=args.question_token,
@@ -140,8 +140,7 @@ def main():
     )
     
     print(f"Dataset loaded: {len(dataset)} samples")
-    print(f"Inference format: <|im_start|>user <image>\\n[question]<|im_end|><|im_start|>assistant")
-    print(f"Model will generate answer after <|im_start|>assistant")
+    print(f"Using apply_chat_template for prompt formatting")
     
     # Create dataloader
     dataloader = DataLoader(
@@ -152,11 +151,7 @@ def main():
     )
     
     # Initialize prompt formatter for answer extraction
-    formatter = PromptFormatter(
-        question_token=args.question_token,
-        answer_token=args.answer_token,
-        model_type=args.model
-    )
+    formatter = PromptFormatter(model_id=args.model_path)
     
     # Run inference
     results = []

@@ -187,7 +187,7 @@ def main():
         data_root=args.data_root,
         image_processor=processor.image_processor,
         tokenizer=processor.tokenizer,
-        model_type=args.model,
+        model_id=args.model_path,  # Use model_path (model_id) instead of model_type
         max_length=args.max_length,
         for_training=True,
         question_token=args.question_token,
@@ -204,7 +204,7 @@ def main():
             data_root=args.data_root,
             image_processor=processor.image_processor,
             tokenizer=processor.tokenizer,
-            model_type=args.model,
+            model_id=args.model_path,  # Use model_path (model_id) instead of model_type
             max_length=args.max_length,
             for_training=True,
             question_token=args.question_token,
@@ -270,7 +270,7 @@ def main():
     
     # Train
     print("Starting training...")
-    print(f"Training format: USER: <image>\\n[question] ASSISTANT: [answer]")
+    print(f"Using apply_chat_template for prompt formatting")
     print(f"Loss will be computed only for tokens after ASSISTANT:")
     
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)

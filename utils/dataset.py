@@ -27,8 +27,8 @@ class MedicalVQADataset(Dataset):
     """
     PyTorch Dataset for Medical VQA tasks.
     
-    Formats data for LLaVA/LLaVA-Med models using standard LLaVA format.
-    Format: USER: <image>\n[question] ASSISTANT: [answer]
+    Formats data for LLaVA/LLaVA-Med models using apply_chat_template.
+    Uses PromptFormatter with apply_chat_template to ensure correct format.
     For training: Labels are set so that loss is only computed for tokens after ASSISTANT:.
     """
     
@@ -37,11 +37,11 @@ class MedicalVQADataset(Dataset):
         samples: List[VQASample],
         image_processor,
         tokenizer,
-        model_type: str = "llava",
+        model_id: str,  # Changed from model_type to model_id
         max_length: int = 512,
         for_training: bool = True,
-        question_token: str = "<question>",
-        answer_token: str = "<answer>",
+        question_token: str = "<question>",  # Deprecated, kept for compatibility
+        answer_token: str = "<answer>",  # Deprecated, kept for compatibility
         num_image_tokens: int = 576  # Number of image tokens (patches) - default for LLaVA-1.5 with 336x336
     ):
         """
@@ -51,7 +51,7 @@ class MedicalVQADataset(Dataset):
             samples: List of VQASample objects
             image_processor: Image processor from transformers (e.g., CLIPImageProcessor)
             tokenizer: Text tokenizer from transformers
-            model_type: "llava" or "llava_med"
+            model_id: Model ID or path (e.g., "llava-hf/llava-1.5-7b-hf")
             max_length: Maximum sequence length for tokenization
             for_training: If True, include answers in prompts; if False, prepare for inference
             question_token: Token marking question start (deprecated, kept for compatibility)
@@ -64,12 +64,8 @@ class MedicalVQADataset(Dataset):
         self.for_training = for_training
         self.num_image_tokens = num_image_tokens  # Store number of image tokens needed
         
-        # Initialize prompt formatter
-        self.formatter = PromptFormatter(
-            question_token=question_token,
-            answer_token=answer_token,
-            model_type=model_type
-        )
+        # Initialize prompt formatter with model_id
+        self.formatter = PromptFormatter(model_id=model_id)
         
         # Set tokenizer padding
         if tokenizer.pad_token is None:
@@ -138,175 +134,113 @@ class MedicalVQADataset(Dataset):
         _log("debug-session", "run1", "B", "dataset.py:132", "Image processed", {"pixel_values_shape": list(pixel_values.shape), "num_image_tokens": num_image_tokens})
         # #endregion
         
+        # Use apply_chat_template to get formatted prompt text
         if self.for_training:
-            # TRAINING: Format USER: <image>\n[question] ASSISTANT: [answer]
-            full_prompt = self.formatter.format_training_prompt(
+            text_prompt = self.formatter.format_training_prompt(
                 question=sample.question,
-                answer=sample.answer
+                answer=sample.answer,
+                include_image=True
             )
-            
-            # Insert image token placeholders at the beginning of USER message
-            # LLaVA expects multiple image tokens (one per image patch)
-            # We'll insert them directly as token IDs to avoid tokenization issues
-            # First, tokenize the user prefix
-            user_prefix_ids = self.tokenizer.encode(
-                self.formatter.user_prefix,
-                add_special_tokens=False
+        else:
+            text_prompt = self.formatter.format_inference_prompt(
+                question=sample.question,
+                include_image=True
             )
+        
+        # Tokenize the prompt
+        # We need to manually insert image tokens after the user prefix
+        # First, find where to insert image tokens
+        if "llava-med-v1.5-mistral" in self.formatter.model_id or "llava_mistral" in self.formatter.model_id:
+            # For Mistral format, <image> is already in the text
+            # Tokenize and replace <image> token with multiple image tokens
+            encoded = self.tokenizer(text_prompt, return_tensors="pt", add_special_tokens=False)
+            input_ids_list = encoded["input_ids"].squeeze(0).tolist()
             
-            # Remove user prefix and <image> token from prompt (we insert image tokens manually)
-            rest_of_prompt = full_prompt.replace(f"{self.formatter.user_prefix}", "").strip()
-            rest_of_prompt = rest_of_prompt.replace("<image>", "").strip()
-            rest_ids = self.tokenizer.encode(rest_of_prompt, add_special_tokens=False)
-            
-            # Get the image token ID
+            # Find <image> token ID
             image_token_id = None
-            if hasattr(self, 'image_token_id') and self.image_token_id is not None:
-                image_token_id = self.image_token_id
-            else:
-                # Try to encode "<image>" to get the token ID
-                try:
-                    image_token_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
-                    if image_token_ids:
-                        image_token_id = image_token_ids[0]
-                except:
-                    pass
+            try:
+                image_token_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
+                if image_token_ids:
+                    image_token_id = image_token_ids[0]
+            except:
+                pass
             
             if image_token_id is None:
-                # Last resort: try common LLaVA image token IDs
-                # LLaVA-1.5 typically uses 32000
-                image_token_id = 32000
+                image_token_id = 32000  # Default
             
-            # Build input_ids with image tokens inserted
-            input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids
+            # Replace single <image> token with multiple image tokens
+            new_input_ids = []
+            for token_id in input_ids_list:
+                if token_id == image_token_id:
+                    new_input_ids.extend([image_token_id] * self.num_image_tokens)
+                else:
+                    new_input_ids.append(token_id)
+            input_ids_list = new_input_ids
+        else:
+            # Standard LLaVA: tokenize and insert image tokens after user prefix
+            # The prompt from apply_chat_template already has the right structure
+            encoded = self.tokenizer(text_prompt, return_tensors="pt", add_special_tokens=False)
+            input_ids_list = encoded["input_ids"].squeeze(0).tolist()
             
-            # Truncate carefully: keep user_prefix and image tokens, truncate rest
-            # CRITICAL: Image tokens must ALWAYS be preserved completely
-            prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
+            # Find image token ID
+            image_token_id = None
+            try:
+                image_token_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
+                if image_token_ids:
+                    image_token_id = image_token_ids[0]
+            except:
+                pass
             
-            # Ensure max_length is at least large enough for prefix + image tokens
-            if self.max_length < prefix_and_image_length:
-                # This is an error condition - max_length is too small
-                raise ValueError(
-                    f"max_length ({self.max_length}) is too small for {num_image_tokens} image tokens + "
-                    f"prefix ({len(user_prefix_ids)} tokens). "
-                    f"Minimum required: {prefix_and_image_length + 50} (recommended: {prefix_and_image_length + 200})"
-                )
+            if image_token_id is None:
+                image_token_id = 32000  # Default
             
-            if len(input_ids_list) > self.max_length:
-                # Keep prefix + image tokens, truncate rest
-                max_rest_length = self.max_length - prefix_and_image_length
-                input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
-            
-            # Pad to max_length
-            if len(input_ids_list) < self.max_length:
-                input_ids_list = input_ids_list + [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids_list))
-            
-            # Create encoding from list
-            input_ids = torch.tensor([input_ids_list])
-            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
-            input_ids = input_ids.squeeze(0)
-            attention_mask = attention_mask.squeeze(0)
-            
-            # #region agent log
-            num_inserted = input_ids.tolist().count(image_token_id)
-            _log("debug-session", "run1", "A", "dataset.py:185", "Text tokenized with image tokens", {"input_ids_shape": list(input_ids.shape), "num_image_tokens_inserted": num_inserted, "expected": num_image_tokens, "image_token_id": image_token_id})
-            # #endregion
-            
-            # Create labels: only compute loss for tokens after ASSISTANT:
-            # Standard LLaVA format: loss is computed only for the answer part
+            # Replace single <image> token with multiple image tokens
+            new_input_ids = []
+            for token_id in input_ids_list:
+                if token_id == image_token_id:
+                    new_input_ids.extend([image_token_id] * self.num_image_tokens)
+                else:
+                    new_input_ids.append(token_id)
+            input_ids_list = new_input_ids
+        
+        # Truncate if needed
+        if len(input_ids_list) > self.max_length:
+            input_ids_list = input_ids_list[:self.max_length]
+        
+        # Pad to max_length
+        if len(input_ids_list) < self.max_length:
+            input_ids_list = input_ids_list + [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids_list))
+        
+        # Create tensors
+        input_ids = torch.tensor(input_ids_list)
+        attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
+        
+        # For training: create labels (only compute loss for assistant response)
+        if self.for_training:
             labels = input_ids.clone()
             
-            # Find position of ASSISTANT: prefix in tokenized sequence
-            # This is where the answer starts - loss should only be computed from here
-            assistant_prefix_ids = self.tokenizer.encode(
-                self.formatter.assistant_prefix,
-                add_special_tokens=False
-            )
+            # Find where assistant response starts
+            # Look for "ASSISTANT:" in the tokenized sequence
+            assistant_text = "ASSISTANT:"
+            assistant_ids = self.tokenizer.encode(assistant_text, add_special_tokens=False)
+            input_ids_list_for_labels = input_ids.tolist()
             
-            # Find where ASSISTANT: appears in the sequence
             answer_start_idx = None
-            input_ids_list = input_ids.tolist()
-            
-            for i in range(len(input_ids_list) - len(assistant_prefix_ids) + 1):
-                if input_ids_list[i:i+len(assistant_prefix_ids)] == assistant_prefix_ids:
-                    # Start loss computation after ASSISTANT: prefix
-                    answer_start_idx = i + len(assistant_prefix_ids)
+            for i in range(len(input_ids_list_for_labels) - len(assistant_ids) + 1):
+                if input_ids_list_for_labels[i:i+len(assistant_ids)] == assistant_ids:
+                    answer_start_idx = i + len(assistant_ids)
                     break
             
             if answer_start_idx is not None:
-                # Set labels to -100 (ignored in loss) for everything before ASSISTANT:
                 labels[:answer_start_idx] = -100
-                # Keep labels for answer part (after ASSISTANT:)
             else:
-                # Fallback: if ASSISTANT: not found, set all to -100 except last part (likely the answer)
-                # This shouldn't happen with proper formatting, but safety check
-                labels[:len(labels)//2] = -100
+                # Fallback: assume last third is the answer
+                labels[:len(labels) * 2 // 3] = -100
             
-            # Set padding tokens to -100 (ignored in loss)
+            # Set padding tokens to -100
             labels[labels == self.tokenizer.pad_token_id] = -100
-            
         else:
-            # INFERENCE: Format USER: <image>\n[question] ASSISTANT:
-            prompt = self.formatter.format_inference_prompt(
-                question=sample.question
-            )
-            
-            # Insert image token placeholders directly as token IDs (same as training)
-            user_prefix_ids = self.tokenizer.encode(
-                self.formatter.user_prefix,
-                add_special_tokens=False
-            )
-            
-            # Get the image token ID
-            image_token_id = None
-            if hasattr(self, 'image_token_id') and self.image_token_id is not None:
-                image_token_id = self.image_token_id
-            else:
-                try:
-                    image_token_ids = self.tokenizer.encode("<image>", add_special_tokens=False)
-                    if image_token_ids:
-                        image_token_id = image_token_ids[0]
-                except:
-                    pass
-            
-            if image_token_id is None:
-                image_token_id = 32000  # Default LLaVA image token ID
-            
-            # Remove user prefix and <image> token from prompt (we insert image tokens manually)
-            prompt_without_prefix = prompt.replace(f"{self.formatter.user_prefix}", "").strip()
-            prompt_without_prefix = prompt_without_prefix.replace("<image>", "").strip()
-            rest_ids = self.tokenizer.encode(prompt_without_prefix, add_special_tokens=False)
-            
-            # Build input_ids: [user_prefix] + [image_token] * num_image_tokens + [rest_of_prompt]
-            input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids
-            
-            # Truncate if needed (keep prefix and image tokens)
-            # CRITICAL: Image tokens must ALWAYS be preserved completely
-            prefix_and_image_length = len(user_prefix_ids) + num_image_tokens
-            
-            # Ensure max_length is at least large enough for prefix + image tokens
-            if self.max_length < prefix_and_image_length:
-                # This is an error condition - max_length is too small
-                raise ValueError(
-                    f"max_length ({self.max_length}) is too small for {num_image_tokens} image tokens + "
-                    f"prefix ({len(user_prefix_ids)} tokens). "
-                    f"Minimum required: {prefix_and_image_length + 50} (recommended: {prefix_and_image_length + 200})"
-                )
-            
-            if len(input_ids_list) > self.max_length:
-                # Keep prefix + image tokens, truncate rest
-                max_rest_length = self.max_length - prefix_and_image_length
-                input_ids_list = user_prefix_ids + [image_token_id] * num_image_tokens + rest_ids[:max_rest_length]
-            
-            # Pad to max_length
-            if len(input_ids_list) < self.max_length:
-                input_ids_list = input_ids_list + [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids_list))
-            
-            # Create tensors
-            input_ids = torch.tensor([input_ids_list]).squeeze(0)
-            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
-            labels = None  # No labels for inference
+            labels = None
         
         result = {
             "pixel_values": pixel_values,
@@ -338,11 +272,11 @@ def create_dataset(
     data_root: str,
     image_processor,
     tokenizer,
-    model_type: str = "llava",
+    model_id: str,  # Changed from model_type to model_id
     max_length: int = 512,
     for_training: bool = True,
-    question_token: str = "<question>",
-    answer_token: str = "<answer>",
+    question_token: str = "<question>",  # Deprecated, kept for compatibility
+    answer_token: str = "<answer>",  # Deprecated, kept for compatibility
     num_image_tokens: int = 576  # Number of image tokens (patches) - default for LLaVA-1.5
 ) -> MedicalVQADataset:
     """
@@ -354,11 +288,11 @@ def create_dataset(
         data_root: Root directory containing datasets
         image_processor: Image processor from transformers
         tokenizer: Text tokenizer from transformers
-        model_type: "llava" or "llava_med"
+        model_id: Model ID or path (e.g., "llava-hf/llava-1.5-7b-hf")
         max_length: Maximum sequence length
         for_training: Whether to prepare for training or inference
-        question_token: Token marking question start
-        answer_token: Token marking answer start
+        question_token: Token marking question start (deprecated)
+        answer_token: Token marking answer start (deprecated)
         
     Returns:
         MedicalVQADataset instance
@@ -372,7 +306,7 @@ def create_dataset(
         samples=samples,
         image_processor=image_processor,
         tokenizer=tokenizer,
-        model_type=model_type,
+        model_id=model_id,
         max_length=max_length,
         for_training=for_training,
         question_token=question_token,
