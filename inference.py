@@ -205,7 +205,17 @@ def main():
             print(f"  Ground Truth: {result['ground_truth_answer']}")
             print(f"  Predicted:    {result['predicted_answer']}")
 
-    print(f"\nInference completed! Processed {len(results)} samples.")
+    # ── Accuracy ───────────────────────────────────────────────────────────
+    correct = sum(
+        1 for r in results
+        if r["ground_truth_answer"] is not None
+        and r["predicted_answer"].lower().strip() == r["ground_truth_answer"].lower().strip()
+    )
+    total = sum(1 for r in results if r["ground_truth_answer"] is not None)
+    accuracy = correct / total if total > 0 else 0.0
+    print(f"\nAccuracy: {correct}/{total} = {accuracy:.4f} ({accuracy * 100:.2f}%)")
+
+    print(f"Inference completed! Processed {len(results)} samples.")
 
 
 if __name__ == "__main__":
