@@ -57,6 +57,8 @@ def parse_args():
     # Output arguments
     parser.add_argument("--output_file", type=str, default=None,
                        help="Output JSON file for results")
+    parser.add_argument("--n_samples", type=int, default=None,
+                       help="Only process first N samples (for quick testing)")
 
     return parser.parse_args()
 
@@ -130,6 +132,8 @@ def main():
     print(f"Loading {args.dataset} {args.split} split...")
     loader = MedicalVQALoader(data_root=args.data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
+    if args.n_samples is not None:
+        samples = samples[:args.n_samples]
     print(f"Loaded {len(samples)} samples")
 
     # ── Generation kwargs ─────────────────────────────────────────────────
