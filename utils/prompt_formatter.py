@@ -1,9 +1,9 @@
 """
 Prompt formatting for LLaVA and LLaVA-Med models
 
-LLaVA-interleave format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant [answer]
-For inference: answer is removed, model generates after <|im_start|>assistant
-Note: Image tokens are inserted by the dataset after "<|im_start|>user"
+Standard LLaVA format: USER: <image>\n[question] ASSISTANT: [answer]
+For inference: answer is removed, model generates after ASSISTANT:
+Note: Image tokens are inserted by the dataset after "USER:"
 """
 
 from typing import Optional, List, Dict, Any
@@ -30,18 +30,16 @@ class PromptFormatter:
         self.answer_token = answer_token
         self.model_type = model_type
         
-        # LLaVA-interleave conversation format
+        # Standard LLaVA conversation format
         if model_type == "llava":
             self.system_message = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
-            self.user_prefix = "<|im_start|>user"
-            self.user_suffix = "<|im_end|>"
-            self.assistant_prefix = "<|im_start|>assistant"
+            self.user_prefix = "USER:"
+            self.assistant_prefix = "ASSISTANT:"
         elif model_type == "llava_med":
             # LLaVA-Med might have medical-specific system message
             self.system_message = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions about medical images."
-            self.user_prefix = "<|im_start|>user"
-            self.user_suffix = "<|im_end|>"
-            self.assistant_prefix = "<|im_start|>assistant"
+            self.user_prefix = "USER:"
+            self.assistant_prefix = "ASSISTANT:"
         else:
             raise ValueError(f"Unknown model_type: {model_type}. Use 'llava' or 'llava_med'")
     
@@ -79,8 +77,8 @@ class PromptFormatter:
         """
         Format prompt for inference (answer removed, model generates).
         
-        Format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant
-        Note: Image tokens are inserted by the dataset after "<|im_start|>user"
+        Format: USER: <image>\n[question] ASSISTANT:
+        Note: Image tokens are inserted by the dataset after "USER:"
         
         Args:
             question: The question to ask
@@ -89,9 +87,9 @@ class PromptFormatter:
         Returns:
             Formatted prompt string without answer
         """
-        # LLaVA-interleave format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant
-        # Image tokens are inserted by dataset after "<|im_start|>user"
-        conversation = f"{self.user_prefix} <image>\n{question}{self.user_suffix}{self.assistant_prefix}"
+        # Standard LLaVA format: USER: <image>\n[question] ASSISTANT:
+        # Image tokens are inserted by dataset after "USER:"
+        conversation = f"{self.user_prefix} <image>\n{question} {self.assistant_prefix}"
         
         return conversation
     
@@ -114,35 +112,34 @@ class PromptFormatter:
     def extract_answer_from_response(self, response: str) -> str:
         """
         Extract answer from model response.
-        Extracts text after <|im_start|>assistant.
+        Extracts text after ASSISTANT: and removes any remaining format tokens.
         
         Args:
-            response: Model's raw response (may include full prompt + generated answer)
+            response: Model's raw response (should be only newly generated tokens)
             
         Returns:
             Cleaned answer string
         """
-        # Extract answer after assistant prefix
-        if self.assistant_prefix in response:
-            # Split by assistant prefix and take everything after it
-            parts = response.split(self.assistant_prefix, 1)
-            if len(parts) > 1:
-                answer = parts[1].strip()
-                # Remove any trailing <|im_end|> if present
-                if answer.endswith("<|im_end|>"):
-                    answer = answer[:-10].strip()
-            else:
-                answer = response.strip()
-        else:
-            # Fallback: try to find answer token if present
-            if self.answer_token in response:
-                parts = response.split(self.answer_token, 1)
-                if len(parts) > 1:
-                    answer = parts[1].strip()
-                else:
-                    answer = response.strip()
-            else:
-                answer = response.strip()
+        answer = response.strip()
+        
+        # Remove assistant prefix if present at the start
+        if answer.startswith(self.assistant_prefix):
+            answer = answer[len(self.assistant_prefix):].strip()
+        
+        # Remove any occurrences of format tokens
+        # Remove ASSISTANT: prefix
+        answer = answer.replace(self.assistant_prefix, "").strip()
+        # Remove USER: prefix (in case it appears)
+        answer = answer.replace(self.user_prefix, "").strip()
+        
+        # Remove any remaining format tokens that might appear
+        import re
+        # Remove any <|im_start|> or <|im_end|> tokens (leftover from other formats)
+        answer = re.sub(r'<\|im_(start|end)\|>', '', answer)
+        answer = re.sub(r'\|im_(start|end)\|?>', '', answer)
+        
+        # Clean up any extra whitespace
+        answer = ' '.join(answer.split())
         
         return answer
     

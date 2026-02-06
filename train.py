@@ -270,8 +270,8 @@ def main():
     
     # Train
     print("Starting training...")
-    print(f"Training format: <|im_start|>user <image>\\n[question]<|im_end|><|im_start|>assistant [answer]")
-    print(f"Loss will be computed only for tokens after <|im_start|>assistant")
+    print(f"Training format: USER: <image>\\n[question] ASSISTANT: [answer]")
+    print(f"Loss will be computed only for tokens after ASSISTANT:")
     
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     

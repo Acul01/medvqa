@@ -198,12 +198,16 @@ def main():
             
             outputs = model.generate(**generation_kwargs)
             
-            # Decode generated text
-            generated_texts = processor.batch_decode(outputs, skip_special_tokens=True)
+            # Get input length to extract only newly generated tokens
+            input_length = input_ids.shape[1]
             
             # Process each sample in batch
             for i in range(len(batch["question"])):
-                generated_text = generated_texts[i]
+                # Extract only newly generated tokens (skip input tokens)
+                generated_token_ids = outputs[i][input_length:]
+                
+                # Decode only the newly generated tokens
+                generated_text = processor.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
                 
                 # Extract answer from generated text
                 answer = formatter.extract_answer_from_response(generated_text)
@@ -221,7 +225,7 @@ def main():
                     "question": question,
                     "ground_truth_answer": batch["answer"][i] if "answer" in batch and batch["answer"][i] is not None else None,
                     "predicted_answer": answer,
-                    "full_response": generated_text,
+                    "full_response": generated_text,  # This now contains only newly generated tokens
                 }
                 results.append(result)
     
