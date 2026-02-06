@@ -94,7 +94,7 @@ def main():
     
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_path,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        torch_dtype=torch.float16,
         device_map="auto"
     )
     model.eval()
