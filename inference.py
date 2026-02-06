@@ -128,6 +128,12 @@ def main():
 
     processor = AutoProcessor.from_pretrained(processor_path)
 
+    # Fix for community conversions that are missing patch_size in config
+    if getattr(processor, "patch_size", None) is None:
+        processor.patch_size = 14
+    if getattr(processor, "vision_feature_select_strategy", None) is None:
+        processor.vision_feature_select_strategy = "default"
+
     # ── Load dataset samples ──────────────────────────────────────────────
     print(f"Loading {args.dataset} {args.split} split...")
     loader = MedicalVQALoader(data_root=args.data_root)
