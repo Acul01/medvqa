@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MedicalVQALoader
+from utils.save_results import save_results
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -39,7 +40,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=50,
+    parser.add_argument("--max_new_tokens", type=int, default=20,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -51,10 +52,12 @@ def parse_args():
                        help="Number of beams for beam search")
 
     # Output arguments
-    parser.add_argument("--output_file", type=str, default=None,
-                       help="Output JSON file for results")
+    parser.add_argument("--results_dir", type=str, default="results",
+                       help="Directory to save result files (default: results)")
     parser.add_argument("--n_samples", type=int, default=None,
                        help="Only process first N samples (for quick testing)")
+    parser.add_argument("--finetuned", action="store_true", default=False,
+                       help="Flag: model is fine-tuned (recorded in history)")
 
     return parser.parse_args()
 
@@ -183,25 +186,15 @@ def main():
                 "predicted_answer": generated_text,
             })
 
-    # ── Save / print results ──────────────────────────────────────────────
-    if args.output_file:
-        output_path = Path(args.output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\nResults saved to {output_path}")
-    else:
-        print("\nFirst 5 results:")
-        for i, result in enumerate(results[:5]):
-            print(f"\nSample {i+1}:")
-            print(f"  Question:    {result['question']}")
-            print(f"  Ground Truth: {result['ground_truth_answer']}")
-            print(f"  Predicted:    {result['predicted_answer']}")
+    # ── Print results summary ───────────────────────────────────────────────
+    print("\nFirst 5 results:")
+    for i, result in enumerate(results[:5]):
+        print(f"\nSample {i+1}:")
+        print(f"  Question:    {result['question']}")
+        print(f"  Ground Truth: {result['ground_truth_answer']}")
+        print(f"  Predicted:    {result['predicted_answer']}")
 
     # ── Accuracy ───────────────────────────────────────────────────────────
-    # Exact match: predicted == ground truth (lowered + stripped)
-    # Contains match: ground truth appears in predicted (handles verbose
-    #   answers like "Yes, there is..." when GT is "yes")
     exact = 0
     contains = 0
     total = 0
@@ -216,8 +209,23 @@ def main():
         if gt in pred:
             contains += 1
 
-    print(f"\nExact-match accuracy:    {exact}/{total} = {exact / total:.4f} ({exact / total * 100:.2f}%)" if total else "\nNo samples with ground truth.")
-    print(f"Contains-match accuracy: {contains}/{total} = {contains / total:.4f} ({contains / total * 100:.2f}%)" if total else "")
+    exact_acc = exact / total if total else 0.0
+    contains_acc = contains / total if total else 0.0
+    print(f"\nExact-match accuracy:    {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
+    print(f"Contains-match accuracy: {contains}/{total} = {contains_acc:.4f} ({contains_acc * 100:.2f}%)" if total else "")
+
+    # ── Save results (JSON, CSV, XLSX) + history ─────────────────────────
+    print(f"\nSaving results...")
+    save_results(
+        results=results,
+        model_path=args.model_path,
+        dataset=args.dataset,
+        n_samples=args.n_samples,
+        finetuned=args.finetuned,
+        exact_acc=exact_acc,
+        contains_acc=contains_acc,
+        results_dir=args.results_dir,
+    )
 
     print(f"Inference completed! Processed {len(results)} samples.")
 
