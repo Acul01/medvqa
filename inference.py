@@ -1,17 +1,19 @@
 """
-Inference script for LLaVA and LLaVA-Med on Medical VQA datasets
+Inference script for LLaVA and LLaVA-Med on Medical VQA datasets.
+
+Uses the HuggingFace processor directly for correct tokenization and
+image-token handling (no manual padding, no manual image-token expansion).
 """
 
 import argparse
 import torch
-from torch.utils.data import DataLoader
+from PIL import Image
 from transformers import LlavaForConditionalGeneration, AutoProcessor
 from tqdm import tqdm
 import json
 from pathlib import Path
 
-from utils.dataset import create_dataset
-from utils.prompt_formatter import PromptFormatter
+from utils.load_data import MedicalVQALoader
 
 
 # Default model paths for each model type
@@ -23,14 +25,14 @@ DEFAULT_MODEL_PATHS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with LLaVA/LLaVA-Med on Medical VQA")
-    
+
     # Model arguments
     parser.add_argument("--model", type=str, required=True, choices=["llava", "llava_med"],
                        help="Model type: 'llava' or 'llava_med'")
     parser.add_argument("--model_path", type=str, default=None,
                        help="Path to model checkpoint or model name from HuggingFace. "
                             "If not specified, uses default model for --model type.")
-    
+
     # Data arguments
     parser.add_argument("--data_root", type=str, default="data",
                        help="Root directory containing datasets")
@@ -39,192 +41,146 @@ def parse_args():
                        help="Dataset to use")
     parser.add_argument("--split", type=str, default="test",
                        help="Split to evaluate on")
-    
+
     # Inference arguments
-    parser.add_argument("--batch_size", type=int, default=1,
-                       help="Batch size for inference")
-    parser.add_argument("--max_length", type=int, default=512,
-                       help="Maximum generation length")
     parser.add_argument("--max_new_tokens", type=int, default=128,
                        help="Maximum number of new tokens to generate")
+    parser.add_argument("--do_sample", action="store_true", default=False,
+                       help="Use sampling for generation (default: greedy)")
     parser.add_argument("--temperature", type=float, default=0.7,
-                       help="Temperature for generation")
+                       help="Temperature for generation (only used with --do_sample)")
     parser.add_argument("--top_p", type=float, default=0.9,
-                       help="Top-p for generation")
-    parser.add_argument("--do_sample", action="store_true", default=True,
-                       help="Use sampling for generation (default: True)")
+                       help="Top-p for generation (only used with --do_sample)")
     parser.add_argument("--num_beams", type=int, default=1,
                        help="Number of beams for beam search")
-    
+
     # Output arguments
     parser.add_argument("--output_file", type=str, default=None,
                        help="Output JSON file for results")
-    parser.add_argument("--dataloader_num_workers", type=int, default=4,
-                       help="Number of dataloader workers")
-    
-    # Prompt tokens (deprecated - kept for backward compatibility, not used in standard LLaVA format)
-    parser.add_argument("--question_token", type=str, default="<question>",
-                       help="Token marking question start (deprecated, not used in standard LLaVA format)")
-    parser.add_argument("--answer_token", type=str, default="<answer>",
-                       help="Token marking answer start (deprecated, not used in standard LLaVA format)")
-    
+
     return parser.parse_args()
+
+
+def build_conversation(question: str, model_id: str):
+    """
+    Build the chat conversation in the format expected by the model's chat template.
+
+    - Standard LLaVA 1.5: multimodal content list with {"type": "image"} and {"type": "text"}
+    - LLaVA-Med Mistral: plain string content with "<image>" placeholder
+    """
+    if "llava-med-v1.5-mistral" in model_id or "llava_mistral" in model_id:
+        return [{"role": "user", "content": f"<image>\n{question}"}]
+    else:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
 
 
 def main():
     args = parse_args()
-    
-    # Determine model path
+
+    # ── Determine model path ──────────────────────────────────────────────
     if args.model_path is None:
         args.model_path = DEFAULT_MODEL_PATHS[args.model]
         print(f"No --model_path specified, using default: {args.model_path}")
     else:
         print(f"Using specified model path: {args.model_path}")
-    
-    # Set device
+
+    # ── Device ────────────────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    
-    # Load model and processor
+
+    # ── Load model ────────────────────────────────────────────────────────
     print(f"Loading model: {args.model_path}")
     if Path(args.model_path).exists():
         print("(Loading from local path)")
     else:
         print("(Model will be downloaded from HuggingFace Hub if not cached)")
-    
+
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_path,
-        torch_dtype=torch.float32,
-        device_map="auto"
+        torch_dtype=torch.float16,
+        device_map="auto",
     )
     model.eval()
-    
-    # Load processor - use original model if trained model doesn't have processor config
+
+    # ── Load processor ────────────────────────────────────────────────────
+    # For fine-tuned models the processor config may not be saved alongside
+    # the checkpoint – fall back to the original base model's processor.
     processor_path = args.model_path
     if Path(args.model_path).exists() and not Path(args.model_path, "preprocessor_config.json").exists():
-        # Trained model doesn't have processor config, use original model
         processor_path = DEFAULT_MODEL_PATHS[args.model]
-        print(f"Processor config not found in trained model, loading from original model: {processor_path}")
-    
+        print(f"Processor config not found in trained model, loading from: {processor_path}")
+
     processor = AutoProcessor.from_pretrained(processor_path)
-    
-    # Determine number of image tokens from model config
-    num_image_tokens = 576  # Default for LLaVA-1.5
-    if hasattr(model.config, 'image_grid_pinpoints'):
-        num_image_tokens = 576
-    elif hasattr(model.config, 'num_image_tokens'):
-        num_image_tokens = model.config.num_image_tokens
-    elif hasattr(model.config, 'vision_config'):
-        if hasattr(model.config.vision_config, 'image_size'):
-            image_size = model.config.vision_config.image_size
-            patch_size = getattr(model.config.vision_config, 'patch_size', 14)
-            num_patches_per_side = image_size // patch_size
-            num_image_tokens = num_patches_per_side * num_patches_per_side
-    
-    print(f"Using {num_image_tokens} image tokens based on model configuration")
-    
-    # Create dataset
+
+    # ── Load dataset samples ──────────────────────────────────────────────
     print(f"Loading {args.dataset} {args.split} split...")
-    dataset = create_dataset(
-        dataset_name=args.dataset,
-        split=args.split,
-        data_root=args.data_root,
-        image_processor=processor.image_processor,
-        tokenizer=processor.tokenizer,
-        model_id=args.model_path,  # Use model_path (model_id) instead of model_type
-        max_length=args.max_length,
-        for_training=False,  # Inference mode
-        question_token=args.question_token,
-        answer_token=args.answer_token,
-        num_image_tokens=num_image_tokens
-    )
-    
-    print(f"Dataset loaded: {len(dataset)} samples")
-    print(f"Using apply_chat_template for prompt formatting")
-    
-    # Create dataloader
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.dataloader_num_workers
-    )
-    
-    # Initialize prompt formatter for answer extraction
-    formatter = PromptFormatter(model_id=args.model_path)
-    
-    # Run inference
+    loader = MedicalVQALoader(data_root=args.data_root)
+    samples = loader.load_dataset(args.dataset, split=args.split)
+    print(f"Loaded {len(samples)} samples")
+
+    # ── Generation kwargs ─────────────────────────────────────────────────
+    gen_kwargs = {"max_new_tokens": args.max_new_tokens}
+
+    if args.do_sample:
+        gen_kwargs.update({
+            "do_sample": True,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+        })
+    else:
+        gen_kwargs["do_sample"] = False
+
+    if args.num_beams > 1:
+        gen_kwargs["num_beams"] = args.num_beams
+
+    # ── Inference loop ────────────────────────────────────────────────────
     results = []
-    
     print("Running inference...")
+
     with torch.no_grad():
-        for batch in tqdm(dataloader):
-            # Move to device
-            pixel_values = batch["pixel_values"].to(device)
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            
-            # Generate
-            # Use sampling by default if not specified, or use greedy if do_sample is False
-            generation_kwargs = {
-                "input_ids": input_ids,
-                "pixel_values": pixel_values,
-                "attention_mask": attention_mask,
-                "max_new_tokens": args.max_new_tokens,
-                "pad_token_id": processor.tokenizer.pad_token_id,
-                "eos_token_id": processor.tokenizer.eos_token_id,
-            }
-            
-            # Use sampling by default for better generation
-            # Enable sampling unless explicitly disabled
-            use_sampling = args.do_sample if hasattr(args, 'do_sample') else True
-            if use_sampling:
-                generation_kwargs.update({
-                    "temperature": args.temperature,
-                    "top_p": args.top_p,
-                    "do_sample": True,
-                })
-            else:
-                generation_kwargs["do_sample"] = False
-            
-            # Add beam search if num_beams > 1
-            if args.num_beams > 1:
-                generation_kwargs["num_beams"] = args.num_beams
-            
-            outputs = model.generate(**generation_kwargs)
-            
-            # Get input length to extract only newly generated tokens
-            input_length = input_ids.shape[1]
-            
-            # Process each sample in batch
-            for i in range(len(batch["question"])):
-                # Extract only newly generated tokens (skip input tokens)
-                generated_token_ids = outputs[i][input_length:]
-                
-                # Decode only the newly generated tokens
-                generated_text = processor.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
-                
-                # Extract answer from generated text
-                answer = formatter.extract_answer_from_response(generated_text)
-                
-                # Print question and generated answer for each sample
-                question = batch["question"][i]
-                print(f"\n[Sample {len(results) + 1}]")
-                print(f"Question: {question}")
-                print(f"Generated Answer: {answer}")
-                if "answer" in batch and batch["answer"][i] is not None:
-                    print(f"Ground Truth: {batch['answer'][i]}")
-                
-                result = {
-                    "image_path": batch["image_path"][i],
-                    "question": question,
-                    "ground_truth_answer": batch["answer"][i] if "answer" in batch and batch["answer"][i] is not None else None,
-                    "predicted_answer": answer,
-                    "full_response": generated_text,  # This now contains only newly generated tokens
-                }
-                results.append(result)
-    
-    # Save results
+        for sample in tqdm(samples):
+            # 1. Load image
+            image = Image.open(sample.image_path).convert("RGB")
+
+            # 2. Build conversation and apply chat template → prompt string
+            conversation = build_conversation(sample.question, args.model_path)
+            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+
+            # 3. Processor handles EVERYTHING: tokenisation, image-token
+            #    expansion, pixel-value preprocessing – no manual padding.
+            inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+
+            # 4. Generate
+            output = model.generate(**inputs, **gen_kwargs)
+
+            # 5. Decode only the newly generated tokens
+            input_length = inputs["input_ids"].shape[1]
+            generated_ids = output[0][input_length:]
+            generated_text = processor.decode(generated_ids, skip_special_tokens=True).strip()
+
+            # 6. Print live
+            print(f"\n[Sample {len(results) + 1}]")
+            print(f"  Question:  {sample.question}")
+            print(f"  Answer:    {generated_text}")
+            if sample.answer:
+                print(f"  GT:        {sample.answer}")
+
+            results.append({
+                "image_path": sample.image_path,
+                "question": sample.question,
+                "ground_truth_answer": sample.answer,
+                "predicted_answer": generated_text,
+            })
+
+    # ── Save / print results ──────────────────────────────────────────────
     if args.output_file:
         output_path = Path(args.output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,14 +188,13 @@ def main():
             json.dump(results, f, indent=2, ensure_ascii=False)
         print(f"\nResults saved to {output_path}")
     else:
-        # Print first few results
         print("\nFirst 5 results:")
         for i, result in enumerate(results[:5]):
             print(f"\nSample {i+1}:")
-            print(f"  Question: {result['question']}")
+            print(f"  Question:    {result['question']}")
             print(f"  Ground Truth: {result['ground_truth_answer']}")
-            print(f"  Predicted: {result['predicted_answer']}")
-    
+            print(f"  Predicted:    {result['predicted_answer']}")
+
     print(f"\nInference completed! Processed {len(results)} samples.")
 
 

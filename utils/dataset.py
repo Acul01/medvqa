@@ -7,20 +7,8 @@ from torch.utils.data import Dataset
 from PIL import Image
 from pathlib import Path
 from typing import Dict, List, Optional
-import json
-import os
-
 from utils.load_data import VQASample, MedicalVQALoader
 from utils.prompt_formatter import PromptFormatter
-
-# #region agent log
-LOG_PATH = "/Users/luca/Desktop/Thesis+Work/medvqa/.cursor/debug.log"
-def _log(session_id, run_id, hypothesis_id, location, message, data):
-    try:
-        with open(LOG_PATH, "a") as f:
-            f.write(json.dumps({"sessionId": session_id, "runId": run_id, "hypothesisId": hypothesis_id, "location": location, "message": message, "data": data, "timestamp": os.times().elapsed}) + "\n")
-    except: pass
-# #endregion
 
 
 class MedicalVQADataset(Dataset):
@@ -98,9 +86,6 @@ class MedicalVQADataset(Dataset):
                             self.image_token = token
                             break
         
-        # #region agent log
-        _log("debug-session", "run1", "C", "dataset.py:95", "Image token detection", {"image_token": self.image_token, "image_token_id": self.image_token_id if hasattr(self, 'image_token_id') else None})
-        # #endregion
     
     def __len__(self) -> int:
         return len(self.samples)
@@ -130,9 +115,6 @@ class MedicalVQADataset(Dataset):
         # Use the configured number of image tokens
         num_image_tokens = self.num_image_tokens
         
-        # #region agent log
-        _log("debug-session", "run1", "B", "dataset.py:132", "Image processed", {"pixel_values_shape": list(pixel_values.shape), "num_image_tokens": num_image_tokens})
-        # #endregion
         
         # Use apply_chat_template to get formatted prompt text
         if self.for_training:
@@ -252,9 +234,6 @@ class MedicalVQADataset(Dataset):
         if labels is not None:
             result["labels"] = labels
         
-        # #region agent log
-        _log("debug-session", "run1", "D", "dataset.py:177", "Dataset item created", {"has_pixel_values": "pixel_values" in result, "has_input_ids": "input_ids" in result, "input_ids_shape": list(result["input_ids"].shape) if "input_ids" in result else None, "pixel_values_shape": list(result["pixel_values"].shape) if "pixel_values" in result else None})
-        # #endregion
         
         # Add metadata fields only for inference (not for training)
         # These cause issues with the Trainer's data collator

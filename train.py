@@ -243,22 +243,6 @@ def main():
         save_only_model=True,  # Speichert nur das Modell, nicht Optimizer-State (spart ~27GB pro Checkpoint)
     )
     
-    # #region agent log
-    import json
-    import os
-    LOG_PATH = "/Users/luca/Desktop/Thesis+Work/medvqa/.cursor/debug.log"
-    def _log(session_id, run_id, hypothesis_id, location, message, data):
-        try:
-            with open(LOG_PATH, "a") as f:
-                f.write(json.dumps({"sessionId": session_id, "runId": run_id, "hypothesisId": hypothesis_id, "location": location, "message": message, "data": data, "timestamp": os.times().elapsed}) + "\n")
-        except: pass
-    
-    # Check first sample from dataset
-    if len(train_dataset) > 0:
-        sample = train_dataset[0]
-        _log("debug-session", "run1", "E", "train.py:183", "First dataset sample", {"keys": list(sample.keys()), "input_ids_shape": list(sample["input_ids"].shape) if "input_ids" in sample else None, "pixel_values_shape": list(sample["pixel_values"].shape) if "pixel_values" in sample else None})
-    # #endregion
-    
     # Initialize trainer
     trainer = Trainer(
         model=model,
