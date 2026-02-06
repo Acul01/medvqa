@@ -146,14 +146,12 @@ def main():
                 **gen_kwargs,
             )
 
-            # 5. Decode only newly generated tokens
-            generated_ids = output[0][input_ids.shape[1]:]
+            # 5. Decode generated tokens
+            #    LLaVA-Med's generate() passes inputs_embeds (not input_ids)
+            #    to super().generate(), so the output contains ONLY the newly
+            #    generated tokens – no need to slice off the input portion.
+            generated_ids = output[0]
             generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
-
-            # Debug: show raw generated tokens (remove once working)
-            if len(results) < 3:
-                print(f"  [debug] output length={output.shape[1]}, input length={input_ids.shape[1]}, new tokens={output.shape[1] - input_ids.shape[1]}")
-                print(f"  [debug] generated token ids: {generated_ids.tolist()}")
 
             # 6. Print live
             print(f"\n[Sample {len(results) + 1}]")
