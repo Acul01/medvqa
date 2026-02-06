@@ -51,7 +51,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=20,
+    parser.add_argument("--max_new_tokens", type=int, default=15,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -118,7 +118,7 @@ def main():
 
     # ── Inference loop ────────────────────────────────────────────────────
     results = []
-    brief_instruction = "Answer with a single word or short phrase."
+    brief_instruction = "Answer with a maximum of three words."
     print("Running inference...")
 
     with torch.no_grad():
