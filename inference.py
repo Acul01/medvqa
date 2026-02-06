@@ -1,8 +1,10 @@
 """
-Inference script for LLaVA and LLaVA-Med on Medical VQA datasets.
+Inference script for standard LLaVA on Medical VQA datasets.
 
 Uses the HuggingFace processor directly for correct tokenization and
 image-token handling (no manual padding, no manual image-token expansion).
+
+For LLaVA-Med, use inference_med.py instead.
 """
 
 import argparse
@@ -16,22 +18,16 @@ from pathlib import Path
 from utils.load_data import MedicalVQALoader
 
 
-# Default model paths for each model type
-DEFAULT_MODEL_PATHS = {
-    "llava": "llava-hf/llava-1.5-7b-hf",
-    "llava_med": "Eren-Senoglu/llava-med-v1.5-mistral-7b-hf"
-}
+DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run inference with LLaVA/LLaVA-Med on Medical VQA")
+    parser = argparse.ArgumentParser(description="Run inference with LLaVA on Medical VQA")
 
     # Model arguments
-    parser.add_argument("--model", type=str, required=True, choices=["llava", "llava_med"],
-                       help="Model type: 'llava' or 'llava_med'")
-    parser.add_argument("--model_path", type=str, default=None,
-                       help="Path to model checkpoint or model name from HuggingFace. "
-                            "If not specified, uses default model for --model type.")
+    parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH,
+                       help="Path to model checkpoint or HuggingFace model name "
+                            f"(default: {DEFAULT_MODEL_PATH})")
 
     # Data arguments
     parser.add_argument("--data_root", type=str, default="data",
@@ -63,42 +59,33 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_conversation(question: str, model_id: str):
+def build_conversation(question: str):
     """
-    Build the chat conversation in the format expected by the model's chat template.
+    Build the chat conversation in LLaVA 1.5 format:
+    multimodal content list with {"type": "image"} and {"type": "text"}.
 
-    - Standard LLaVA 1.5: multimodal content list with {"type": "image"} and {"type": "text"}
-    - LLaVA-Med Mistral: plain string content with "<image>" placeholder
-
-    A short-answer instruction is appended to the question so that the model
-    produces concise answers suitable for VQA evaluation.
+    A short-answer instruction is appended so the model produces concise
+    answers suitable for VQA evaluation.
     """
     brief_instruction = "Answer with a single word or short phrase."
     full_question = f"{question}\n{brief_instruction}"
 
-    if "llava-med-v1.5-mistral" in model_id or "llava_mistral" in model_id:
-        return [{"role": "user", "content": f"<image>\n{full_question}"}]
-    else:
-        return [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": full_question},
-                ],
-            }
-        ]
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": full_question},
+            ],
+        }
+    ]
 
 
 def main():
     args = parse_args()
 
-    # ── Determine model path ──────────────────────────────────────────────
-    if args.model_path is None:
-        args.model_path = DEFAULT_MODEL_PATHS[args.model]
-        print(f"No --model_path specified, using default: {args.model_path}")
-    else:
-        print(f"Using specified model path: {args.model_path}")
+    # ── Model path ─────────────────────────────────────────────────────────
+    print(f"Using model: {args.model_path}")
 
     # ── Device ────────────────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -123,7 +110,7 @@ def main():
     # the checkpoint – fall back to the original base model's processor.
     processor_path = args.model_path
     if Path(args.model_path).exists() and not Path(args.model_path, "preprocessor_config.json").exists():
-        processor_path = DEFAULT_MODEL_PATHS[args.model]
+        processor_path = DEFAULT_MODEL_PATH
         print(f"Processor config not found in trained model, loading from: {processor_path}")
 
     processor = AutoProcessor.from_pretrained(processor_path)
@@ -167,7 +154,7 @@ def main():
             image = Image.open(sample.image_path).convert("RGB")
 
             # 2. Build conversation and apply chat template → prompt string
-            conversation = build_conversation(sample.question, args.model_path)
+            conversation = build_conversation(sample.question)
             prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
             # 3. Processor handles EVERYTHING: tokenisation, image-token
