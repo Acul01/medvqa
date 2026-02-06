@@ -105,7 +105,7 @@ def main():
 
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_path,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.float32,
         device_map="auto",
     )
     model.eval()
