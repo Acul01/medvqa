@@ -50,7 +50,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=50,
+    parser.add_argument("--max_new_tokens", type=int, default=15,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -183,14 +183,25 @@ def main():
             print(f"  Predicted:    {result['predicted_answer']}")
 
     # ── Accuracy ───────────────────────────────────────────────────────────
-    correct = sum(
-        1 for r in results
-        if r["ground_truth_answer"] is not None
-        and r["predicted_answer"].lower().strip() == r["ground_truth_answer"].lower().strip()
-    )
-    total = sum(1 for r in results if r["ground_truth_answer"] is not None)
-    accuracy = correct / total if total > 0 else 0.0
-    print(f"\nAccuracy: {correct}/{total} = {accuracy:.4f} ({accuracy * 100:.2f}%)")
+    # Exact match: predicted == ground truth (lowered + stripped)
+    # Contains match: ground truth appears in predicted (handles verbose
+    #   answers like "Yes, there is..." when GT is "yes")
+    exact = 0
+    contains = 0
+    total = 0
+    for r in results:
+        if r["ground_truth_answer"] is None:
+            continue
+        total += 1
+        pred = r["predicted_answer"].lower().strip()
+        gt = r["ground_truth_answer"].lower().strip()
+        if pred == gt:
+            exact += 1
+        if gt in pred:
+            contains += 1
+
+    print(f"\nExact-match accuracy:    {exact}/{total} = {exact / total:.4f} ({exact / total * 100:.2f}%)" if total else "\nNo samples with ground truth.")
+    print(f"Contains-match accuracy: {contains}/{total} = {contains / total:.4f} ({contains / total * 100:.2f}%)" if total else "")
 
     print(f"Inference completed! Processed {len(results)} samples.")
 
