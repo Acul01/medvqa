@@ -1,9 +1,9 @@
 """
 Prompt formatting for LLaVA and LLaVA-Med models
 
-Standard LLaVA format: USER: <image>\n[question]\nASSISTANT: [answer]
-For inference: answer is removed, model generates after ASSISTANT:
-Note: Image tokens are inserted by the dataset after "USER:"
+LLaVA-interleave format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant [answer]
+For inference: answer is removed, model generates after <|im_start|>assistant
+Note: Image tokens are inserted by the dataset after "<|im_start|>user"
 """
 
 from typing import Optional, List, Dict, Any
@@ -30,16 +30,18 @@ class PromptFormatter:
         self.answer_token = answer_token
         self.model_type = model_type
         
-        # LLaVA standard conversation format
+        # LLaVA-interleave conversation format
         if model_type == "llava":
             self.system_message = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
-            self.user_prefix = "USER:"
-            self.assistant_prefix = "ASSISTANT:"
+            self.user_prefix = "<|im_start|>user"
+            self.user_suffix = "<|im_end|>"
+            self.assistant_prefix = "<|im_start|>assistant"
         elif model_type == "llava_med":
             # LLaVA-Med might have medical-specific system message
             self.system_message = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions about medical images."
-            self.user_prefix = "USER:"
-            self.assistant_prefix = "ASSISTANT:"
+            self.user_prefix = "<|im_start|>user"
+            self.user_suffix = "<|im_end|>"
+            self.assistant_prefix = "<|im_start|>assistant"
         else:
             raise ValueError(f"Unknown model_type: {model_type}. Use 'llava' or 'llava_med'")
     
@@ -52,8 +54,8 @@ class PromptFormatter:
         """
         Format prompt for training (includes answer).
         
-        Format: USER: [question]\nASSISTANT: [answer]
-        Note: Image tokens are inserted by the dataset after "USER:"
+        Format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant [answer]
+        Note: Image tokens are inserted by the dataset after "<|im_start|>user"
         
         Args:
             question: The question to ask
@@ -63,9 +65,9 @@ class PromptFormatter:
         Returns:
             Formatted prompt string
         """
-        # Standard LLaVA format: USER: [question]\nASSISTANT: [answer]
-        # Image tokens are inserted by dataset after "USER:"
-        conversation = f"{self.user_prefix} {question}\n{self.assistant_prefix} {answer}"
+        # LLaVA-interleave format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant [answer]
+        # Image tokens are inserted by dataset after "<|im_start|>user"
+        conversation = f"{self.user_prefix} <image>\n{question}{self.user_suffix}{self.assistant_prefix} {answer}"
         
         return conversation
     
@@ -77,8 +79,8 @@ class PromptFormatter:
         """
         Format prompt for inference (answer removed, model generates).
         
-        Format: USER: [question]\nASSISTANT:
-        Note: Image tokens are inserted by the dataset after "USER:"
+        Format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant
+        Note: Image tokens are inserted by the dataset after "<|im_start|>user"
         
         Args:
             question: The question to ask
@@ -87,9 +89,9 @@ class PromptFormatter:
         Returns:
             Formatted prompt string without answer
         """
-        # Standard LLaVA format: USER: [question]\nASSISTANT:
-        # Image tokens are inserted by dataset after "USER:"
-        conversation = f"{self.user_prefix} {question}\n{self.assistant_prefix}"
+        # LLaVA-interleave format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant
+        # Image tokens are inserted by dataset after "<|im_start|>user"
+        conversation = f"{self.user_prefix} <image>\n{question}{self.user_suffix}{self.assistant_prefix}"
         
         return conversation
     
@@ -112,27 +114,35 @@ class PromptFormatter:
     def extract_answer_from_response(self, response: str) -> str:
         """
         Extract answer from model response.
-        Removes the answer_token and any prefixes.
+        Extracts text after <|im_start|>assistant.
         
         Args:
-            response: Model's raw response
+            response: Model's raw response (may include full prompt + generated answer)
             
         Returns:
             Cleaned answer string
         """
-        # Remove answer token if present
-        if self.answer_token in response:
-            parts = response.split(self.answer_token, 1)
+        # Extract answer after assistant prefix
+        if self.assistant_prefix in response:
+            # Split by assistant prefix and take everything after it
+            parts = response.split(self.assistant_prefix, 1)
             if len(parts) > 1:
                 answer = parts[1].strip()
+                # Remove any trailing <|im_end|> if present
+                if answer.endswith("<|im_end|>"):
+                    answer = answer[:-10].strip()
             else:
                 answer = response.strip()
         else:
-            answer = response.strip()
-        
-        # Remove assistant prefix if present
-        if self.assistant_prefix in answer:
-            answer = answer.replace(self.assistant_prefix, "").strip()
+            # Fallback: try to find answer token if present
+            if self.answer_token in response:
+                parts = response.split(self.answer_token, 1)
+                if len(parts) > 1:
+                    answer = parts[1].strip()
+                else:
+                    answer = response.strip()
+            else:
+                answer = response.strip()
         
         return answer
     

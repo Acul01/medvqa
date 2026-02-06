@@ -27,9 +27,9 @@ class MedicalVQADataset(Dataset):
     """
     PyTorch Dataset for Medical VQA tasks.
     
-    Formats data for LLaVA/LLaVA-Med models using standard LLaVA format.
-    Format: USER: <image>\n[question]\nASSISTANT: [answer]
-    For training: Labels are set so that loss is only computed for tokens after ASSISTANT:.
+    Formats data for LLaVA/LLaVA-Med models using LLaVA-interleave format.
+    Format: <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant [answer]
+    For training: Labels are set so that loss is only computed for tokens after <|im_start|>assistant.
     """
     
     def __init__(
@@ -139,7 +139,7 @@ class MedicalVQADataset(Dataset):
         # #endregion
         
         if self.for_training:
-            # TRAINING: Format USER: <image>\n[question]\nASSISTANT: [answer]
+            # TRAINING: Format <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant [answer]
             full_prompt = self.formatter.format_training_prompt(
                 question=sample.question,
                 answer=sample.answer
@@ -148,14 +148,15 @@ class MedicalVQADataset(Dataset):
             # Insert image token placeholders at the beginning of USER message
             # LLaVA expects multiple image tokens (one per image patch)
             # We'll insert them directly as token IDs to avoid tokenization issues
-            # First, tokenize the prompt without image tokens
+            # First, tokenize the user prefix
             user_prefix_ids = self.tokenizer.encode(
                 self.formatter.user_prefix,
                 add_special_tokens=False
             )
             
-            # Tokenize the rest of the prompt
+            # Remove user prefix and <image> token from prompt (we insert image tokens manually)
             rest_of_prompt = full_prompt.replace(f"{self.formatter.user_prefix}", "").strip()
+            rest_of_prompt = rest_of_prompt.replace("<image>", "").strip()
             rest_ids = self.tokenizer.encode(rest_of_prompt, add_special_tokens=False)
             
             # Get the image token ID
@@ -212,33 +213,33 @@ class MedicalVQADataset(Dataset):
             _log("debug-session", "run1", "A", "dataset.py:185", "Text tokenized with image tokens", {"input_ids_shape": list(input_ids.shape), "num_image_tokens_inserted": num_inserted, "expected": num_image_tokens, "image_token_id": image_token_id})
             # #endregion
             
-            # Create labels: only compute loss for tokens after ASSISTANT:
-            # Standard LLaVA format: loss is computed only for the answer part
+            # Create labels: only compute loss for tokens after <|im_start|>assistant
+            # LLaVA-interleave format: loss is computed only for the answer part
             labels = input_ids.clone()
             
-            # Find position of ASSISTANT: prefix in tokenized sequence
+            # Find position of <|im_start|>assistant prefix in tokenized sequence
             # This is where the answer starts - loss should only be computed from here
             assistant_prefix_ids = self.tokenizer.encode(
                 self.formatter.assistant_prefix,
                 add_special_tokens=False
             )
             
-            # Find where ASSISTANT: appears in the sequence
+            # Find where <|im_start|>assistant appears in the sequence
             answer_start_idx = None
             input_ids_list = input_ids.tolist()
             
             for i in range(len(input_ids_list) - len(assistant_prefix_ids) + 1):
                 if input_ids_list[i:i+len(assistant_prefix_ids)] == assistant_prefix_ids:
-                    # Start loss computation after ASSISTANT: prefix
+                    # Start loss computation after <|im_start|>assistant prefix
                     answer_start_idx = i + len(assistant_prefix_ids)
                     break
             
             if answer_start_idx is not None:
-                # Set labels to -100 (ignored in loss) for everything before ASSISTANT:
+                # Set labels to -100 (ignored in loss) for everything before <|im_start|>assistant
                 labels[:answer_start_idx] = -100
-                # Keep labels for answer part (after ASSISTANT:)
+                # Keep labels for answer part (after <|im_start|>assistant)
             else:
-                # Fallback: if ASSISTANT: not found, set all to -100 except last part (likely the answer)
+                # Fallback: if <|im_start|>assistant not found, set all to -100 except last part (likely the answer)
                 # This shouldn't happen with proper formatting, but safety check
                 labels[:len(labels)//2] = -100
             
@@ -246,7 +247,7 @@ class MedicalVQADataset(Dataset):
             labels[labels == self.tokenizer.pad_token_id] = -100
             
         else:
-            # INFERENCE: Format USER: <image>\n[question]\nASSISTANT:
+            # INFERENCE: Format <|im_start|>user <image>\n[question]<|im_end|><|im_start|>assistant
             prompt = self.formatter.format_inference_prompt(
                 question=sample.question
             )
@@ -272,8 +273,9 @@ class MedicalVQADataset(Dataset):
             if image_token_id is None:
                 image_token_id = 32000  # Default LLaVA image token ID
             
-            # Tokenize the prompt without USER prefix
+            # Remove user prefix and <image> token from prompt (we insert image tokens manually)
             prompt_without_prefix = prompt.replace(f"{self.formatter.user_prefix}", "").strip()
+            prompt_without_prefix = prompt_without_prefix.replace("<image>", "").strip()
             rest_ids = self.tokenizer.encode(prompt_without_prefix, add_special_tokens=False)
             
             # Build input_ids: [user_prefix] + [image_token] * num_image_tokens + [rest_of_prompt]

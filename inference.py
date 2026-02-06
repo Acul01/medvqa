@@ -140,8 +140,8 @@ def main():
     )
     
     print(f"Dataset loaded: {len(dataset)} samples")
-    print(f"Inference format: USER: <image>\\n[question]\\nASSISTANT:")
-    print(f"Model will generate answer after ASSISTANT:")
+    print(f"Inference format: <|im_start|>user <image>\\n[question]<|im_end|><|im_start|>assistant")
+    print(f"Model will generate answer after <|im_start|>assistant")
     
     # Create dataloader
     dataloader = DataLoader(
