@@ -208,9 +208,17 @@ def main():
                 # Extract answer from generated text
                 answer = formatter.extract_answer_from_response(generated_text)
                 
+                # Print question and generated answer for each sample
+                question = batch["question"][i]
+                print(f"\n[Sample {len(results) + 1}]")
+                print(f"Question: {question}")
+                print(f"Generated Answer: {answer}")
+                if "answer" in batch and batch["answer"][i] is not None:
+                    print(f"Ground Truth: {batch['answer'][i]}")
+                
                 result = {
                     "image_path": batch["image_path"][i],
-                    "question": batch["question"][i],
+                    "question": question,
                     "ground_truth_answer": batch["answer"][i] if "answer" in batch and batch["answer"][i] is not None else None,
                     "predicted_answer": answer,
                     "full_response": generated_text,
