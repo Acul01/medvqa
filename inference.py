@@ -43,7 +43,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=128,
+    parser.add_argument("--max_new_tokens", type=int, default=50,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -67,16 +67,22 @@ def build_conversation(question: str, model_id: str):
 
     - Standard LLaVA 1.5: multimodal content list with {"type": "image"} and {"type": "text"}
     - LLaVA-Med Mistral: plain string content with "<image>" placeholder
+
+    A short-answer instruction is appended to the question so that the model
+    produces concise answers suitable for VQA evaluation.
     """
+    brief_instruction = "Answer with a single word or short phrase."
+    full_question = f"{question}\n{brief_instruction}"
+
     if "llava-med-v1.5-mistral" in model_id or "llava_mistral" in model_id:
-        return [{"role": "user", "content": f"<image>\n{question}"}]
+        return [{"role": "user", "content": f"<image>\n{full_question}"}]
     else:
         return [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": question},
+                    {"type": "text", "text": full_question},
                 ],
             }
         ]
