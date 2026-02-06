@@ -137,9 +137,10 @@ def main():
                 prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
             ).unsqueeze(0).to(device)
 
-            # 4. Generate
+            # 4. Generate (input_ids as positional arg – required by LLaVA-Med's
+            #    generate override which expects it as the 'inputs' parameter)
             output = model.generate(
-                input_ids=input_ids,
+                input_ids,
                 images=image_tensor,
                 **gen_kwargs,
             )
