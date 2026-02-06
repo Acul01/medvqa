@@ -19,7 +19,7 @@ from utils.load_data import MedicalVQALoader
 # Default model paths for each model type
 DEFAULT_MODEL_PATHS = {
     "llava": "llava-hf/llava-1.5-7b-hf",
-    "llava_med": "microsoft/llava-med-v1.5-mistral-7b"
+    "llava_med": "Eren-Senoglu/llava-med-v1.5-mistral-7b-hf"
 }
 
 
