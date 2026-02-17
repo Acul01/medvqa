@@ -22,7 +22,7 @@ from llava.model.builder import load_pretrained_model
 from llava.mm_utils import process_images, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, CLIPImageProcessor
 from llava.model import LlavaMistralForCausalLM
 from llava.mm_utils import get_model_name_from_path
 
@@ -100,7 +100,8 @@ def main():
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
         else:
             tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_PATH)
-        image_processor = model.get_vision_tower().image_processor
+        vision_tower = model.get_vision_tower()
+        image_processor = vision_tower.image_processor if hasattr(vision_tower, 'image_processor') else CLIPImageProcessor.from_pretrained(vision_tower.config._name_or_path)
     else:
         # HuggingFace model: use original LLaVA-Med builder
         print("(Loading from HuggingFace Hub via LLaVA-Med builder)")
