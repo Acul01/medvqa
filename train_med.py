@@ -262,7 +262,7 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
-        eval_strategy="steps" if val_dataset else "no",
+        evaluation_strategy="steps" if val_dataset else "no",
         save_strategy="steps",
         load_best_model_at_end=bool(val_dataset),
         fp16=args.fp16,
