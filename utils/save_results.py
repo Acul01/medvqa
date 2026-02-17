@@ -5,10 +5,44 @@ and maintaining a results history log.
 
 import csv
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+
+
+# ── Answer cleaning ─────────────────────────────────────────────────────────────
+
+def clean_answer(text: str) -> str:
+    """Clean a generated answer by removing noise tokens and extra content.
+
+    Applied identically for both LLaVA and LLaVA-Med outputs.
+
+    Steps:
+        1. Strip whitespace
+        2. Remove emoji / non-ASCII symbols (e.g. unicode garbage)
+        3. Remove numbers that follow the core answer (e.g. "right 1/3")
+        4. Keep only up to the first 3 words
+        5. Strip trailing punctuation
+    """
+    # Strip
+    text = text.strip()
+
+    # Remove emoji and misc unicode symbols (keep basic latin + common accents)
+    text = re.sub(r'[^\x00-\x7F\u00C0-\u00FF]+', ' ', text)
+
+    # Collapse multiple whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Keep only first 3 words
+    words = text.split()[:3]
+    text = " ".join(words)
+
+    # Strip trailing punctuation and digits that aren't part of the answer
+    text = re.sub(r'[\s\d/.,;:!?]+$', '', text)
+
+    return text.strip()
 
 
 RESULTS_DIR = Path("results")

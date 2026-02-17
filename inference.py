@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import save_results
+from utils.save_results import save_results, clean_answer
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -40,7 +40,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=15,
+    parser.add_argument("--max_new_tokens", type=int, default=3,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -171,6 +171,7 @@ def main():
             input_length = inputs["input_ids"].shape[1]
             generated_ids = output[0][input_length:]
             generated_text = processor.decode(generated_ids, skip_special_tokens=True).strip()
+            generated_text = clean_answer(generated_text)
 
             # 6. Print live
             print(f"\n[Sample {len(results) + 1}]")

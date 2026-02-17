@@ -24,7 +24,7 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import save_results
+from utils.save_results import save_results, clean_answer
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
@@ -51,7 +51,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=15,
+    parser.add_argument("--max_new_tokens", type=int, default=3,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -155,6 +155,7 @@ def main():
             #    generated tokens – no need to slice off the input portion.
             generated_ids = output[0]
             generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+            generated_text = clean_answer(generated_text)
 
             # 6. Print live
             print(f"\n[Sample {len(results) + 1}]")
