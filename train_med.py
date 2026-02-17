@@ -282,7 +282,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
     )
 
     # ── Train ───────────────────────────────────────────────────────────
