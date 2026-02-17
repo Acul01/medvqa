@@ -22,6 +22,9 @@ from llava.model.builder import load_pretrained_model
 from llava.mm_utils import process_images, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
+from transformers import AutoTokenizer
+from llava.model import LlavaMistralForCausalLM
+from llava.mm_utils import get_model_name_from_path
 
 from utils.load_data import MedicalVQALoader
 from utils.save_results import save_results, clean_answer
@@ -80,18 +83,37 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # ── Load model via original LLaVA-Med codebase ────────────────────────
+    # ── Load model ────────────────────────────────────────────────────────
     print(f"Loading LLaVA-Med model: {args.model_path}")
-    model_name = Path(args.model_path).name or "llava-med-v1.5-mistral-7b"
+    model_path = Path(args.model_path)
 
-    tokenizer, model, image_processor, context_len = load_pretrained_model(
-        model_path=args.model_path,
-        model_base=args.model_base,
-        model_name=model_name,
-        device=str(device),
-    )
+    if model_path.exists() and (model_path / "config.json").exists():
+        # Fine-tuned local checkpoint: load directly
+        print("(Loading fine-tuned model from local path)")
+        model = LlavaMistralForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch.float16,
+            device_map="auto",
+        )
+        # Load tokenizer: try local first, fall back to base model
+        if (model_path / "tokenizer_config.json").exists():
+            tokenizer = AutoTokenizer.from_pretrained(str(model_path))
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_PATH)
+        image_processor = model.get_vision_tower().image_processor
+    else:
+        # HuggingFace model: use original LLaVA-Med builder
+        print("(Loading from HuggingFace Hub via LLaVA-Med builder)")
+        model_name = model_path.name or "llava-med-v1.5-mistral-7b"
+        tokenizer, model, image_processor, context_len = load_pretrained_model(
+            model_path=args.model_path,
+            model_base=args.model_base,
+            model_name=model_name,
+            device=str(device),
+        )
+
     model.eval()
-    print(f"Model loaded (context_len={context_len})")
+    print("Model loaded")
 
     # ── Load dataset samples ──────────────────────────────────────────────
     print(f"Loading {args.dataset} {args.split} split...")
