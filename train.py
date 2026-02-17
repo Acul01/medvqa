@@ -72,12 +72,17 @@ class LLaVATrainDataset(Dataset):
         image = Image.open(sample.image_path).convert("RGB")
 
         # ── Build conversation (user + assistant) ────────────────────────
+        # Include the same brief-answer instruction as in inference.py
+        # so the model learns to respond concisely.
+        brief_instruction = "Answer with a maximum of three words."
+        full_question = f"{sample.question}\n{brief_instruction}"
+
         conversation = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": sample.question},
+                    {"type": "text", "text": full_question},
                 ],
             },
             {

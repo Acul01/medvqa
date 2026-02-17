@@ -75,8 +75,11 @@ class LLaVAMedTrainDataset(Dataset):
         image_tensor = image_tensor.squeeze(0)  # [C, H, W]
 
         # ── Build conversation (same as inference_med.py, but with answer) ─
+        # Include the same brief-answer instruction as in inference_med.py
+        # so the model learns to respond concisely.
+        brief_instruction = "Answer with a maximum of three words."
         conv = conv_templates[self.conv_template].copy()
-        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}"
+        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{brief_instruction}"
         conv.append_message(conv.roles[0], question)
         conv.append_message(conv.roles[1], sample.answer)
         prompt = conv.get_prompt()
