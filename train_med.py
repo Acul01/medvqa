@@ -218,6 +218,10 @@ def main():
         device=str(device),
     )
 
+    # Model is loaded in fp16; cast to fp32 so the Trainer's AMP (--bf16)
+    # handles precision correctly with fp32 gradient accumulation.
+    model = model.float()
+
     # ── Diagnostic: check truncation config ─────────────────────────
     tok_max = getattr(model.config, 'tokenizer_model_max_length', 'NOT SET')
     print(f"  model.config.tokenizer_model_max_length = {tok_max}")
