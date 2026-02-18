@@ -218,9 +218,10 @@ def main():
         device=str(device),
     )
 
-    # Model is loaded in fp16; cast to fp32 so the Trainer's AMP (--bf16)
-    # handles precision correctly with fp32 gradient accumulation.
-    model = model.float()
+    # Model is loaded in fp16; cast to bf16 for consistent precision.
+    # (fp32 causes OOM with Adam optimizer states; the original fp16 + bf16
+    # AMP mix caused NaN. Pure bf16 avoids both issues.)
+    model = model.to(torch.bfloat16)
 
     # ── Diagnostic: check truncation config ─────────────────────────
     tok_max = getattr(model.config, 'tokenizer_model_max_length', 'NOT SET')
