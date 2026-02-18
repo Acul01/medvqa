@@ -55,7 +55,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=50,
+    parser.add_argument("--max_new_tokens", type=int, default=3,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -174,12 +174,7 @@ def main():
         gen_kwargs["num_beams"] = args.num_beams
 
     # ── Inference loop ────────────────────────────────────────────────────
-    DATASET_INSTRUCTIONS = {
-        "vqarad": "Answer with a maximum of three words.",
-        "pathvqa": "Answer the question concisely.",
-        "slake": "Answer the question concisely.",
-    }
-    brief_instruction = DATASET_INSTRUCTIONS.get(args.dataset, "Answer the question concisely.")
+    brief_instruction = "Answer with a maximum of three words."
     results = []
     print("Running inference...")
 

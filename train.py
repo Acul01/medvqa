@@ -50,17 +50,10 @@ class LLaVATrainDataset(Dataset):
     computed on the assistant's answer.
     """
 
-    DATASET_INSTRUCTIONS = {
-        "vqarad": "Answer with a maximum of three words.",
-        "pathvqa": "Answer the question concisely.",
-        "slake": "Answer the question concisely.",
-    }
-
-    def __init__(self, samples, processor, max_length=512, dataset="vqarad"):
+    def __init__(self, samples, processor, max_length=512):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
-        self.instruction = self.DATASET_INSTRUCTIONS.get(dataset, "Answer the question concisely.")
 
         # Ensure pad token is set
         if processor.tokenizer.pad_token is None:
@@ -80,7 +73,8 @@ class LLaVATrainDataset(Dataset):
         image = Image.open(sample.image_path).convert("RGB")
 
         # ── Build conversation (user + assistant) ────────────────────────
-        full_question = f"{sample.question}\n{self.instruction}"
+        brief_instruction = "Answer with a maximum of three words."
+        full_question = f"{sample.question}\n{brief_instruction}"
 
         conversation = [
             {
@@ -278,13 +272,13 @@ def main():
 
     print(f"Loading {args.dataset} {args.train_split} split...")
     train_samples = loader.load_dataset(args.dataset, split=args.train_split)
-    train_dataset = LLaVATrainDataset(train_samples, processor, args.max_length, dataset=args.dataset)
+    train_dataset = LLaVATrainDataset(train_samples, processor, args.max_length)
     print(f"Train: {len(train_dataset)} samples")
 
     val_dataset = None
     try:
         val_samples = loader.load_dataset(args.dataset, split=args.val_split)
-        val_dataset = LLaVATrainDataset(val_samples, processor, args.max_length, dataset=args.dataset)
+        val_dataset = LLaVATrainDataset(val_samples, processor, args.max_length)
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
         print(f"No validation split available: {e}")

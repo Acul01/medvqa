@@ -41,7 +41,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=50,
+    parser.add_argument("--max_new_tokens", type=int, default=3,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -69,20 +69,13 @@ def parse_args():
     return parser.parse_args()
 
 
-DATASET_INSTRUCTIONS = {
-    "vqarad": "Answer with a maximum of three words.",
-    "pathvqa": "Answer the question concisely.",
-    "slake": "Answer the question concisely.",
-}
-
-
-def build_conversation(question: str, dataset: str = "vqarad"):
+def build_conversation(question: str):
     """
     Build the chat conversation in LLaVA 1.5 format:
     multimodal content list with {"type": "image"} and {"type": "text"}.
     """
-    instruction = DATASET_INSTRUCTIONS.get(dataset, "Answer the question concisely.")
-    full_question = f"{question}\n{instruction}"
+    brief_instruction = "Answer with a maximum of three words."
+    full_question = f"{question}\n{brief_instruction}"
 
     return [
         {
@@ -189,7 +182,7 @@ def main():
             image = Image.open(sample.image_path).convert("RGB")
 
             # 2. Build conversation and apply chat template → prompt string
-            conversation = build_conversation(sample.question, dataset=args.dataset)
+            conversation = build_conversation(sample.question)
             prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
             # 3. Processor handles EVERYTHING: tokenisation, image-token
