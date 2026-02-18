@@ -95,6 +95,13 @@ def main():
             torch_dtype=torch.float16,
             device_map="auto",
         )
+        # Initialise the vision tower (CLIP) -- from_pretrained does not
+        # do this automatically, unlike load_pretrained_model.
+        vision_tower = model.get_model().get_vision_tower()
+        if not vision_tower.is_loaded:
+            vision_tower.load_model()
+        vision_tower.to(device=device, dtype=torch.float16)
+
         # Load tokenizer: try local first, fall back to base model
         if (model_path / "tokenizer_config.json").exists():
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
