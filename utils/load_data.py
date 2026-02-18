@@ -204,6 +204,10 @@ class MedicalVQALoader:
         
         # SLAKE JSON is a list of objects
         for item in data:
+            # SLAKE contains English and Chinese samples; keep only English
+            if item.get("q_lang") == "zh":
+                continue
+
             # Extract image name (e.g., "xmlab102/source.jpg")
             img_name = item.get("img_name", "")
             
