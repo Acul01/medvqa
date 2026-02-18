@@ -9,6 +9,7 @@ For LLaVA-Med, use inference_med.py instead.
 
 import argparse
 import torch
+import wandb
 from PIL import Image
 from transformers import LlavaForConditionalGeneration, AutoProcessor
 from tqdm import tqdm
@@ -59,6 +60,12 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False,
                        help="Flag: model is fine-tuned (recorded in history)")
 
+    # W&B
+    parser.add_argument("--wandb_project", type=str, default="medvqa",
+                       help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                       help="W&B run name (auto-generated if not set)")
+
     return parser.parse_args()
 
 
@@ -84,8 +91,29 @@ def build_conversation(question: str):
     ]
 
 
+def _model_short_name(model_path: str) -> str:
+    name = Path(model_path).name.lower()
+    if "llava-med" in name:
+        return "llava-med"
+    if "llava" in name:
+        return "llava"
+    return Path(model_path).name
+
+
 def main():
     args = parse_args()
+
+    # ── W&B ──────────────────────────────────────────────────────────────
+    model_short = _model_short_name(args.model_path)
+    ft_tag = "finetuned" if args.finetuned else "pretrained"
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_eval"
+    wandb.init(
+        project=args.wandb_project,
+        name=run_name,
+        group=args.dataset,
+        tags=["inference", model_short, args.dataset, ft_tag],
+        config=vars(args),
+    )
 
     # ── Model path ─────────────────────────────────────────────────────────
     print(f"Using model: {args.model_path}")
@@ -227,6 +255,22 @@ def main():
         contains_acc=contains_acc,
         results_dir=args.results_dir,
     )
+
+    # ── W&B: log metrics + predictions table ────────────────────────────
+    wandb.log({
+        "exact_match_accuracy": exact_acc,
+        "contains_match_accuracy": contains_acc,
+        "total_samples": total,
+    })
+    table = wandb.Table(columns=["image_path", "question", "ground_truth", "predicted", "exact_match"])
+    for r in results:
+        gt = (r["ground_truth_answer"] or "").lower().strip()
+        pred = r["predicted_answer"].lower().strip()
+        table.add_data(r["image_path"], r["question"],
+                       r["ground_truth_answer"], r["predicted_answer"],
+                       pred == gt)
+    wandb.log({"predictions": table})
+    wandb.finish()
 
     print(f"Inference completed! Processed {len(results)} samples.")
 

@@ -14,6 +14,7 @@ For LLaVA-Med, use train_med.py instead.
 
 import argparse
 import torch
+import wandb
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import (
@@ -199,14 +200,40 @@ def parse_args():
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
                         help="Resume training from checkpoint path")
 
+    # W&B
+    parser.add_argument("--wandb_project", type=str, default="medvqa",
+                        help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                        help="W&B run name (auto-generated if not set)")
+
     return parser.parse_args()
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
 
+def _model_short_name(model_path: str) -> str:
+    name = Path(model_path).name.lower()
+    if "llava-med" in name:
+        return "llava-med"
+    if "llava" in name:
+        return "llava"
+    return Path(model_path).name
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
+
+    # ── W&B ──────────────────────────────────────────────────────────────
+    model_short = _model_short_name(args.model_path)
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_train"
+    wandb.init(
+        project=args.wandb_project,
+        name=run_name,
+        group=args.dataset,
+        tags=["training", model_short, args.dataset],
+        config=vars(args),
+    )
 
     # Check 8-bit optimizer
     if args.use_8bit_optimizer:
@@ -277,7 +304,7 @@ def main():
         bf16=args.bf16,
         dataloader_num_workers=args.dataloader_num_workers,
         remove_unused_columns=False,
-        report_to="tensorboard",
+        report_to="wandb",
         seed=args.seed,
         optim="adamw_8bit" if args.use_8bit_optimizer else "adamw_torch",
         max_grad_norm=1.0,
@@ -307,6 +334,13 @@ def main():
 
     print("Training completed!")
     print(f"Training loss: {result.training_loss}")
+
+    wandb.log({
+        "final_train_loss": result.training_loss,
+        "train_samples": len(train_dataset),
+        "val_samples": len(val_dataset) if val_dataset else 0,
+    })
+    wandb.finish()
 
 
 if __name__ == "__main__":
