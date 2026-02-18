@@ -28,7 +28,7 @@ from llava.model import LlavaMistralForCausalLM
 from llava.mm_utils import get_model_name_from_path
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import save_results, clean_answer
+from utils.save_results import save_results, clean_answer, compute_bleu_scores
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
@@ -55,7 +55,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=3,
+    parser.add_argument("--max_new_tokens", type=int, default=50,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
@@ -174,8 +174,13 @@ def main():
         gen_kwargs["num_beams"] = args.num_beams
 
     # ── Inference loop ────────────────────────────────────────────────────
+    DATASET_INSTRUCTIONS = {
+        "vqarad": "Answer with a maximum of three words.",
+        "pathvqa": "Answer the question concisely.",
+        "slake": "Answer the question concisely.",
+    }
+    brief_instruction = DATASET_INSTRUCTIONS.get(args.dataset, "Answer the question concisely.")
     results = []
-    brief_instruction = "Answer with a maximum of three words."
     print("Running inference...")
 
     with torch.no_grad():
@@ -236,25 +241,32 @@ def main():
         print(f"  Ground Truth: {result['ground_truth_answer']}")
         print(f"  Predicted:    {result['predicted_answer']}")
 
-    # ── Accuracy ───────────────────────────────────────────────────────────
+    # ── Metrics ────────────────────────────────────────────────────────────
     exact = 0
-    contains = 0
     total = 0
+    bleu_accum = {f"bleu_{n}": 0.0 for n in range(1, 5)}
+    per_sample_bleu = []
+
     for r in results:
         if r["ground_truth_answer"] is None:
+            per_sample_bleu.append({f"bleu_{n}": 0.0 for n in range(1, 5)})
             continue
         total += 1
         pred = r["predicted_answer"].lower().strip()
         gt = r["ground_truth_answer"].lower().strip()
         if pred == gt:
             exact += 1
-        if gt in pred:
-            contains += 1
+        scores = compute_bleu_scores(r["predicted_answer"], r["ground_truth_answer"])
+        per_sample_bleu.append(scores)
+        for k in bleu_accum:
+            bleu_accum[k] += scores[k]
 
     exact_acc = exact / total if total else 0.0
-    contains_acc = contains / total if total else 0.0
-    print(f"\nExact-match accuracy:    {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
-    print(f"Contains-match accuracy: {contains}/{total} = {contains_acc:.4f} ({contains_acc * 100:.2f}%)" if total else "")
+    avg_bleu = {k: v / total if total else 0.0 for k, v in bleu_accum.items()}
+
+    print(f"\nExact-match accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
+    for n in range(1, 5):
+        print(f"BLEU-{n}:                {avg_bleu[f'bleu_{n}']:.4f}")
 
     # ── Save results (JSON, CSV, XLSX) + history ─────────────────────────
     print(f"\nSaving results...")
@@ -265,23 +277,33 @@ def main():
         n_samples=args.n_samples,
         finetuned=args.finetuned,
         exact_acc=exact_acc,
-        contains_acc=contains_acc,
+        bleu_scores=avg_bleu,
         results_dir=args.results_dir,
     )
 
     # ── W&B: log metrics + predictions table ────────────────────────────
     wandb.log({
         "exact_match_accuracy": exact_acc,
-        "contains_match_accuracy": contains_acc,
+        "bleu_1": avg_bleu["bleu_1"],
+        "bleu_2": avg_bleu["bleu_2"],
+        "bleu_3": avg_bleu["bleu_3"],
+        "bleu_4": avg_bleu["bleu_4"],
         "total_samples": total,
     })
-    table = wandb.Table(columns=["image_path", "question", "ground_truth", "predicted", "exact_match"])
-    for r in results:
+    table = wandb.Table(columns=[
+        "image_path", "question", "ground_truth", "predicted",
+        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4",
+    ])
+    for r, bleu in zip(results, per_sample_bleu):
         gt = (r["ground_truth_answer"] or "").lower().strip()
         pred = r["predicted_answer"].lower().strip()
-        table.add_data(r["image_path"], r["question"],
-                       r["ground_truth_answer"], r["predicted_answer"],
-                       pred == gt)
+        table.add_data(
+            r["image_path"], r["question"],
+            r["ground_truth_answer"], r["predicted_answer"],
+            pred == gt,
+            round(bleu["bleu_1"], 4), round(bleu["bleu_2"], 4),
+            round(bleu["bleu_3"], 4), round(bleu["bleu_4"], 4),
+        )
     wandb.log({"predictions": table})
     wandb.finish()
 

@@ -10,39 +10,51 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+
+_smoother = SmoothingFunction().method1
+
+BLEU_WEIGHTS = {
+    1: (1, 0, 0, 0),
+    2: (0.5, 0.5, 0, 0),
+    3: (1/3, 1/3, 1/3, 0),
+    4: (0.25, 0.25, 0.25, 0.25),
+}
 
 
 # ── Answer cleaning ─────────────────────────────────────────────────────────────
 
 def clean_answer(text: str) -> str:
-    """Clean a generated answer by removing noise tokens and extra content.
+    """Clean a generated answer by removing noise tokens.
 
     Applied identically for both LLaVA and LLaVA-Med outputs.
 
     Steps:
         1. Strip whitespace
         2. Remove emoji / non-ASCII symbols (e.g. unicode garbage)
-        3. Remove numbers that follow the core answer (e.g. "right 1/3")
-        4. Keep only up to the first 3 words
-        5. Strip trailing punctuation
+        3. Collapse multiple whitespace
+        4. Strip trailing punctuation
     """
-    # Strip
     text = text.strip()
-
-    # Remove emoji and misc unicode symbols (keep basic latin + common accents)
     text = re.sub(r'[^\x00-\x7F\u00C0-\u00FF]+', ' ', text)
-
-    # Collapse multiple whitespace
     text = re.sub(r'\s+', ' ', text).strip()
-
-    # Keep only first 3 words
-    words = text.split()[:3]
-    text = " ".join(words)
-
-    # Strip trailing punctuation and digits that aren't part of the answer
-    text = re.sub(r'[\s\d/.,;:!?]+$', '', text)
-
+    text = re.sub(r'[.,;:!?]+$', '', text)
     return text.strip()
+
+
+def compute_bleu_scores(prediction: str, reference: str) -> dict:
+    """Compute BLEU-1 through BLEU-4 for a single prediction/reference pair."""
+    pred_tokens = prediction.lower().strip().split()
+    ref_tokens = reference.lower().strip().split()
+    if not pred_tokens or not ref_tokens:
+        return {f"bleu_{n}": 0.0 for n in range(1, 5)}
+    scores = {}
+    for n, weights in BLEU_WEIGHTS.items():
+        scores[f"bleu_{n}"] = sentence_bleu(
+            [ref_tokens], pred_tokens,
+            weights=weights, smoothing_function=_smoother,
+        )
+    return scores
 
 
 RESULTS_DIR = Path("results")
@@ -55,20 +67,21 @@ HISTORY_COLUMNS = [
     "dataset",
     "n_samples",
     "exact_match_accuracy",
-    "contains_match_accuracy",
+    "bleu_1",
+    "bleu_2",
+    "bleu_3",
+    "bleu_4",
 ]
 
 
 def _derive_model_short_name(model_path: str) -> str:
     """Derive a short, filename-safe model name from the full path/ID."""
-    name = Path(model_path).name  # e.g. "llava-med-v1.5-mistral-7b"
-    # Common mappings
+    name = Path(model_path).name
     name_lower = name.lower()
     if "llava-med" in name_lower:
         return "llava-med"
     if "llava" in name_lower:
         return "llava"
-    # Fallback: sanitise the raw name
     return name.replace("/", "_").replace(" ", "_")
 
 
@@ -79,7 +92,7 @@ def save_results(
     n_samples: int | None,
     finetuned: bool,
     exact_acc: float,
-    contains_acc: float,
+    bleu_scores: dict[str, float],
     results_dir: str | Path = RESULTS_DIR,
 ) -> None:
     """Save inference results as JSON, CSV, XLSX and append to history.
@@ -121,7 +134,7 @@ def save_results(
         dataset=dataset,
         n_samples=n_tag,
         exact_acc=exact_acc,
-        contains_acc=contains_acc,
+        bleu_scores=bleu_scores,
         results_dir=results_dir,
     )
 
@@ -132,7 +145,7 @@ def _append_history(
     dataset: str,
     n_samples: str,
     exact_acc: float,
-    contains_acc: float,
+    bleu_scores: dict[str, float],
     results_dir: Path = RESULTS_DIR,
 ) -> None:
     """Append one row to the results history CSV."""
@@ -146,7 +159,10 @@ def _append_history(
         "dataset": dataset,
         "n_samples": n_samples,
         "exact_match_accuracy": f"{exact_acc:.4f}",
-        "contains_match_accuracy": f"{contains_acc:.4f}",
+        "bleu_1": f"{bleu_scores.get('bleu_1', 0):.4f}",
+        "bleu_2": f"{bleu_scores.get('bleu_2', 0):.4f}",
+        "bleu_3": f"{bleu_scores.get('bleu_3', 0):.4f}",
+        "bleu_4": f"{bleu_scores.get('bleu_4', 0):.4f}",
     }
 
     with open(history_path, "a", newline="", encoding="utf-8") as f:

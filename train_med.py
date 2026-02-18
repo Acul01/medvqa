@@ -50,14 +50,21 @@ class LLaVAMedTrainDataset(Dataset):
     so the loss is only computed on the assistant's answer.
     """
 
+    DATASET_INSTRUCTIONS = {
+        "vqarad": "Answer with a maximum of three words.",
+        "pathvqa": "Answer the question concisely.",
+        "slake": "Answer the question concisely.",
+    }
+
     def __init__(self, samples, tokenizer, image_processor, model_config,
-                 conv_template="mistral_instruct", max_length=512):
+                 conv_template="mistral_instruct", max_length=512, dataset="vqarad"):
         self.samples = samples
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.model_config = model_config
         self.conv_template = conv_template
         self.max_length = max_length
+        self.instruction = self.DATASET_INSTRUCTIONS.get(dataset, "Answer the question concisely.")
 
         # Ensure pad token
         if tokenizer.pad_token is None:
@@ -76,10 +83,7 @@ class LLaVAMedTrainDataset(Dataset):
         image_tensor = image_tensor.squeeze(0)  # [C, H, W]
 
         # ── Build conversation (same as inference_med.py, but with answer) ─
-        # Include the same brief-answer instruction as in inference_med.py
-        # so the model learns to respond concisely.
-        brief_instruction = "Answer with a maximum of three words."
-        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{brief_instruction}"
+        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{self.instruction}"
 
         # Build prompt WITH answer (full training sequence)
         conv_full = conv_templates[self.conv_template].copy()
@@ -270,6 +274,7 @@ def main():
     train_dataset = LLaVAMedTrainDataset(
         train_samples, tokenizer, image_processor, model.config,
         conv_template=args.conv_template, max_length=args.max_length,
+        dataset=args.dataset,
     )
     print(f"Train: {len(train_dataset)} samples")
 
@@ -279,6 +284,7 @@ def main():
         val_dataset = LLaVAMedTrainDataset(
             val_samples, tokenizer, image_processor, model.config,
             conv_template=args.conv_template, max_length=args.max_length,
+            dataset=args.dataset,
         )
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
