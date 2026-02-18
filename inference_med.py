@@ -100,8 +100,7 @@ def main():
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
         else:
             tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_PATH)
-        vision_tower = model.get_vision_tower()
-        image_processor = vision_tower.image_processor if hasattr(vision_tower, 'image_processor') else CLIPImageProcessor.from_pretrained(vision_tower.config._name_or_path)
+        image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
     else:
         # HuggingFace model: use original LLaVA-Med builder
         print("(Loading from HuggingFace Hub via LLaVA-Med builder)")
