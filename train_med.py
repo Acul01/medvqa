@@ -86,25 +86,23 @@ class LLaVAMedTrainDataset(Dataset):
         conv_full.append_message(conv_full.roles[1], sample.answer)
         full_prompt = conv_full.get_prompt()
 
-        # Build prompt WITHOUT answer (to find where the answer starts)
-        conv_prompt = conv_templates[self.conv_template].copy()
-        conv_prompt.append_message(conv_prompt.roles[0], question)
-        conv_prompt.append_message(conv_prompt.roles[1], None)
-        prompt_only = conv_prompt.get_prompt()
-
         # ── Tokenise (replaces <image> text with IMAGE_TOKEN_INDEX) ──────
         input_ids = tokenizer_image_token(
             full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
         )  # 1-D tensor of shape [seq_len]
 
-        prompt_only_ids = tokenizer_image_token(
-            prompt_only, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
-        )
-        prompt_len = len(prompt_only_ids)
+        content_len = len(input_ids)
+
+        # Tokenize just the answer to find how many tokens it occupies.
+        # +2 accounts for EOS and a potential separator/space token
+        # that BPE may insert between [/INST] and the answer.
+        answer_ids = self.tokenizer.encode(sample.answer, add_special_tokens=False)
+        answer_token_len = len(answer_ids) + 2
 
         # ── Truncate / pad to max_length ─────────────────────────────────
-        if len(input_ids) > self.max_length:
+        if content_len > self.max_length:
             input_ids = input_ids[: self.max_length]
+            content_len = self.max_length
 
         attention_mask = torch.ones_like(input_ids)
 
@@ -119,12 +117,12 @@ class LLaVAMedTrainDataset(Dataset):
                 torch.zeros(pad_len, dtype=attention_mask.dtype),
             ])
 
-        # ── Labels: mask prompt, keep only answer ────────────────────────
-        labels = input_ids.clone()
-        labels[:prompt_len] = -100
+        # ── Labels: mask everything, then unmask only the answer at the end
+        labels = torch.full_like(input_ids, -100)
+        answer_start = max(0, content_len - answer_token_len)
+        labels[answer_start:content_len] = input_ids[answer_start:content_len]
 
-        # Mask padding tokens and IMAGE_TOKEN_INDEX (image feature positions)
-        labels[input_ids == self.pad_token_id] = -100
+        # Safety: mask IMAGE_TOKEN_INDEX positions (shouldn't be in answer, but just in case)
         labels[input_ids == IMAGE_TOKEN_INDEX] = -100
 
         return {
@@ -283,8 +281,21 @@ def main():
         tokenizer=tokenizer,
     )
 
+    # ── Sanity check: verify label masking on first sample ──────────
+    sample0 = train_dataset[0]
+    n_total = sample0["labels"].numel()
+    n_masked = (sample0["labels"] == -100).sum().item()
+    n_active = n_total - n_masked
+    active_ids = sample0["labels"][sample0["labels"] != -100]
+    decoded_active = tokenizer.decode(active_ids, skip_special_tokens=False)
+    print(f"\n[Label sanity check - sample 0]")
+    print(f"  Total tokens: {n_total}  |  Masked (-100): {n_masked}  |  Active (loss): {n_active}")
+    print(f"  Active tokens decoded: '{decoded_active}'")
+    if n_active == 0:
+        raise RuntimeError("BUG: all labels are -100 -> loss will always be 0. Aborting.")
+
     # ── Train ───────────────────────────────────────────────────────────
-    print("Starting training...")
+    print("\nStarting training...")
     print(f"  Format: [INST] <image>\\n{{question}} [/INST]{{answer}}")
     print(f"  Loss computed only on assistant response tokens")
 
