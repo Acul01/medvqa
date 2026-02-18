@@ -78,16 +78,29 @@ class LLaVAMedTrainDataset(Dataset):
         # Include the same brief-answer instruction as in inference_med.py
         # so the model learns to respond concisely.
         brief_instruction = "Answer with a maximum of three words."
-        conv = conv_templates[self.conv_template].copy()
         question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{brief_instruction}"
-        conv.append_message(conv.roles[0], question)
-        conv.append_message(conv.roles[1], sample.answer)
-        prompt = conv.get_prompt()
+
+        # Build prompt WITH answer (full training sequence)
+        conv_full = conv_templates[self.conv_template].copy()
+        conv_full.append_message(conv_full.roles[0], question)
+        conv_full.append_message(conv_full.roles[1], sample.answer)
+        full_prompt = conv_full.get_prompt()
+
+        # Build prompt WITHOUT answer (to find where the answer starts)
+        conv_prompt = conv_templates[self.conv_template].copy()
+        conv_prompt.append_message(conv_prompt.roles[0], question)
+        conv_prompt.append_message(conv_prompt.roles[1], None)
+        prompt_only = conv_prompt.get_prompt()
 
         # ── Tokenise (replaces <image> text with IMAGE_TOKEN_INDEX) ──────
         input_ids = tokenizer_image_token(
-            prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
+            full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
         )  # 1-D tensor of shape [seq_len]
+
+        prompt_only_ids = tokenizer_image_token(
+            prompt_only, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
+        )
+        prompt_len = len(prompt_only_ids)
 
         # ── Truncate / pad to max_length ─────────────────────────────────
         if len(input_ids) > self.max_length:
@@ -108,22 +121,7 @@ class LLaVAMedTrainDataset(Dataset):
 
         # ── Labels: mask prompt, keep only answer ────────────────────────
         labels = input_ids.clone()
-
-        # Find [/INST] marker (end of instruction → start of answer)
-        inst_end_ids = self.tokenizer.encode("[/INST]", add_special_tokens=False)
-        ids_list = input_ids.tolist()
-
-        answer_start = None
-        for i in range(len(ids_list) - len(inst_end_ids) + 1):
-            if ids_list[i : i + len(inst_end_ids)] == inst_end_ids:
-                answer_start = i + len(inst_end_ids)
-                break
-
-        if answer_start is not None:
-            labels[:answer_start] = -100
-        else:
-            # Fallback: mask first 2/3
-            labels[: len(labels) * 2 // 3] = -100
+        labels[:prompt_len] = -100
 
         # Mask padding tokens and IMAGE_TOKEN_INDEX (image feature positions)
         labels[input_ids == self.pad_token_id] = -100
