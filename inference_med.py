@@ -55,7 +55,7 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=3,
+    parser.add_argument("--max_new_tokens", type=int, default=5,
                        help="Maximum number of new tokens to generate")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
