@@ -218,6 +218,12 @@ def main():
         device=str(device),
     )
 
+    # ── Diagnostic: check truncation config ─────────────────────────
+    tok_max = getattr(model.config, 'tokenizer_model_max_length', 'NOT SET')
+    print(f"  model.config.tokenizer_model_max_length = {tok_max}")
+    print(f"  tokenizer.model_max_length               = {tokenizer.model_max_length}")
+    print(f"  context_len                               = {context_len}")
+
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
@@ -272,8 +278,24 @@ def main():
         save_only_model=True,
     )
 
-    # ── Trainer ─────────────────────────────────────────────────────────
-    trainer = Trainer(
+    # ── Debug Trainer: log label stats inside forward pass ──────────
+    class DebugTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            labels_in = inputs.get("labels")
+            step = self.state.global_step
+            if labels_in is not None and step < 5:
+                n_active = (labels_in != -100).sum().item()
+                print(f"  [Step {step}] Labels IN  -> active={n_active}, total={labels_in.numel()}")
+
+            result = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+            loss_val = result[0].item() if return_outputs else result.item()
+
+            if step < 5:
+                print(f"  [Step {step}] Loss = {loss_val:.6f}")
+
+            return result
+
+    trainer = DebugTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
