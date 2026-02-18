@@ -225,7 +225,7 @@ def main():
     print(f"  context_len                               = {context_len}")
 
     if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         print("Gradient checkpointing enabled")
 
     print(f"Model loaded (context_len={context_len})")
