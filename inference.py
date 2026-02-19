@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import save_results, clean_answer, compute_bleu_scores
+from utils.save_results import save_results, clean_answer, compute_bleu_scores, compute_bert_scores
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -243,9 +243,25 @@ def main():
     exact_acc = exact / total if total else 0.0
     avg_bleu = {k: v / total if total else 0.0 for k, v in bleu_accum.items()}
 
+    # ── BERTScore (batch) ────────────────────────────────────────────────
+    valid_preds = [r["predicted_answer"] for r in results if r["ground_truth_answer"] is not None]
+    valid_refs = [r["ground_truth_answer"] for r in results if r["ground_truth_answer"] is not None]
+    bert_result = compute_bert_scores(valid_preds, valid_refs)
+    avg_bert = bert_result["avg"]
+    bert_per_sample_f1 = bert_result["per_sample"]
+    bert_idx = 0
+    per_sample_bert_f1 = []
+    for r in results:
+        if r["ground_truth_answer"] is None:
+            per_sample_bert_f1.append(0.0)
+        else:
+            per_sample_bert_f1.append(bert_per_sample_f1[bert_idx])
+            bert_idx += 1
+
     print(f"\nExact-match accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
     for n in range(1, 5):
         print(f"BLEU-{n}:                {avg_bleu[f'bleu_{n}']:.4f}")
+    print(f"BERTScore F1:           {avg_bert['bert_f1']:.4f}")
 
     # ── Save results (JSON, CSV, XLSX) + history ─────────────────────────
     print(f"\nSaving results...")
@@ -257,6 +273,7 @@ def main():
         finetuned=args.finetuned,
         exact_acc=exact_acc,
         bleu_scores=avg_bleu,
+        bert_scores=avg_bert,
         results_dir=args.results_dir,
     )
 
@@ -266,12 +283,15 @@ def main():
     wandb.summary["bleu_2"] = avg_bleu["bleu_2"]
     wandb.summary["bleu_3"] = avg_bleu["bleu_3"]
     wandb.summary["bleu_4"] = avg_bleu["bleu_4"]
+    wandb.summary["bert_precision"] = avg_bert["bert_precision"]
+    wandb.summary["bert_recall"] = avg_bert["bert_recall"]
+    wandb.summary["bert_f1"] = avg_bert["bert_f1"]
     wandb.summary["total_samples"] = total
     table = wandb.Table(columns=[
         "image_path", "question", "ground_truth", "predicted",
-        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4",
+        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4", "bert_f1",
     ])
-    for r, bleu in zip(results, per_sample_bleu):
+    for r, bleu, bf1 in zip(results, per_sample_bleu, per_sample_bert_f1):
         gt = (r["ground_truth_answer"] or "").lower().strip()
         pred = r["predicted_answer"].lower().strip()
         table.add_data(
@@ -280,6 +300,7 @@ def main():
             pred == gt,
             round(bleu["bleu_1"], 4), round(bleu["bleu_2"], 4),
             round(bleu["bleu_3"], 4), round(bleu["bleu_4"], 4),
+            round(bf1, 4),
         )
     wandb.log({"predictions": table})
     wandb.finish()

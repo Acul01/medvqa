@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from bert_score import score as bert_score_fn
 
 _smoother = SmoothingFunction().method1
 
@@ -57,6 +58,27 @@ def compute_bleu_scores(prediction: str, reference: str) -> dict:
     return scores
 
 
+def compute_bert_scores(predictions: list[str], references: list[str]) -> dict:
+    """Compute BERTScore (Precision, Recall, F1) for a batch of predictions.
+
+    Returns dict with 'per_sample' (list of per-sample F1) and
+    'avg' (dict with mean precision, recall, f1).
+    """
+    if not predictions or not references:
+        return {"per_sample": [], "avg": {"bert_precision": 0.0, "bert_recall": 0.0, "bert_f1": 0.0}}
+
+    P, R, F1 = bert_score_fn(predictions, references, lang="en", verbose=False)
+    per_sample = F1.tolist()
+    return {
+        "per_sample": per_sample,
+        "avg": {
+            "bert_precision": P.mean().item(),
+            "bert_recall": R.mean().item(),
+            "bert_f1": F1.mean().item(),
+        },
+    }
+
+
 RESULTS_DIR = Path("results")
 HISTORY_FILE = RESULTS_DIR / "results_history.csv"
 
@@ -71,6 +93,7 @@ HISTORY_COLUMNS = [
     "bleu_2",
     "bleu_3",
     "bleu_4",
+    "bert_f1",
 ]
 
 
@@ -93,6 +116,7 @@ def save_results(
     finetuned: bool,
     exact_acc: float,
     bleu_scores: dict[str, float],
+    bert_scores: dict[str, float] | None = None,
     results_dir: str | Path = RESULTS_DIR,
 ) -> None:
     """Save inference results as JSON, CSV, XLSX and append to history.
@@ -135,6 +159,7 @@ def save_results(
         n_samples=n_tag,
         exact_acc=exact_acc,
         bleu_scores=bleu_scores,
+        bert_scores=bert_scores,
         results_dir=results_dir,
     )
 
@@ -146,6 +171,7 @@ def _append_history(
     n_samples: str,
     exact_acc: float,
     bleu_scores: dict[str, float],
+    bert_scores: dict[str, float] | None = None,
     results_dir: Path = RESULTS_DIR,
 ) -> None:
     """Append one row to the results history CSV."""
@@ -163,6 +189,7 @@ def _append_history(
         "bleu_2": f"{bleu_scores.get('bleu_2', 0):.4f}",
         "bleu_3": f"{bleu_scores.get('bleu_3', 0):.4f}",
         "bleu_4": f"{bleu_scores.get('bleu_4', 0):.4f}",
+        "bert_f1": f"{bert_scores.get('bert_f1', 0):.4f}" if bert_scores else "0.0000",
     }
 
     with open(history_path, "a", newline="", encoding="utf-8") as f:
