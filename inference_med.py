@@ -33,6 +33,14 @@ from utils.save_results import save_results, clean_answer, compute_bleu_scores, 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 
+DATASET_INSTRUCTIONS = {
+    "vqarad": (
+        "You are a medical expert. Answer the question about the medical image concisely.\n"
+        "Answer with 1–3 tokens. If it is a yes/no question, answer only 'yes' or 'no'."
+    ),
+    "_default": "Answer with a maximum of three words.",
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with LLaVA-Med on Medical VQA")
@@ -114,30 +122,44 @@ def main():
     # ── Load model ────────────────────────────────────────────────────────
     print(f"Loading LLaVA-Med model: {args.model_path}")
     model_path = Path(args.model_path)
+    is_lora = model_path.exists() and (model_path / "adapter_config.json").exists()
 
-    if model_path.exists() and (model_path / "config.json").exists():
-        # Fine-tuned local checkpoint: load directly
+    if is_lora:
+        from peft import PeftModel
+        base_path = args.model_base or DEFAULT_MODEL_PATH
+        print(f"(Loading LoRA adapter, base model: {base_path})")
+        base_model = LlavaMistralForCausalLM.from_pretrained(
+            base_path, torch_dtype=torch.float16, device_map="auto",
+        )
+        vision_tower = base_model.get_model().get_vision_tower()
+        if not vision_tower.is_loaded:
+            vision_tower.load_model()
+        vision_tower.to(device=device, dtype=torch.float16)
+
+        model = PeftModel.from_pretrained(base_model, str(model_path))
+        model = model.merge_and_unload()
+        print("  LoRA adapter merged into base model")
+
+        tokenizer = AutoTokenizer.from_pretrained(base_path)
+        image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
+    elif model_path.exists() and (model_path / "config.json").exists():
         print("(Loading fine-tuned model from local path)")
         model = LlavaMistralForCausalLM.from_pretrained(
             str(model_path),
             torch_dtype=torch.float16,
             device_map="auto",
         )
-        # Initialise the vision tower (CLIP) -- from_pretrained does not
-        # do this automatically, unlike load_pretrained_model.
         vision_tower = model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
         vision_tower.to(device=device, dtype=torch.float16)
 
-        # Load tokenizer: try local first, fall back to base model
         if (model_path / "tokenizer_config.json").exists():
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
         else:
             tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_PATH)
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
     else:
-        # HuggingFace model: use original LLaVA-Med builder
         print("(Loading from HuggingFace Hub via LLaVA-Med builder)")
         model_name = model_path.name or "llava-med-v1.5-mistral-7b"
         tokenizer, model, image_processor, context_len = load_pretrained_model(
@@ -174,7 +196,7 @@ def main():
         gen_kwargs["num_beams"] = args.num_beams
 
     # ── Inference loop ────────────────────────────────────────────────────
-    brief_instruction = "Answer with a maximum of three words."
+    instruction = DATASET_INSTRUCTIONS.get(args.dataset, DATASET_INSTRUCTIONS["_default"])
     results = []
     print("Running inference...")
 
@@ -187,7 +209,7 @@ def main():
 
             # 2. Build conversation using LLaVA-Med's conv_templates
             conv = conv_templates[args.conv_template].copy()
-            question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{brief_instruction}"
+            question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{instruction}"
             conv.append_message(conv.roles[0], question)
             conv.append_message(conv.roles[1], None)
             prompt = conv.get_prompt()

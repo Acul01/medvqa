@@ -22,6 +22,14 @@ from utils.save_results import save_results, clean_answer, compute_bleu_scores, 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
+DATASET_INSTRUCTIONS = {
+    "vqarad": (
+        "You are a medical expert. Answer the question about the medical image concisely.\n"
+        "Answer with 1–3 tokens. If it is a yes/no question, answer only 'yes' or 'no'."
+    ),
+    "_default": "Answer with a maximum of three words.",
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with LLaVA on Medical VQA")
@@ -30,6 +38,8 @@ def parse_args():
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH,
                        help="Path to model checkpoint or HuggingFace model name "
                             f"(default: {DEFAULT_MODEL_PATH})")
+    parser.add_argument("--base_model", type=str, default=None,
+                       help="Base model for LoRA checkpoints (default: auto-detect or DEFAULT_MODEL_PATH)")
 
     # Data arguments
     parser.add_argument("--data_root", type=str, default="data",
@@ -69,13 +79,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_conversation(question: str):
+def build_conversation(question: str, dataset: str):
     """
     Build the chat conversation in LLaVA 1.5 format:
     multimodal content list with {"type": "image"} and {"type": "text"}.
     """
-    brief_instruction = "Answer with a maximum of three words."
-    full_question = f"{question}\n{brief_instruction}"
+    instruction = DATASET_INSTRUCTIONS.get(dataset, DATASET_INSTRUCTIONS["_default"])
+    full_question = f"{question}\n{instruction}"
 
     return [
         {
@@ -120,24 +130,37 @@ def main():
     print(f"Using device: {device}")
 
     # ── Load model ────────────────────────────────────────────────────────
-    print(f"Loading model: {args.model_path}")
-    if Path(args.model_path).exists():
-        print("(Loading from local path)")
-    else:
-        print("(Model will be downloaded from HuggingFace Hub if not cached)")
+    is_lora = Path(args.model_path).exists() and (Path(args.model_path) / "adapter_config.json").exists()
+    print(f"Loading model: {args.model_path}" + (" (LoRA adapter)" if is_lora else ""))
 
-    model = LlavaForConditionalGeneration.from_pretrained(
-        args.model_path,
-        torch_dtype=torch.float32,
-        device_map="auto",
-    )
+    if is_lora:
+        from peft import PeftModel
+        base_path = args.base_model or DEFAULT_MODEL_PATH
+        print(f"  Base model: {base_path}")
+        base_model = LlavaForConditionalGeneration.from_pretrained(
+            base_path, torch_dtype=torch.float32, device_map="auto",
+        )
+        model = PeftModel.from_pretrained(base_model, args.model_path)
+        model = model.merge_and_unload()
+        print("  LoRA adapter merged into base model")
+    else:
+        if Path(args.model_path).exists():
+            print("(Loading from local path)")
+        else:
+            print("(Model will be downloaded from HuggingFace Hub if not cached)")
+        model = LlavaForConditionalGeneration.from_pretrained(
+            args.model_path, torch_dtype=torch.float32, device_map="auto",
+        )
     model.eval()
 
     # ── Load processor ────────────────────────────────────────────────────
-    # For fine-tuned models the processor config may not be saved alongside
-    # the checkpoint – fall back to the original base model's processor.
-    processor_path = args.model_path
-    if Path(args.model_path).exists() and not Path(args.model_path, "preprocessor_config.json").exists():
+    # For LoRA checkpoints or fine-tuned models the processor config may not
+    # be saved -- fall back to the base model's processor.
+    if is_lora:
+        processor_path = args.base_model or DEFAULT_MODEL_PATH
+    else:
+        processor_path = args.model_path
+    if Path(processor_path).exists() and not Path(processor_path, "preprocessor_config.json").exists():
         processor_path = DEFAULT_MODEL_PATH
         print(f"Processor config not found in trained model, loading from: {processor_path}")
 
@@ -182,7 +205,7 @@ def main():
             image = Image.open(sample.image_path).convert("RGB")
 
             # 2. Build conversation and apply chat template → prompt string
-            conversation = build_conversation(sample.question)
+            conversation = build_conversation(sample.question, args.dataset)
             prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
             # 3. Processor handles EVERYTHING: tokenisation, image-token

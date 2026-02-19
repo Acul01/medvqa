@@ -31,6 +31,14 @@ from utils.load_data import MedicalVQALoader
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
+DATASET_INSTRUCTIONS = {
+    "vqarad": (
+        "You are a medical expert. Answer the question about the medical image concisely.\n"
+        "Answer with 1–3 tokens. If it is a yes/no question, answer only 'yes' or 'no'."
+    ),
+    "_default": "Answer with a maximum of three words.",
+}
+
 
 # ── Dataset ─────────────────────────────────────────────────────────────────────
 
@@ -50,10 +58,11 @@ class LLaVATrainDataset(Dataset):
     computed on the assistant's answer.
     """
 
-    def __init__(self, samples, processor, max_length=512):
+    def __init__(self, samples, processor, max_length=512, dataset="vqarad"):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
+        self.instruction = DATASET_INSTRUCTIONS.get(dataset, DATASET_INSTRUCTIONS["_default"])
 
         # Ensure pad token is set
         if processor.tokenizer.pad_token is None:
@@ -73,8 +82,7 @@ class LLaVATrainDataset(Dataset):
         image = Image.open(sample.image_path).convert("RGB")
 
         # ── Build conversation (user + assistant) ────────────────────────
-        brief_instruction = "Answer with a maximum of three words."
-        full_question = f"{sample.question}\n{brief_instruction}"
+        full_question = f"{sample.question}\n{self.instruction}"
 
         conversation = [
             {
@@ -198,6 +206,19 @@ def parse_args():
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
                         help="Resume training from checkpoint path")
 
+    # LoRA
+    parser.add_argument("--use_lora", action="store_true",
+                        help="Use LoRA instead of full fine-tuning")
+    parser.add_argument("--lora_r", type=int, default=16,
+                        help="LoRA rank (default: 16)")
+    parser.add_argument("--lora_alpha", type=int, default=32,
+                        help="LoRA alpha scaling (default: 32)")
+    parser.add_argument("--lora_dropout", type=float, default=0.05,
+                        help="LoRA dropout (default: 0.05)")
+    parser.add_argument("--lora_target_modules", type=str, nargs="+",
+                        default=["q_proj", "v_proj"],
+                        help="LoRA target modules (default: q_proj v_proj)")
+
     # W&B
     parser.add_argument("--wandb_project", type=str, default="medvqa",
                         help="Weights & Biases project name")
@@ -224,12 +245,13 @@ def main():
 
     # ── W&B ──────────────────────────────────────────────────────────────
     model_short = _model_short_name(args.model_path)
-    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_train"
+    ft_tag = "lora" if args.use_lora else "full-ft"
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_train"
     wandb.init(
         project=args.wandb_project,
         name=run_name,
         group=args.dataset,
-        tags=["training", model_short, args.dataset],
+        tags=["training", model_short, args.dataset, ft_tag],
         config=vars(args),
     )
 
@@ -258,6 +280,20 @@ def main():
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
 
+    # ── LoRA ─────────────────────────────────────────────────────────────
+    if args.use_lora:
+        from peft import LoraConfig, get_peft_model, TaskType
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=args.lora_target_modules,
+            task_type=TaskType.CAUSAL_LM,
+            bias="none",
+        )
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
     # ── Load processor ──────────────────────────────────────────────────
     # For fine-tuned checkpoints the processor config may not be saved –
     # fall back to the base model's processor.
@@ -272,13 +308,13 @@ def main():
 
     print(f"Loading {args.dataset} {args.train_split} split...")
     train_samples = loader.load_dataset(args.dataset, split=args.train_split)
-    train_dataset = LLaVATrainDataset(train_samples, processor, args.max_length)
+    train_dataset = LLaVATrainDataset(train_samples, processor, args.max_length, dataset=args.dataset)
     print(f"Train: {len(train_dataset)} samples")
 
     val_dataset = None
     try:
         val_samples = loader.load_dataset(args.dataset, split=args.val_split)
-        val_dataset = LLaVATrainDataset(val_samples, processor, args.max_length)
+        val_dataset = LLaVATrainDataset(val_samples, processor, args.max_length, dataset=args.dataset)
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
         print(f"No validation split available: {e}")
