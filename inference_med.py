@@ -326,19 +326,24 @@ def main():
         results_dir=args.results_dir,
     )
 
-    # ── W&B: summary metrics + predictions table ────────────────────────
-    wandb.summary["exact_match_accuracy"] = exact_acc
-    wandb.summary["bleu_1"] = avg_bleu["bleu_1"]
-    wandb.summary["bleu_2"] = avg_bleu["bleu_2"]
-    wandb.summary["bleu_3"] = avg_bleu["bleu_3"]
-    wandb.summary["bleu_4"] = avg_bleu["bleu_4"]
-    wandb.summary["rouge1"] = avg_rouge["rouge1"]
-    wandb.summary["rouge2"] = avg_rouge["rouge2"]
-    wandb.summary["rougeL"] = avg_rouge["rougeL"]
-    wandb.summary["bert_precision"] = avg_bert["bert_precision"]
-    wandb.summary["bert_recall"] = avg_bert["bert_recall"]
-    wandb.summary["bert_f1"] = avg_bert["bert_f1"]
-    wandb.summary["total_samples"] = total
+    # ── W&B: log metrics (history) + summary + predictions table ────────
+    metrics = {
+        "exact_match_accuracy": exact_acc,
+        "bleu_1": avg_bleu["bleu_1"],
+        "bleu_2": avg_bleu["bleu_2"],
+        "bleu_3": avg_bleu["bleu_3"],
+        "bleu_4": avg_bleu["bleu_4"],
+        "rouge1": avg_rouge["rouge1"],
+        "rouge2": avg_rouge["rouge2"],
+        "rougeL": avg_rouge["rougeL"],
+        "bert_precision": avg_bert["bert_precision"],
+        "bert_recall": avg_bert["bert_recall"],
+        "bert_f1": avg_bert["bert_f1"],
+        "total_samples": total,
+    }
+    wandb.log(metrics)
+    for k, v in metrics.items():
+        wandb.summary[k] = v
     table = wandb.Table(columns=[
         "image_path", "question", "ground_truth", "predicted",
         "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4",
