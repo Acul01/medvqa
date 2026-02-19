@@ -34,11 +34,14 @@ def clean_answer(text: str) -> str:
         1. Strip whitespace
         2. Remove emoji / non-ASCII symbols (e.g. unicode garbage)
         3. Collapse multiple whitespace
-        4. Strip trailing punctuation
+        4. Strip trailing isolated digits (e.g. "yes 4" → "yes"),
+           but keep standalone numbers ("4" stays "4")
+        5. Strip trailing punctuation
     """
     text = text.strip()
     text = re.sub(r'[^\x00-\x7F\u00C0-\u00FF]+', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'\s+\d+$', '', text)
     text = re.sub(r'[.,;:!?]+$', '', text)
     return text.strip()
 
