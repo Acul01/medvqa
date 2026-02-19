@@ -28,7 +28,7 @@ from llava.model import LlavaMistralForCausalLM
 from llava.mm_utils import get_model_name_from_path
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import save_results, clean_answer, compute_bleu_scores, compute_bert_scores
+from utils.save_results import save_results, clean_answer, compute_bleu_scores, compute_bert_scores, compute_rouge_scores, ROUGE_KEYS
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
@@ -262,24 +262,32 @@ def main():
     exact = 0
     total = 0
     bleu_accum = {f"bleu_{n}": 0.0 for n in range(1, 5)}
+    rouge_accum = {k: 0.0 for k in ROUGE_KEYS}
     per_sample_bleu = []
+    per_sample_rouge = []
 
     for r in results:
         if r["ground_truth_answer"] is None:
             per_sample_bleu.append({f"bleu_{n}": 0.0 for n in range(1, 5)})
+            per_sample_rouge.append({k: 0.0 for k in ROUGE_KEYS})
             continue
         total += 1
         pred = r["predicted_answer"].lower().strip()
         gt = r["ground_truth_answer"].lower().strip()
         if pred == gt:
             exact += 1
-        scores = compute_bleu_scores(r["predicted_answer"], r["ground_truth_answer"])
-        per_sample_bleu.append(scores)
+        b_scores = compute_bleu_scores(r["predicted_answer"], r["ground_truth_answer"])
+        per_sample_bleu.append(b_scores)
         for k in bleu_accum:
-            bleu_accum[k] += scores[k]
+            bleu_accum[k] += b_scores[k]
+        r_scores = compute_rouge_scores(r["predicted_answer"], r["ground_truth_answer"])
+        per_sample_rouge.append(r_scores)
+        for k in rouge_accum:
+            rouge_accum[k] += r_scores[k]
 
     exact_acc = exact / total if total else 0.0
     avg_bleu = {k: v / total if total else 0.0 for k, v in bleu_accum.items()}
+    avg_rouge = {k: v / total if total else 0.0 for k, v in rouge_accum.items()}
 
     # ── BERTScore (batch) ────────────────────────────────────────────────
     valid_preds = [r["predicted_answer"] for r in results if r["ground_truth_answer"] is not None]
@@ -299,6 +307,8 @@ def main():
     print(f"\nExact-match accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
     for n in range(1, 5):
         print(f"BLEU-{n}:                {avg_bleu[f'bleu_{n}']:.4f}")
+    for k in ROUGE_KEYS:
+        print(f"{k:20s}    {avg_rouge[k]:.4f}")
     print(f"BERTScore F1:           {avg_bert['bert_f1']:.4f}")
 
     # ── Save results (JSON, CSV, XLSX) + history ─────────────────────────
@@ -311,6 +321,7 @@ def main():
         finetuned=args.finetuned,
         exact_acc=exact_acc,
         bleu_scores=avg_bleu,
+        rouge_scores=avg_rouge,
         bert_scores=avg_bert,
         results_dir=args.results_dir,
     )
@@ -321,15 +332,19 @@ def main():
     wandb.summary["bleu_2"] = avg_bleu["bleu_2"]
     wandb.summary["bleu_3"] = avg_bleu["bleu_3"]
     wandb.summary["bleu_4"] = avg_bleu["bleu_4"]
+    wandb.summary["rouge1"] = avg_rouge["rouge1"]
+    wandb.summary["rouge2"] = avg_rouge["rouge2"]
+    wandb.summary["rougeL"] = avg_rouge["rougeL"]
     wandb.summary["bert_precision"] = avg_bert["bert_precision"]
     wandb.summary["bert_recall"] = avg_bert["bert_recall"]
     wandb.summary["bert_f1"] = avg_bert["bert_f1"]
     wandb.summary["total_samples"] = total
     table = wandb.Table(columns=[
         "image_path", "question", "ground_truth", "predicted",
-        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4", "bert_f1",
+        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4",
+        "rouge1", "rouge2", "rougeL", "bert_f1",
     ])
-    for r, bleu, bf1 in zip(results, per_sample_bleu, per_sample_bert_f1):
+    for r, bleu, rouge, bf1 in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1):
         gt = (r["ground_truth_answer"] or "").lower().strip()
         pred = r["predicted_answer"].lower().strip()
         table.add_data(
@@ -338,6 +353,8 @@ def main():
             pred == gt,
             round(bleu["bleu_1"], 4), round(bleu["bleu_2"], 4),
             round(bleu["bleu_3"], 4), round(bleu["bleu_4"], 4),
+            round(rouge["rouge1"], 4), round(rouge["rouge2"], 4),
+            round(rouge["rougeL"], 4),
             round(bf1, 4),
         )
     wandb.log({"predictions": table})

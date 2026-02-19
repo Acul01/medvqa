@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from bert_score import score as bert_score_fn
+from rouge_score import rouge_scorer
 
 _smoother = SmoothingFunction().method1
 
@@ -61,6 +62,21 @@ def compute_bleu_scores(prediction: str, reference: str) -> dict:
     return scores
 
 
+_rouge_scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+
+ROUGE_KEYS = ["rouge1", "rouge2", "rougeL"]
+
+
+def compute_rouge_scores(prediction: str, reference: str) -> dict:
+    """Compute ROUGE-1, ROUGE-2, ROUGE-L F1 for a single prediction/reference pair."""
+    pred = prediction.lower().strip()
+    ref = reference.lower().strip()
+    if not pred or not ref:
+        return {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
+    scores = _rouge_scorer.score(ref, pred)
+    return {k: scores[k].fmeasure for k in ROUGE_KEYS}
+
+
 def compute_bert_scores(predictions: list[str], references: list[str]) -> dict:
     """Compute BERTScore (Precision, Recall, F1) for a batch of predictions.
 
@@ -96,6 +112,9 @@ HISTORY_COLUMNS = [
     "bleu_2",
     "bleu_3",
     "bleu_4",
+    "rouge1",
+    "rouge2",
+    "rougeL",
     "bert_f1",
 ]
 
@@ -119,6 +138,7 @@ def save_results(
     finetuned: bool,
     exact_acc: float,
     bleu_scores: dict[str, float],
+    rouge_scores: dict[str, float] | None = None,
     bert_scores: dict[str, float] | None = None,
     results_dir: str | Path = RESULTS_DIR,
 ) -> None:
@@ -162,6 +182,7 @@ def save_results(
         n_samples=n_tag,
         exact_acc=exact_acc,
         bleu_scores=bleu_scores,
+        rouge_scores=rouge_scores,
         bert_scores=bert_scores,
         results_dir=results_dir,
     )
@@ -174,6 +195,7 @@ def _append_history(
     n_samples: str,
     exact_acc: float,
     bleu_scores: dict[str, float],
+    rouge_scores: dict[str, float] | None = None,
     bert_scores: dict[str, float] | None = None,
     results_dir: Path = RESULTS_DIR,
 ) -> None:
@@ -192,6 +214,9 @@ def _append_history(
         "bleu_2": f"{bleu_scores.get('bleu_2', 0):.4f}",
         "bleu_3": f"{bleu_scores.get('bleu_3', 0):.4f}",
         "bleu_4": f"{bleu_scores.get('bleu_4', 0):.4f}",
+        "rouge1": f"{rouge_scores.get('rouge1', 0):.4f}" if rouge_scores else "0.0000",
+        "rouge2": f"{rouge_scores.get('rouge2', 0):.4f}" if rouge_scores else "0.0000",
+        "rougeL": f"{rouge_scores.get('rougeL', 0):.4f}" if rouge_scores else "0.0000",
         "bert_f1": f"{bert_scores.get('bert_f1', 0):.4f}" if bert_scores else "0.0000",
     }
 
