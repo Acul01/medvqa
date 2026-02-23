@@ -36,6 +36,7 @@ DATASET_INSTRUCTIONS = {
         "You are a medical expert. Answer the question about the medical image concisely.\n"
         "Answer with 1–3 tokens. If it is a yes/no question, answer only 'yes' or 'no'."
     ),
+    "pathvqa": "You are a pathology expert. Answer concisely and factually.",
     "_default": "Answer with a maximum of three words.",
 }
 

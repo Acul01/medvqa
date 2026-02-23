@@ -38,7 +38,14 @@ DATASET_INSTRUCTIONS = {
         "You are a medical expert. Answer the question about the medical image concisely.\n"
         "Answer with 1–3 tokens. If it is a yes/no question, answer only 'yes' or 'no'."
     ),
+    "pathvqa": "You are a pathology expert. Answer concisely and factually.",
     "_default": "Answer with a maximum of three words.",
+}
+
+DATASET_MAX_NEW_TOKENS = {
+    "vqarad": 3,
+    "pathvqa": 16,
+    "_default": 3,
 }
 
 
@@ -63,8 +70,8 @@ def parse_args():
                        help="Split to evaluate on")
 
     # Inference arguments
-    parser.add_argument("--max_new_tokens", type=int, default=3,
-                       help="Maximum number of new tokens to generate")
+    parser.add_argument("--max_new_tokens", type=int, default=None,
+                       help="Maximum new tokens to generate (default: dataset-specific)")
     parser.add_argument("--do_sample", action="store_true", default=False,
                        help="Use sampling for generation (default: greedy)")
     parser.add_argument("--temperature", type=float, default=0.7,
@@ -102,6 +109,10 @@ def _model_short_name(model_path: str) -> str:
 
 def main():
     args = parse_args()
+
+    if args.max_new_tokens is None:
+        args.max_new_tokens = DATASET_MAX_NEW_TOKENS.get(args.dataset, DATASET_MAX_NEW_TOKENS["_default"])
+    print(f"max_new_tokens: {args.max_new_tokens}")
 
     # ── W&B ──────────────────────────────────────────────────────────────
     model_short = _model_short_name(args.model_path)
