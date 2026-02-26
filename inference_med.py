@@ -43,16 +43,8 @@ DATASET_INSTRUCTIONS = {
     "_default": "Answer with a maximum of three words.",
 }
 
-VQARAD_FEW_SHOT_EXAMPLES = [
-    ("what are the characteristics of the mass?", "isointense"),
-    ("what is the location of the abnormality?", "right colon"),
-    ("which organ system is abnormal in this image?", "cardiovascular"),
-    ("what artery is the embolus from?", "distal basilar artery"),
-    ("what imaging modality was used?", "mri-flair"),
-]
-
 DATASET_MAX_NEW_TOKENS = {
-    "vqarad": 64,
+    "vqarad": 10,
     "pathvqa": 16,
     "_default": 3,
 }
@@ -97,10 +89,6 @@ def parse_args():
                        help="Only process first N samples (for quick testing)")
     parser.add_argument("--finetuned", action="store_true", default=False,
                        help="Flag: model is fine-tuned (recorded in history)")
-
-    # Few-shot
-    parser.add_argument("--few_shot", type=int, default=0,
-                       help="Number of few-shot examples to prepend (0 = zero-shot, max 5 for vqarad)")
 
     # W&B
     parser.add_argument("--wandb_project", type=str, default="medvqa",
@@ -233,10 +221,6 @@ def main():
 
             # 2. Build conversation using LLaVA-Med's conv_templates
             conv = conv_templates[args.conv_template].copy()
-            if args.few_shot > 0 and args.dataset == "vqarad":
-                for q, a in VQARAD_FEW_SHOT_EXAMPLES[:args.few_shot]:
-                    conv.append_message(conv.roles[0], f"{q}\n{instruction}")
-                    conv.append_message(conv.roles[1], a)
             question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{instruction}"
             conv.append_message(conv.roles[0], question)
             conv.append_message(conv.roles[1], None)

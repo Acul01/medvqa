@@ -32,16 +32,8 @@ DATASET_INSTRUCTIONS = {
     "_default": "Answer with a maximum of three words.",
 }
 
-VQARAD_FEW_SHOT_EXAMPLES = [
-    ("what are the characteristics of the mass?", "isointense"),
-    ("what is the location of the abnormality?", "right colon"),
-    ("which organ system is abnormal in this image?", "cardiovascular"),
-    ("what artery is the embolus from?", "distal basilar artery"),
-    ("what imaging modality was used?", "mri-flair"),
-]
-
 DATASET_MAX_NEW_TOKENS = {
-    "vqarad": 64,
+    "vqarad": 10,
     "pathvqa": 16,
     "_default": 3,
 }
@@ -86,10 +78,6 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False,
                        help="Flag: model is fine-tuned (recorded in history)")
 
-    # Few-shot
-    parser.add_argument("--few_shot", type=int, default=0,
-                       help="Number of few-shot examples to prepend (0 = zero-shot, max 5 for vqarad)")
-
     # W&B
     parser.add_argument("--wandb_project", type=str, default="medvqa",
                        help="Weights & Biases project name")
@@ -99,30 +87,23 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_conversation(question: str, dataset: str, few_shot: int = 0):
+def build_conversation(question: str, dataset: str):
     """
-    Build the chat conversation in LLaVA 1.5 format.
-
-    When few_shot > 0 and dataset is vqarad, text-only Q/A exemplars are
-    prepended before the actual image+question turn.
+    Build the chat conversation in LLaVA 1.5 format:
+    multimodal content list with {"type": "image"} and {"type": "text"}.
     """
     instruction = DATASET_INSTRUCTIONS.get(dataset, DATASET_INSTRUCTIONS["_default"])
-    messages = []
-
-    if few_shot > 0 and dataset == "vqarad":
-        for q, a in VQARAD_FEW_SHOT_EXAMPLES[:few_shot]:
-            messages.append({"role": "user", "content": [{"type": "text", "text": f"{q}\n{instruction}"}]})
-            messages.append({"role": "assistant", "content": [{"type": "text", "text": a}]})
-
     full_question = f"{question}\n{instruction}"
-    messages.append({
-        "role": "user",
-        "content": [
-            {"type": "image"},
-            {"type": "text", "text": full_question},
-        ],
-    })
-    return messages
+
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": full_question},
+            ],
+        }
+    ]
 
 
 def _model_short_name(model_path: str) -> str:
@@ -236,7 +217,7 @@ def main():
             image = Image.open(sample.image_path).convert("RGB")
 
             # 2. Build conversation and apply chat template → prompt string
-            conversation = build_conversation(sample.question, args.dataset, args.few_shot)
+            conversation = build_conversation(sample.question, args.dataset)
             prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
             # 3. Processor handles EVERYTHING: tokenisation, image-token
