@@ -44,9 +44,9 @@ DATASET_INSTRUCTIONS = {
 }
 
 DATASET_MAX_NEW_TOKENS = {
-    "vqarad": 3,
-    "pathvqa": 16,
-    "_default": 3,
+    "vqarad": 64,
+    "pathvqa": 64,
+    "_default": 64,
 }
 
 
