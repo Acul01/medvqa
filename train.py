@@ -32,7 +32,7 @@ from utils.load_data import MedicalVQALoader
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
 DATASET_INSTRUCTIONS = {
-    "vqarad": "You are a medical expert. Answer the question about the medical image concisely.",
+    "vqarad": "You are a medical expert. Answer the question about the medical image. Be concise: answer in as few words as possible.",
     "pathvqa": "You are a pathology expert. Answer concisely and factually.",
     "_default": "Answer with a maximum of three words.",
 }
