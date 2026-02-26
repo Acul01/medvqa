@@ -32,19 +32,25 @@ def clean_answer(text: str) -> str:
     Applied identically for both LLaVA and LLaVA-Med outputs.
 
     Steps:
-        1. Strip whitespace
-        2. Remove emoji / non-ASCII symbols (e.g. unicode garbage)
+        1. Keep first line only (discard multi-line garbage)
+        2. Remove emoji / non-ASCII symbols
         3. Collapse multiple whitespace
         4. Strip trailing isolated digits (e.g. "yes 4" → "yes"),
            but keep standalone numbers ("4" stays "4")
         5. Strip trailing punctuation
     """
-    text = text.strip()
+    text = text.split("\n")[0].strip()
     text = re.sub(r'[^\x00-\x7F\u00C0-\u00FF]+', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     text = re.sub(r'\s+\d+$', '', text)
     text = re.sub(r'[.,;:!?]+$', '', text)
     return text.strip()
+
+
+def classify_answer_type(ground_truth: str) -> str:
+    """Classify a sample as 'yes_no' or 'open' based on its ground truth answer."""
+    gt = ground_truth.lower().strip()
+    return "yes_no" if gt in ("yes", "no") else "open"
 
 
 def compute_bleu_scores(prediction: str, reference: str) -> dict:
@@ -108,6 +114,8 @@ HISTORY_COLUMNS = [
     "dataset",
     "n_samples",
     "exact_match_accuracy",
+    "yesno_accuracy",
+    "open_accuracy",
     "bleu_1",
     "bleu_2",
     "bleu_3",
@@ -140,6 +148,8 @@ def save_results(
     bleu_scores: dict[str, float],
     rouge_scores: dict[str, float] | None = None,
     bert_scores: dict[str, float] | None = None,
+    yesno_acc: float | None = None,
+    open_acc: float | None = None,
     results_dir: str | Path = RESULTS_DIR,
 ) -> None:
     """Save inference results as JSON, CSV, XLSX and append to history.
@@ -184,6 +194,8 @@ def save_results(
         bleu_scores=bleu_scores,
         rouge_scores=rouge_scores,
         bert_scores=bert_scores,
+        yesno_acc=yesno_acc,
+        open_acc=open_acc,
         results_dir=results_dir,
     )
 
@@ -197,6 +209,8 @@ def _append_history(
     bleu_scores: dict[str, float],
     rouge_scores: dict[str, float] | None = None,
     bert_scores: dict[str, float] | None = None,
+    yesno_acc: float | None = None,
+    open_acc: float | None = None,
     results_dir: Path = RESULTS_DIR,
 ) -> None:
     """Append one row to the results history CSV."""
@@ -210,6 +224,8 @@ def _append_history(
         "dataset": dataset,
         "n_samples": n_samples,
         "exact_match_accuracy": f"{exact_acc:.4f}",
+        "yesno_accuracy": f"{yesno_acc:.4f}" if yesno_acc is not None else "",
+        "open_accuracy": f"{open_acc:.4f}" if open_acc is not None else "",
         "bleu_1": f"{bleu_scores.get('bleu_1', 0):.4f}",
         "bleu_2": f"{bleu_scores.get('bleu_2', 0):.4f}",
         "bleu_3": f"{bleu_scores.get('bleu_3', 0):.4f}",
