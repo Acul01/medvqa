@@ -28,7 +28,7 @@ from llava.model import LlavaMistralForCausalLM
 from llava.mm_utils import get_model_name_from_path
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import save_results, clean_answer, compute_bleu_scores, compute_bert_scores, compute_rouge_scores, ROUGE_KEYS
+from utils.save_results import save_results, clean_answer, clean_yesno_answer, compute_bleu_scores, compute_bert_scores, compute_rouge_scores, ROUGE_KEYS
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
@@ -270,57 +270,89 @@ def main():
         print(f"  Predicted:    {result['predicted_answer']}")
 
     # ── Metrics ────────────────────────────────────────────────────────────
+    is_vqarad = args.dataset == "vqarad"
     exact = 0
     total = 0
-    bleu_accum = {f"bleu_{n}": 0.0 for n in range(1, 5)}
-    rouge_accum = {k: 0.0 for k in ROUGE_KEYS}
+    yesno_exact, yesno_total = 0, 0
+    open_exact, open_total = 0, 0
+    open_bleu_accum = {f"bleu_{n}": 0.0 for n in range(1, 5)}
+    open_rouge_accum = {k: 0.0 for k in ROUGE_KEYS}
     per_sample_bleu = []
     per_sample_rouge = []
+    per_sample_qtype = []
 
     for r in results:
         if r["ground_truth_answer"] is None:
             per_sample_bleu.append({f"bleu_{n}": 0.0 for n in range(1, 5)})
             per_sample_rouge.append({k: 0.0 for k in ROUGE_KEYS})
+            per_sample_qtype.append("unknown")
             continue
         total += 1
-        pred = r["predicted_answer"].lower().strip()
         gt = r["ground_truth_answer"].lower().strip()
-        if pred == gt:
-            exact += 1
-        b_scores = compute_bleu_scores(r["predicted_answer"], r["ground_truth_answer"])
-        per_sample_bleu.append(b_scores)
-        for k in bleu_accum:
-            bleu_accum[k] += b_scores[k]
-        r_scores = compute_rouge_scores(r["predicted_answer"], r["ground_truth_answer"])
-        per_sample_rouge.append(r_scores)
-        for k in rouge_accum:
-            rouge_accum[k] += r_scores[k]
+        is_yesno = is_vqarad and gt in ("yes", "no")
+        per_sample_qtype.append("yesno" if is_yesno else "open")
+
+        if is_yesno:
+            pred = clean_yesno_answer(r["predicted_answer"])
+            yesno_total += 1
+            if pred == gt:
+                yesno_exact += 1
+                exact += 1
+            per_sample_bleu.append({f"bleu_{n}": 0.0 for n in range(1, 5)})
+            per_sample_rouge.append({k: 0.0 for k in ROUGE_KEYS})
+        else:
+            pred = r["predicted_answer"].lower().strip()
+            open_total += 1
+            if pred == gt:
+                open_exact += 1
+                exact += 1
+            b_scores = compute_bleu_scores(r["predicted_answer"], r["ground_truth_answer"])
+            per_sample_bleu.append(b_scores)
+            for k in open_bleu_accum:
+                open_bleu_accum[k] += b_scores[k]
+            r_scores = compute_rouge_scores(r["predicted_answer"], r["ground_truth_answer"])
+            per_sample_rouge.append(r_scores)
+            for k in open_rouge_accum:
+                open_rouge_accum[k] += r_scores[k]
 
     exact_acc = exact / total if total else 0.0
-    avg_bleu = {k: v / total if total else 0.0 for k, v in bleu_accum.items()}
-    avg_rouge = {k: v / total if total else 0.0 for k, v in rouge_accum.items()}
+    yesno_acc = yesno_exact / yesno_total if yesno_total else None
+    open_acc = open_exact / open_total if open_total else None
+    avg_bleu = {k: v / open_total if open_total else 0.0 for k, v in open_bleu_accum.items()}
+    avg_rouge = {k: v / open_total if open_total else 0.0 for k, v in open_rouge_accum.items()}
 
-    # ── BERTScore (batch) ────────────────────────────────────────────────
-    valid_preds = [r["predicted_answer"] for r in results if r["ground_truth_answer"] is not None]
-    valid_refs = [r["ground_truth_answer"] for r in results if r["ground_truth_answer"] is not None]
-    bert_result = compute_bert_scores(valid_preds, valid_refs)
+    # ── BERTScore (batch, open-ended only) ───────────────────────────────
+    open_preds = [r["predicted_answer"] for r, qt in zip(results, per_sample_qtype) if qt == "open"]
+    open_refs = [r["ground_truth_answer"] for r, qt in zip(results, per_sample_qtype) if qt == "open"]
+    bert_result = compute_bert_scores(open_preds, open_refs)
     avg_bert = bert_result["avg"]
     bert_per_sample_f1 = bert_result["per_sample"]
     bert_idx = 0
     per_sample_bert_f1 = []
-    for r in results:
-        if r["ground_truth_answer"] is None:
-            per_sample_bert_f1.append(0.0)
-        else:
+    for qt in per_sample_qtype:
+        if qt == "open":
             per_sample_bert_f1.append(bert_per_sample_f1[bert_idx])
             bert_idx += 1
+        else:
+            per_sample_bert_f1.append(0.0)
 
-    print(f"\nExact-match accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
-    for n in range(1, 5):
-        print(f"BLEU-{n}:                {avg_bleu[f'bleu_{n}']:.4f}")
-    for k in ROUGE_KEYS:
-        print(f"{k:20s}    {avg_rouge[k]:.4f}")
-    print(f"BERTScore F1:           {avg_bert['bert_f1']:.4f}")
+    # ── Console output ───────────────────────────────────────────────────
+    if total:
+        if is_vqarad and yesno_total:
+            print(f"\nYes/No accuracy:  {yesno_exact}/{yesno_total} = {yesno_acc:.4f} ({yesno_acc * 100:.2f}%)")
+            if open_total:
+                print(f"Open   accuracy:  {open_exact}/{open_total} = {open_acc:.4f} ({open_acc * 100:.2f}%)")
+            print(f"Overall accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)")
+        else:
+            print(f"\nExact-match accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)")
+        if open_total or not is_vqarad:
+            for n in range(1, 5):
+                print(f"BLEU-{n}:                {avg_bleu[f'bleu_{n}']:.4f}")
+            for k in ROUGE_KEYS:
+                print(f"{k:20s}    {avg_rouge[k]:.4f}")
+            print(f"BERTScore F1:           {avg_bert['bert_f1']:.4f}")
+    else:
+        print("\nNo samples with ground truth.")
 
     # ── Save results (JSON, CSV, XLSX) + history ─────────────────────────
     print(f"\nSaving results...")
@@ -334,39 +366,43 @@ def main():
         bleu_scores=avg_bleu,
         rouge_scores=avg_rouge,
         bert_scores=avg_bert,
+        yesno_acc=yesno_acc if is_vqarad else None,
+        open_acc=open_acc if is_vqarad else None,
         results_dir=args.results_dir,
     )
 
-    # ── W&B: log metrics (history) + summary + predictions table ────────
-    metrics = {
-        "exact_match_accuracy": exact_acc,
-        "bleu_1": avg_bleu["bleu_1"],
-        "bleu_2": avg_bleu["bleu_2"],
-        "bleu_3": avg_bleu["bleu_3"],
-        "bleu_4": avg_bleu["bleu_4"],
-        "rouge1": avg_rouge["rouge1"],
-        "rouge2": avg_rouge["rouge2"],
-        "rougeL": avg_rouge["rougeL"],
-        "bert_precision": avg_bert["bert_precision"],
-        "bert_recall": avg_bert["bert_recall"],
-        "bert_f1": avg_bert["bert_f1"],
-        "total_samples": total,
-    }
-    wandb.log(metrics)
-    for k, v in metrics.items():
-        wandb.summary[k] = v
+    # ── W&B: summary metrics + predictions table ────────────────────────
+    wandb.summary["overall_accuracy"] = exact_acc
+    if is_vqarad:
+        if yesno_acc is not None:
+            wandb.summary["yesno_accuracy"] = yesno_acc
+        if open_acc is not None:
+            wandb.summary["open_accuracy"] = open_acc
+    wandb.summary["bleu_1"] = avg_bleu["bleu_1"]
+    wandb.summary["bleu_2"] = avg_bleu["bleu_2"]
+    wandb.summary["bleu_3"] = avg_bleu["bleu_3"]
+    wandb.summary["bleu_4"] = avg_bleu["bleu_4"]
+    wandb.summary["rouge1"] = avg_rouge["rouge1"]
+    wandb.summary["rouge2"] = avg_rouge["rouge2"]
+    wandb.summary["rougeL"] = avg_rouge["rougeL"]
+    wandb.summary["bert_precision"] = avg_bert["bert_precision"]
+    wandb.summary["bert_recall"] = avg_bert["bert_recall"]
+    wandb.summary["bert_f1"] = avg_bert["bert_f1"]
+    wandb.summary["total_samples"] = total
+
     table = wandb.Table(columns=[
         "image_path", "question", "ground_truth", "predicted",
-        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4",
+        "question_type", "exact_match",
+        "bleu_1", "bleu_2", "bleu_3", "bleu_4",
         "rouge1", "rouge2", "rougeL", "bert_f1",
     ])
-    for r, bleu, rouge, bf1 in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1):
+    for r, bleu, rouge, bf1, qt in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1, per_sample_qtype):
         gt = (r["ground_truth_answer"] or "").lower().strip()
-        pred = r["predicted_answer"].lower().strip()
+        pred = clean_yesno_answer(r["predicted_answer"]) if qt == "yesno" else r["predicted_answer"].lower().strip()
         table.add_data(
             r["image_path"], r["question"],
             r["ground_truth_answer"], r["predicted_answer"],
-            pred == gt,
+            qt, pred == gt,
             round(bleu["bleu_1"], 4), round(bleu["bleu_2"], 4),
             round(bleu["bleu_3"], 4), round(bleu["bleu_4"], 4),
             round(rouge["rouge1"], 4), round(rouge["rouge2"], 4),

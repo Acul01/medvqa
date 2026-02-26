@@ -47,6 +47,20 @@ def clean_answer(text: str) -> str:
     return text.strip()
 
 
+def clean_yesno_answer(text: str) -> str:
+    """Extract 'yes' or 'no' from a generated answer for yes/no questions.
+
+    Handles garbage tokens like "yes 4", "yes, it is", "no there is not"
+    by checking only the first word.
+    """
+    text = clean_answer(text).lower()
+    if text.startswith("yes"):
+        return "yes"
+    if text.startswith("no"):
+        return "no"
+    return text
+
+
 def compute_bleu_scores(prediction: str, reference: str) -> dict:
     """Compute BLEU-1 through BLEU-4 for a single prediction/reference pair."""
     pred_tokens = prediction.lower().strip().split()
@@ -108,6 +122,8 @@ HISTORY_COLUMNS = [
     "dataset",
     "n_samples",
     "exact_match_accuracy",
+    "yesno_accuracy",
+    "open_accuracy",
     "bleu_1",
     "bleu_2",
     "bleu_3",
@@ -140,6 +156,8 @@ def save_results(
     bleu_scores: dict[str, float],
     rouge_scores: dict[str, float] | None = None,
     bert_scores: dict[str, float] | None = None,
+    yesno_acc: float | None = None,
+    open_acc: float | None = None,
     results_dir: str | Path = RESULTS_DIR,
 ) -> None:
     """Save inference results as JSON, CSV, XLSX and append to history.
@@ -184,6 +202,8 @@ def save_results(
         bleu_scores=bleu_scores,
         rouge_scores=rouge_scores,
         bert_scores=bert_scores,
+        yesno_acc=yesno_acc,
+        open_acc=open_acc,
         results_dir=results_dir,
     )
 
@@ -197,6 +217,8 @@ def _append_history(
     bleu_scores: dict[str, float],
     rouge_scores: dict[str, float] | None = None,
     bert_scores: dict[str, float] | None = None,
+    yesno_acc: float | None = None,
+    open_acc: float | None = None,
     results_dir: Path = RESULTS_DIR,
 ) -> None:
     """Append one row to the results history CSV."""
@@ -210,6 +232,8 @@ def _append_history(
         "dataset": dataset,
         "n_samples": n_samples,
         "exact_match_accuracy": f"{exact_acc:.4f}",
+        "yesno_accuracy": f"{yesno_acc:.4f}" if yesno_acc is not None else "",
+        "open_accuracy": f"{open_acc:.4f}" if open_acc is not None else "",
         "bleu_1": f"{bleu_scores.get('bleu_1', 0):.4f}",
         "bleu_2": f"{bleu_scores.get('bleu_2', 0):.4f}",
         "bleu_3": f"{bleu_scores.get('bleu_3', 0):.4f}",
