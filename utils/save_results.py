@@ -33,13 +33,18 @@ def clean_answer(text: str) -> str:
 
     Steps:
         1. Keep first line only (discard multi-line garbage)
-        2. Remove emoji / non-ASCII symbols
-        3. Collapse multiple whitespace
-        4. Strip trailing isolated digits (e.g. "yes 4" → "yes"),
+        2. Truncate yes/no answers that are followed by explanations
+           (e.g. "No, there is no leakage" → "no")
+        3. Remove emoji / non-ASCII symbols
+        4. Collapse multiple whitespace
+        5. Strip trailing isolated digits (e.g. "yes 4" → "yes"),
            but keep standalone numbers ("4" stays "4")
-        5. Strip trailing punctuation
+        6. Strip trailing punctuation
     """
     text = text.split("\n")[0].strip()
+    m = re.match(r'^(yes|no)\b', text, re.IGNORECASE)
+    if m and len(text) > len(m.group(1)):
+        text = m.group(1).lower()
     text = re.sub(r'[^\x00-\x7F\u00C0-\u00FF]+', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     text = re.sub(r'\s+\d+$', '', text)
