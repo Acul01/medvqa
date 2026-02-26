@@ -52,6 +52,36 @@ def clean_answer(text: str) -> str:
     return text.strip()
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "of", "in", "on",
+    "to", "and", "or", "it", "its", "this", "that", "for", "with",
+    "by", "at", "from", "as", "be", "been", "being", "have", "has",
+    "had", "do", "does", "did", "but", "not", "so", "if", "than",
+})
+
+
+def normalize_for_comparison(text: str) -> str:
+    """Normalize an answer string for exact-match comparison.
+
+    Applied symmetrically to both prediction and ground truth so that
+    superficial differences (articles, punctuation, hyphens) don't cause
+    false mismatches.
+
+    Steps:
+        1. Lowercase
+        2. Replace hyphens and slashes with spaces
+        3. Remove all punctuation except alphanumeric and whitespace
+        4. Remove stop words (articles, prepositions, etc.)
+        5. Collapse whitespace
+    """
+    text = text.lower().strip()
+    text = re.sub(r'[-/]', ' ', text)
+    text = re.sub(r'[^a-z0-9\s]', '', text)
+    tokens = text.split()
+    tokens = [t for t in tokens if t not in _STOP_WORDS]
+    return " ".join(tokens)
+
+
 def classify_answer_type(ground_truth: str) -> str:
     """Classify a sample as 'yes_no' or 'open' based on its ground truth answer."""
     gt = ground_truth.lower().strip()

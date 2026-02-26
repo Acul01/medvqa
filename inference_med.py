@@ -29,7 +29,8 @@ from llava.mm_utils import get_model_name_from_path
 
 from utils.load_data import MedicalVQALoader
 from utils.save_results import (
-    save_results, clean_answer, compute_bleu_scores, compute_bert_scores,
+    save_results, clean_answer, normalize_for_comparison,
+    compute_bleu_scores, compute_bert_scores,
     compute_rouge_scores, classify_answer_type, ROUGE_KEYS,
 )
 
@@ -303,9 +304,9 @@ def main():
 
         atype = classify_answer_type(r["ground_truth_answer"])
         per_sample_type.append(atype)
-        pred = r["predicted_answer"].lower().strip()
-        gt = r["ground_truth_answer"].lower().strip()
-        is_exact = pred == gt
+        pred_norm = normalize_for_comparison(r["predicted_answer"])
+        gt_norm = normalize_for_comparison(r["ground_truth_answer"])
+        is_exact = pred_norm == gt_norm
 
         groups["overall"]["total"] += 1
         groups[atype]["total"] += 1
@@ -435,12 +436,12 @@ def main():
         "rouge1", "rouge2", "rougeL", "bert_f1",
     ])
     for r, bleu, rouge, bf1, atype in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1, per_sample_type):
-        gt = (r["ground_truth_answer"] or "").lower().strip()
-        pred = r["predicted_answer"].lower().strip()
+        gt_norm = normalize_for_comparison(r["ground_truth_answer"] or "")
+        pred_norm = normalize_for_comparison(r["predicted_answer"])
         table.add_data(
             r["image_path"], r["question"],
             r["ground_truth_answer"], r["predicted_answer"],
-            atype, pred == gt,
+            atype, pred_norm == gt_norm,
             round(bleu["bleu_1"], 4), round(bleu["bleu_2"], 4),
             round(bleu["bleu_3"], 4), round(bleu["bleu_4"], 4),
             round(rouge["rouge1"], 4), round(rouge["rouge2"], 4),
