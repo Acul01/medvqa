@@ -17,23 +17,22 @@ import json
 from pathlib import Path
 
 from utils.load_data import MedicalVQALoader
-from utils.save_results import (
-    save_results, clean_answer, normalize_for_comparison,
-    compute_bleu_scores, compute_bert_scores,
-    compute_rouge_scores, classify_answer_type, ROUGE_KEYS,
-)
+from utils.save_results import save_results, clean_answer, compute_bleu_scores, compute_bert_scores, compute_rouge_scores, ROUGE_KEYS
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
 DATASET_INSTRUCTIONS = {
-    "vqarad": "You are a medical expert. Answer the question about the medical image. Be concise: answer in as few words as possible.",
+    "vqarad": (
+        "You are a medical expert. Answer the question about the medical image concisely.\n"
+        "Answer with 1–3 tokens. If it is a yes/no question, answer only 'yes' or 'no'."
+    ),
     "pathvqa": "You are a pathology expert. Answer concisely and factually.",
     "_default": "Answer with a maximum of three words.",
 }
 
 DATASET_MAX_NEW_TOKENS = {
-    "vqarad": 10,
+    "vqarad": 3,
     "pathvqa": 16,
     "_default": 3,
 }
@@ -255,77 +254,43 @@ def main():
         print(f"  Ground Truth: {result['ground_truth_answer']}")
         print(f"  Predicted:    {result['predicted_answer']}")
 
-    # ── Per-sample metrics ──────────────────────────────────────────────
+    # ── Metrics ────────────────────────────────────────────────────────────
+    exact = 0
+    total = 0
+    bleu_accum = {f"bleu_{n}": 0.0 for n in range(1, 5)}
+    rouge_accum = {k: 0.0 for k in ROUGE_KEYS}
     per_sample_bleu = []
     per_sample_rouge = []
-    per_sample_type = []
-
-    # Accumulators: overall, yes_no, open
-    groups = {"overall": {"exact": 0, "total": 0, "bleu": {f"bleu_{n}": 0.0 for n in range(1, 5)}, "rouge": {k: 0.0 for k in ROUGE_KEYS}},
-              "yes_no": {"exact": 0, "total": 0},
-              "open":   {"exact": 0, "total": 0, "bleu": {f"bleu_{n}": 0.0 for n in range(1, 5)}, "rouge": {k: 0.0 for k in ROUGE_KEYS}}}
 
     for r in results:
         if r["ground_truth_answer"] is None:
             per_sample_bleu.append({f"bleu_{n}": 0.0 for n in range(1, 5)})
             per_sample_rouge.append({k: 0.0 for k in ROUGE_KEYS})
-            per_sample_type.append("unknown")
             continue
-
-        atype = classify_answer_type(r["ground_truth_answer"])
-        per_sample_type.append(atype)
-        pred_norm = normalize_for_comparison(r["predicted_answer"])
-        gt_norm = normalize_for_comparison(r["ground_truth_answer"])
-        is_exact = pred_norm == gt_norm
-
-        groups["overall"]["total"] += 1
-        groups[atype]["total"] += 1
-        if is_exact:
-            groups["overall"]["exact"] += 1
-            groups[atype]["exact"] += 1
-
+        total += 1
+        pred = r["predicted_answer"].lower().strip()
+        gt = r["ground_truth_answer"].lower().strip()
+        if pred == gt:
+            exact += 1
         b_scores = compute_bleu_scores(r["predicted_answer"], r["ground_truth_answer"])
         per_sample_bleu.append(b_scores)
+        for k in bleu_accum:
+            bleu_accum[k] += b_scores[k]
         r_scores = compute_rouge_scores(r["predicted_answer"], r["ground_truth_answer"])
         per_sample_rouge.append(r_scores)
+        for k in rouge_accum:
+            rouge_accum[k] += r_scores[k]
 
-        for k in groups["overall"]["bleu"]:
-            groups["overall"]["bleu"][k] += b_scores[k]
-        for k in groups["overall"]["rouge"]:
-            groups["overall"]["rouge"][k] += r_scores[k]
-        if atype == "open":
-            for k in groups["open"]["bleu"]:
-                groups["open"]["bleu"][k] += b_scores[k]
-            for k in groups["open"]["rouge"]:
-                groups["open"]["rouge"][k] += r_scores[k]
-
-    # ── Averages ─────────────────────────────────────────────────────────
-    def _safe_div(a, b): return a / b if b else 0.0
-
-    total = groups["overall"]["total"]
-    exact_acc = _safe_div(groups["overall"]["exact"], total)
-    avg_bleu = {k: _safe_div(v, total) for k, v in groups["overall"]["bleu"].items()}
-    avg_rouge = {k: _safe_div(v, total) for k, v in groups["overall"]["rouge"].items()}
-
-    yesno_total = groups["yes_no"]["total"]
-    yesno_acc = _safe_div(groups["yes_no"]["exact"], yesno_total)
-
-    open_total = groups["open"]["total"]
-    open_acc = _safe_div(groups["open"]["exact"], open_total)
-    open_bleu = {k: _safe_div(v, open_total) for k, v in groups["open"]["bleu"].items()}
-    open_rouge = {k: _safe_div(v, open_total) for k, v in groups["open"]["rouge"].items()}
+    exact_acc = exact / total if total else 0.0
+    avg_bleu = {k: v / total if total else 0.0 for k, v in bleu_accum.items()}
+    avg_rouge = {k: v / total if total else 0.0 for k, v in rouge_accum.items()}
 
     # ── BERTScore (batch) ────────────────────────────────────────────────
     valid_preds = [r["predicted_answer"] for r in results if r["ground_truth_answer"] is not None]
     valid_refs = [r["ground_truth_answer"] for r in results if r["ground_truth_answer"] is not None]
-    valid_types = [t for t in per_sample_type if t != "unknown"]
     bert_result = compute_bert_scores(valid_preds, valid_refs)
     avg_bert = bert_result["avg"]
     bert_per_sample_f1 = bert_result["per_sample"]
-
-    open_bert_f1s = [f1 for f1, t in zip(bert_per_sample_f1, valid_types) if t == "open"]
-    open_bert_f1 = _safe_div(sum(open_bert_f1s), len(open_bert_f1s))
-
     bert_idx = 0
     per_sample_bert_f1 = []
     for r in results:
@@ -335,30 +300,12 @@ def main():
             per_sample_bert_f1.append(bert_per_sample_f1[bert_idx])
             bert_idx += 1
 
-    # ── Console output ───────────────────────────────────────────────────
-    if yesno_total:
-        print(f"\n=== yes/no (N={yesno_total}) ===")
-        print(f"  Exact-match accuracy: {groups['yes_no']['exact']}/{yesno_total} = {yesno_acc:.4f} ({yesno_acc * 100:.2f}%)")
-
-    if open_total:
-        print(f"\n=== open (N={open_total}) ===")
-        print(f"  Exact-match accuracy: {groups['open']['exact']}/{open_total} = {open_acc:.4f} ({open_acc * 100:.2f}%)")
-        for n in range(1, 5):
-            print(f"  BLEU-{n}:              {open_bleu[f'bleu_{n}']:.4f}")
-        for k in ROUGE_KEYS:
-            print(f"  {k:20s}  {open_rouge[k]:.4f}")
-        print(f"  BERTScore F1:         {open_bert_f1:.4f}")
-
-    if total:
-        print(f"\n=== overall (N={total}) ===")
-        print(f"  Exact-match accuracy: {groups['overall']['exact']}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)")
-        for n in range(1, 5):
-            print(f"  BLEU-{n}:              {avg_bleu[f'bleu_{n}']:.4f}")
-        for k in ROUGE_KEYS:
-            print(f"  {k:20s}  {avg_rouge[k]:.4f}")
-        print(f"  BERTScore F1:         {avg_bert['bert_f1']:.4f}")
-    else:
-        print("\nNo samples with ground truth.")
+    print(f"\nExact-match accuracy: {exact}/{total} = {exact_acc:.4f} ({exact_acc * 100:.2f}%)" if total else "\nNo samples with ground truth.")
+    for n in range(1, 5):
+        print(f"BLEU-{n}:                {avg_bleu[f'bleu_{n}']:.4f}")
+    for k in ROUGE_KEYS:
+        print(f"{k:20s}    {avg_rouge[k]:.4f}")
+    print(f"BERTScore F1:           {avg_bert['bert_f1']:.4f}")
 
     # ── Save results (JSON, CSV, XLSX) + history ─────────────────────────
     print(f"\nSaving results...")
@@ -372,46 +319,39 @@ def main():
         bleu_scores=avg_bleu,
         rouge_scores=avg_rouge,
         bert_scores=avg_bert,
-        yesno_acc=yesno_acc if yesno_total else None,
-        open_acc=open_acc if open_total else None,
         results_dir=args.results_dir,
     )
 
-    # ── W&B: summary metrics + predictions table ────────────────────────
-    wandb.summary["overall/exact_match_accuracy"] = exact_acc
-    for k, v in avg_bleu.items():
-        wandb.summary[f"overall/{k}"] = v
-    for k, v in avg_rouge.items():
-        wandb.summary[f"overall/{k}"] = v
-    wandb.summary["overall/bert_f1"] = avg_bert["bert_f1"]
-    wandb.summary["overall/total_samples"] = total
-
-    if yesno_total:
-        wandb.summary["yesno/exact_match_accuracy"] = yesno_acc
-        wandb.summary["yesno/total_samples"] = yesno_total
-
-    if open_total:
-        wandb.summary["open/exact_match_accuracy"] = open_acc
-        for k, v in open_bleu.items():
-            wandb.summary[f"open/{k}"] = v
-        for k, v in open_rouge.items():
-            wandb.summary[f"open/{k}"] = v
-        wandb.summary["open/bert_f1"] = open_bert_f1
-        wandb.summary["open/total_samples"] = open_total
-
+    # ── W&B: log metrics (history) + summary + predictions table ────────
+    metrics = {
+        "exact_match_accuracy": exact_acc,
+        "bleu_1": avg_bleu["bleu_1"],
+        "bleu_2": avg_bleu["bleu_2"],
+        "bleu_3": avg_bleu["bleu_3"],
+        "bleu_4": avg_bleu["bleu_4"],
+        "rouge1": avg_rouge["rouge1"],
+        "rouge2": avg_rouge["rouge2"],
+        "rougeL": avg_rouge["rougeL"],
+        "bert_precision": avg_bert["bert_precision"],
+        "bert_recall": avg_bert["bert_recall"],
+        "bert_f1": avg_bert["bert_f1"],
+        "total_samples": total,
+    }
+    wandb.log(metrics)
+    for k, v in metrics.items():
+        wandb.summary[k] = v
     table = wandb.Table(columns=[
         "image_path", "question", "ground_truth", "predicted",
-        "answer_type", "exact_match",
-        "bleu_1", "bleu_2", "bleu_3", "bleu_4",
+        "exact_match", "bleu_1", "bleu_2", "bleu_3", "bleu_4",
         "rouge1", "rouge2", "rougeL", "bert_f1",
     ])
-    for r, bleu, rouge, bf1, atype in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1, per_sample_type):
-        gt_norm = normalize_for_comparison(r["ground_truth_answer"] or "")
-        pred_norm = normalize_for_comparison(r["predicted_answer"])
+    for r, bleu, rouge, bf1 in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1):
+        gt = (r["ground_truth_answer"] or "").lower().strip()
+        pred = r["predicted_answer"].lower().strip()
         table.add_data(
             r["image_path"], r["question"],
             r["ground_truth_answer"], r["predicted_answer"],
-            atype, pred_norm == gt_norm,
+            pred == gt,
             round(bleu["bleu_1"], 4), round(bleu["bleu_2"], 4),
             round(bleu["bleu_3"], 4), round(bleu["bleu_4"], 4),
             round(rouge["rouge1"], 4), round(rouge["rouge2"], 4),
