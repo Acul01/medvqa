@@ -22,19 +22,21 @@ from utils.save_results import save_results, clean_answer, clean_yesno_answer, c
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
+MED_VQA_INSTRUCTION = (
+    "You are a medical expert. Answer the question about the medical image concisely.\n"
+    "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
+)
+
 DATASET_INSTRUCTIONS = {
-    "vqarad": (
-        "You are a medical expert. Answer the question about the medical image concisely.\n"
-        "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
-    ),
-    "pathvqa": "You are a pathology expert. Answer concisely and factually.",
-    "_default": "Answer with a maximum of three words.",
+    "pathvqa": MED_VQA_INSTRUCTION,
+    "slake": MED_VQA_INSTRUCTION,
+    "vqarad": MED_VQA_INSTRUCTION,
 }
 
 DATASET_MAX_NEW_TOKENS = {
+    "pathvqa": 50,
+    "slake": 50,
     "vqarad": 50,
-    "pathvqa": 16,
-    "_default": 3,
 }
 
 
@@ -91,7 +93,7 @@ def build_conversation(question: str, dataset: str):
     Build the chat conversation in LLaVA 1.5 format:
     multimodal content list with {"type": "image"} and {"type": "text"}.
     """
-    instruction = DATASET_INSTRUCTIONS.get(dataset, DATASET_INSTRUCTIONS["_default"])
+    instruction = DATASET_INSTRUCTIONS[dataset]
     full_question = f"{question}\n{instruction}"
 
     return [
@@ -118,7 +120,7 @@ def main():
     args = parse_args()
 
     if args.max_new_tokens is None:
-        args.max_new_tokens = DATASET_MAX_NEW_TOKENS.get(args.dataset, DATASET_MAX_NEW_TOKENS["_default"])
+        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
     print(f"max_new_tokens: {args.max_new_tokens}")
 
     # ── W&B ──────────────────────────────────────────────────────────────

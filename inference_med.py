@@ -33,19 +33,21 @@ from utils.save_results import save_results, clean_answer, clean_yesno_answer, c
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 
+MED_VQA_INSTRUCTION = (
+    "You are a medical expert. Answer the question about the medical image concisely.\n"
+    "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
+)
+
 DATASET_INSTRUCTIONS = {
-    "vqarad": (
-        "You are a medical expert. Answer the question about the medical image concisely.\n"
-        "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
-    ),
-    "pathvqa": "You are a pathology expert. Answer concisely and factually.",
-    "_default": "Answer with a maximum of three words.",
+    "pathvqa": MED_VQA_INSTRUCTION,
+    "slake": MED_VQA_INSTRUCTION,
+    "vqarad": MED_VQA_INSTRUCTION,
 }
 
 DATASET_MAX_NEW_TOKENS = {
-    "vqarad": 50,
     "pathvqa": 64,
-    "_default": 64,
+    "slake": 64,
+    "vqarad": 64,
 }
 
 
@@ -111,7 +113,7 @@ def main():
     args = parse_args()
 
     if args.max_new_tokens is None:
-        args.max_new_tokens = DATASET_MAX_NEW_TOKENS.get(args.dataset, DATASET_MAX_NEW_TOKENS["_default"])
+        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
     print(f"max_new_tokens: {args.max_new_tokens}")
 
     # ── W&B ──────────────────────────────────────────────────────────────
@@ -207,7 +209,7 @@ def main():
         gen_kwargs["num_beams"] = args.num_beams
 
     # ── Inference loop ────────────────────────────────────────────────────
-    instruction = DATASET_INSTRUCTIONS.get(args.dataset, DATASET_INSTRUCTIONS["_default"])
+    instruction = DATASET_INSTRUCTIONS[args.dataset]
     results = []
     print("Running inference...")
 

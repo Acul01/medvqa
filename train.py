@@ -31,13 +31,15 @@ from utils.load_data import MedicalVQALoader
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 
+MED_VQA_INSTRUCTION = (
+    "You are a medical expert. Answer the question about the medical image concisely.\n"
+    "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
+)
+
 DATASET_INSTRUCTIONS = {
-    "vqarad": (
-        "You are a medical expert. Answer the question about the medical image concisely.\n"
-        "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
-    ),
-    "pathvqa": "You are a pathology expert. Answer concisely and factually.",
-    "_default": "Answer with a maximum of three words.",
+    "pathvqa": MED_VQA_INSTRUCTION,
+    "slake": MED_VQA_INSTRUCTION,
+    "vqarad": MED_VQA_INSTRUCTION,
 }
 
 
@@ -63,7 +65,7 @@ class LLaVATrainDataset(Dataset):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
-        self.instruction = DATASET_INSTRUCTIONS.get(dataset, DATASET_INSTRUCTIONS["_default"])
+        self.instruction = DATASET_INSTRUCTIONS[dataset]
 
         # Ensure pad token is set
         if processor.tokenizer.pad_token is None:
