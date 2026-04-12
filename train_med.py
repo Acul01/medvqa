@@ -38,7 +38,7 @@ DATASET_INSTRUCTIONS = {
         "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
     ),
     "pathvqa": "You are a pathology expert. Answer concisely and factually.",
-    "_default": "Answer with a maximum of three words.",
+    "slake": "You are a medical expert. Answer the question about the medical image concisely.  Keep the answer as short as possible.",
 }
 
 
