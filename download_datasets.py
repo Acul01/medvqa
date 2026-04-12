@@ -1,13 +1,13 @@
 """
-Download PathVQA and SLAKE from HuggingFace and save in the expected directory structure.
+Download PathVQA, SLAKE, and VQA-Rad from HuggingFace into ./data/
+(layout matches utils/load_data.MedicalVQALoader).
 
 Usage on cluster:
     conda activate llava_env
-    pip install datasets huggingface_hub
+    pip install datasets huggingface_hub pandas
     python download_datasets.py
 """
 
-import os
 import json
 from pathlib import Path
 from datasets import load_dataset
@@ -136,9 +136,61 @@ def download_slake():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# VQA-Rad
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def download_vqarad():
+    print("=" * 60)
+    print("Downloading VQA-Rad...")
+    print("=" * 60)
+
+    ds = load_dataset("flaviagiammarino/vqa-rad")
+
+    root = DATA_ROOT / "VQA-Rad"
+    img_dir = root / "vqarad_images"
+    ann_dir = root / "vqarad_annotations"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    ann_dir.mkdir(parents=True, exist_ok=True)
+
+    split_mapping = {
+        "train": "vqarad_train.csv",
+        "test": "vqarad_test.csv",
+    }
+
+    for split_name, csv_filename in split_mapping.items():
+        print(f"\nProcessing {split_name} split...")
+        split_data = ds[split_name]
+        rows = []
+
+        for idx, sample in enumerate(split_data):
+            image = sample["image"]
+            question = sample["question"]
+            answer = sample["answer"]
+
+            img_filename = f"{split_name}_{idx}.jpg"
+            img_path = img_dir / img_filename
+            if not img_path.exists():
+                image.convert("RGB").save(img_path)
+
+            rows.append({
+                "image_path": img_filename,
+                "question": question,
+                "answer": answer,
+            })
+
+        df = pd.DataFrame(rows)
+        df.to_csv(ann_dir / csv_filename, index=False)
+        print(f"  Saved {len(df)} samples -> {csv_filename}")
+
+    print(f"\nVQA-Rad done! {len(list(img_dir.iterdir()))} image files in {img_dir}.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     download_pathvqa()
     print()
     download_slake()
-    print("\nAll datasets downloaded!")
+    print()
+    download_vqarad()
+    print("\nAll datasets downloaded under", DATA_ROOT.resolve())
