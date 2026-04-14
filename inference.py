@@ -125,9 +125,22 @@ def _compute_token_entropies(step_scores, generated_ids, tokenizer) -> tuple[dic
         entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum().item()
         entropies.append(entropy)
 
+    special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
     entropy_tokens = {}
     for token_id, entropy in zip(generated_ids.tolist(), entropies):
-        token_text = tokenizer.convert_ids_to_tokens(int(token_id))
+        token_id = int(token_id)
+        raw_token = tokenizer.convert_ids_to_tokens(token_id)
+        if raw_token in special_tokens:
+            continue
+
+        token_text = tokenizer.decode(
+            [token_id],
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        ).strip()
+        if not token_text:
+            continue
+
         # Keep insertion order and preserve repeated tokens explicitly.
         if token_text in entropy_tokens:
             dup_idx = 2
@@ -138,7 +151,11 @@ def _compute_token_entropies(step_scores, generated_ids, tokenizer) -> tuple[dic
             token_text = candidate
         entropy_tokens[token_text] = entropy
 
-    entropy_mean = (sum(entropies) / len(entropies)) if entropies else float("nan")
+    entropy_mean = (
+        sum(entropy_tokens.values()) / len(entropy_tokens)
+        if entropy_tokens
+        else float("nan")
+    )
     return entropy_tokens, entropy_mean
 
 
