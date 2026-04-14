@@ -178,16 +178,23 @@ def save_results(
         json.dump(results, f, indent=2, ensure_ascii=False)
     print(f"  Saved: {json_path}")
 
+    # ── Tabular export prep ─────────────────────────────────────────────────
+    df = pd.DataFrame(results)
+    df_export = df.copy()
+    if "entropy_tokens" in df_export.columns:
+        df_export["entropy_tokens"] = df_export["entropy_tokens"].apply(
+            lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v
+        )
+
     # ── CSV ─────────────────────────────────────────────────────────────────
     csv_path = results_dir / f"{base_name}.csv"
-    df = pd.DataFrame(results)
-    df.to_csv(csv_path, index=False, encoding="utf-8")
+    df_export.to_csv(csv_path, index=False, encoding="utf-8")
     print(f"  Saved: {csv_path}")
 
     # ── XLSX ────────────────────────────────────────────────────────────────
     xlsx_path = results_dir / f"{base_name}.xlsx"
     try:
-        df.to_excel(xlsx_path, index=False)
+        df_export.to_excel(xlsx_path, index=False)
         print(f"  Saved: {xlsx_path}")
     except ModuleNotFoundError:
         print(f"  Skipped XLSX (install openpyxl: pip install openpyxl)")

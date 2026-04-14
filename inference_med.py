@@ -13,6 +13,7 @@ Prerequisites:
 import argparse
 import torch
 import wandb
+import math
 from PIL import Image
 from tqdm import tqdm
 import json
@@ -107,6 +108,19 @@ def _model_short_name(model_path: str) -> str:
     if "llava" in name:
         return "llava"
     return Path(model_path).name
+
+
+def _compute_token_entropies(step_scores, num_generated_tokens: int) -> tuple[dict, float]:
+    """Compute per-token predictive entropy and sequence mean entropy."""
+    entropies = []
+    for step_logits in step_scores[:num_generated_tokens]:
+        probs = torch.softmax(step_logits[0], dim=-1)
+        entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum().item()
+        entropies.append(entropy)
+
+    entropy_tokens = {f"token{i + 1}": e for i, e in enumerate(entropies)}
+    entropy_mean = (sum(entropies) / len(entropies)) if entropies else float("nan")
+    return entropy_tokens, entropy_mean
 
 
 def main():
@@ -234,20 +248,26 @@ def main():
 
             # 4. Generate (input_ids as positional arg – required by LLaVA-Med's
             #    generate override which expects it as the 'inputs' parameter)
-            output = model.generate(
+            generation_output = model.generate(
                 input_ids,
                 images=image_tensor,
                 attention_mask=torch.ones_like(input_ids),
                 **gen_kwargs,
+                return_dict_in_generate=True,
+                output_scores=True,
             )
 
             # 5. Decode generated tokens
             #    LLaVA-Med's generate() passes inputs_embeds (not input_ids)
             #    to super().generate(), so the output contains ONLY the newly
             #    generated tokens – no need to slice off the input portion.
-            generated_ids = output[0]
+            generated_ids = generation_output.sequences[0]
             generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
             generated_text = clean_answer(generated_text)
+            entropy_tokens, entropy_mean = _compute_token_entropies(
+                generation_output.scores,
+                num_generated_tokens=generated_ids.shape[0],
+            )
 
             # 6. Print live
             print(f"\n[Sample {len(results) + 1}]")
@@ -261,6 +281,8 @@ def main():
                 "question": sample.question,
                 "ground_truth_answer": sample.answer,
                 "predicted_answer": generated_text,
+                "entropy_tokens": entropy_tokens,
+                "entropy": entropy_mean,
             })
 
     # ── Print results summary ───────────────────────────────────────────────
@@ -285,8 +307,8 @@ def main():
 
     for r in results:
         if r["ground_truth_answer"] is None:
-            per_sample_bleu.append({f"bleu_{n}": 0.0 for n in range(1, 5)})
-            per_sample_rouge.append({k: 0.0 for k in ROUGE_KEYS})
+            per_sample_bleu.append({f"bleu_{n}": float("nan") for n in range(1, 5)})
+            per_sample_rouge.append({k: float("nan") for k in ROUGE_KEYS})
             per_sample_qtype.append("unknown")
             continue
         total += 1
@@ -336,7 +358,16 @@ def main():
             per_sample_bert_f1.append(bert_per_sample_f1[bert_idx])
             bert_idx += 1
         else:
-            per_sample_bert_f1.append(0.0)
+            per_sample_bert_f1.append(float("nan") if qt == "unknown" else 0.0)
+
+    # ── Attach per-sample metrics into saved result rows ──────────────────
+    for r, bleu, rouge, bf1 in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1):
+        r["bleu_1"] = bleu["bleu_1"]
+        r["bleu_2"] = bleu["bleu_2"]
+        r["bleu_3"] = bleu["bleu_3"]
+        r["bleu_4"] = bleu["bleu_4"]
+        r["rougeL"] = rouge["rougeL"]
+        r["bert_f1"] = bf1
 
     # ── Console output ───────────────────────────────────────────────────
     if total:
@@ -397,6 +428,7 @@ def main():
         "question_type", "exact_match",
         "bleu_1", "bleu_2", "bleu_3", "bleu_4",
         "rouge1", "rouge2", "rougeL", "bert_f1",
+        "entropy_tokens", "entropy",
     ])
     for r, bleu, rouge, bf1, qt in zip(results, per_sample_bleu, per_sample_rouge, per_sample_bert_f1, per_sample_qtype):
         gt = (r["ground_truth_answer"] or "").lower().strip()
@@ -410,6 +442,8 @@ def main():
             round(rouge["rouge1"], 4), round(rouge["rouge2"], 4),
             round(rouge["rougeL"], 4),
             round(bf1, 4),
+            json.dumps(r.get("entropy_tokens", {}), ensure_ascii=False),
+            r.get("entropy", math.nan),
         )
     wandb.log({"predictions": table})
     wandb.finish()
