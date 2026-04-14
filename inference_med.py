@@ -110,15 +110,27 @@ def _model_short_name(model_path: str) -> str:
     return Path(model_path).name
 
 
-def _compute_token_entropies(step_scores, num_generated_tokens: int) -> tuple[dict, float]:
+def _compute_token_entropies(step_scores, generated_ids, tokenizer) -> tuple[dict, float]:
     """Compute per-token predictive entropy and sequence mean entropy."""
     entropies = []
-    for step_logits in step_scores[:num_generated_tokens]:
+    for step_logits in step_scores[: generated_ids.shape[0]]:
         probs = torch.softmax(step_logits[0], dim=-1)
         entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum().item()
         entropies.append(entropy)
 
-    entropy_tokens = {f"token{i + 1}": e for i, e in enumerate(entropies)}
+    entropy_tokens = {}
+    for token_id, entropy in zip(generated_ids.tolist(), entropies):
+        token_text = tokenizer.convert_ids_to_tokens(int(token_id))
+        # Keep insertion order and preserve repeated tokens explicitly.
+        if token_text in entropy_tokens:
+            dup_idx = 2
+            candidate = f"{token_text}#{dup_idx}"
+            while candidate in entropy_tokens:
+                dup_idx += 1
+                candidate = f"{token_text}#{dup_idx}"
+            token_text = candidate
+        entropy_tokens[token_text] = entropy
+
     entropy_mean = (sum(entropies) / len(entropies)) if entropies else float("nan")
     return entropy_tokens, entropy_mean
 
@@ -266,7 +278,8 @@ def main():
             generated_text = clean_answer(generated_text)
             entropy_tokens, entropy_mean = _compute_token_entropies(
                 generation_output.scores,
-                num_generated_tokens=generated_ids.shape[0],
+                generated_ids=generated_ids,
+                tokenizer=tokenizer,
             )
 
             # 6. Print live
