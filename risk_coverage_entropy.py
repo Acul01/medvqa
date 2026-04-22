@@ -165,8 +165,6 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
     ax2.set_ylabel("Entropy threshold", color="tab:orange")
     ax2.tick_params(axis="y", labelcolor="tab:orange")
 
-    ax1.legend([line_risk, line_thr], ["Risk", "Entropy threshold"], loc="best")
-
     fig.tight_layout()
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
