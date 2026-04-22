@@ -147,15 +147,27 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     x = [r["coverage"] for r in curve_rows]
     y = [r["risk"] for r in curve_rows]
-    plt.figure(figsize=(7, 5))
-    plt.plot(x, y, marker="o", linewidth=2)
-    plt.xlabel("Coverage")
-    plt.ylabel("Risk")
-    plt.title(title)
-    plt.grid(alpha=0.25)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=180)
-    plt.close()
+    t = [r["threshold"] for r in curve_rows]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Main risk-coverage curve (line only; no markers)
+    axes[0].plot(x, y, linewidth=2)
+    axes[0].set_xlabel("Coverage")
+    axes[0].set_ylabel("Risk")
+    axes[0].set_title(title)
+    axes[0].grid(alpha=0.25)
+
+    # Threshold trace for easy operating-point lookup
+    axes[1].plot(x, t, linewidth=2, color="tab:orange")
+    axes[1].set_xlabel("Coverage")
+    axes[1].set_ylabel("Entropy threshold")
+    axes[1].set_title("Threshold vs Coverage")
+    axes[1].grid(alpha=0.25)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
 
 
 def parse_args():
