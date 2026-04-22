@@ -13,6 +13,7 @@ Prerequisites:
 """
 
 import argparse
+from collections import Counter
 import torch
 import wandb
 from PIL import Image
@@ -27,7 +28,7 @@ from llava.mm_utils import process_images, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
 
-from utils.load_data import MedicalVQALoader
+from utils.load_data import MedicalVQALoader, combined_dataset_instruction
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
@@ -61,15 +62,28 @@ class LLaVAMedTrainDataset(Dataset):
     so the loss is only computed on the assistant's answer.
     """
 
-    def __init__(self, samples, tokenizer, image_processor, model_config,
-                 conv_template="mistral_instruct", max_length=512, dataset="vqarad"):
+    def __init__(
+        self,
+        samples,
+        tokenizer,
+        image_processor,
+        model_config,
+        conv_template="mistral_instruct",
+        max_length=512,
+        dataset="vqarad",
+        use_per_sample_instruction: bool = False,
+    ):
         self.samples = samples
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.model_config = model_config
         self.conv_template = conv_template
         self.max_length = max_length
-        self.instruction = DATASET_INSTRUCTIONS[dataset]
+        self.use_per_sample_instruction = use_per_sample_instruction
+        if use_per_sample_instruction:
+            self.instruction = None
+        else:
+            self.instruction = DATASET_INSTRUCTIONS[dataset]
 
         # Ensure pad token
         if tokenizer.pad_token is None:
@@ -88,7 +102,12 @@ class LLaVAMedTrainDataset(Dataset):
         image_tensor = image_tensor.squeeze(0)  # [C, H, W]
 
         # ── Build conversation (same as inference_med.py, but with answer) ─
-        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{self.instruction}"
+        instruction = (
+            combined_dataset_instruction(sample.dataset)
+            if self.use_per_sample_instruction
+            else self.instruction
+        )
+        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{instruction}"
 
         # Build prompt WITH answer (full training sequence)
         conv_full = conv_templates[self.conv_template].copy()
@@ -162,8 +181,8 @@ def parse_args():
     parser.add_argument("--data_root", type=str, default="data",
                         help="Root directory containing datasets")
     parser.add_argument("--dataset", type=str, required=True,
-                        choices=["pathvqa", "slake", "vqarad"],
-                        help="Dataset to use")
+                        choices=["pathvqa", "slake", "vqarad", "all"],
+                        help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad (prompt names from each sample)")
     parser.add_argument("--train_split", type=str, default="train",
                         help="Training split name")
     parser.add_argument("--val_split", type=str, default="validation",
@@ -301,25 +320,63 @@ def main():
 
     # ── Load datasets ───────────────────────────────────────────────────
     loader = MedicalVQALoader(data_root=args.data_root)
+    use_all = args.dataset == "all"
+    per_sample_instr = use_all
 
-    print(f"Loading {args.dataset} {args.train_split} split...")
-    train_samples = loader.load_dataset(args.dataset, split=args.train_split)
-    train_dataset = LLaVAMedTrainDataset(
-        train_samples, tokenizer, image_processor, model.config,
-        conv_template=args.conv_template, max_length=args.max_length,
-        dataset=args.dataset,
-    )
-    print(f"Train: {len(train_dataset)} samples")
+    if use_all:
+        # Source tag per sample: VQASample.dataset. VQA-Rad val uses test split (no validation in loader).
+        print(f"Loading combined PathVQA+SLAKE+VQA-Rad {args.train_split} split...")
+        train_samples = loader.load_combined(args.train_split)
+        train_dataset = LLaVAMedTrainDataset(
+            train_samples,
+            tokenizer,
+            image_processor,
+            model.config,
+            conv_template=args.conv_template,
+            max_length=args.max_length,
+            dataset=args.dataset,
+            use_per_sample_instruction=per_sample_instr,
+        )
+        print(f"Train: {len(train_dataset)} samples ({dict(Counter(s.dataset for s in train_samples))})")
+    else:
+        print(f"Loading {args.dataset} {args.train_split} split...")
+        train_samples = loader.load_dataset(args.dataset, split=args.train_split)
+        train_dataset = LLaVAMedTrainDataset(
+            train_samples,
+            tokenizer,
+            image_processor,
+            model.config,
+            conv_template=args.conv_template,
+            max_length=args.max_length,
+            dataset=args.dataset,
+            use_per_sample_instruction=False,
+        )
+        print(f"Train: {len(train_dataset)} samples")
 
     val_dataset = None
     try:
-        val_samples = loader.load_dataset(args.dataset, split=args.val_split)
+        if use_all:
+            print(
+                f"Loading validation: PathVQA/SLAKE split={args.val_split!r}, "
+                "VQA-Rad split='test' (VQA-Rad has no validation split in this loader)."
+            )
+            val_samples = loader.load_combined(args.val_split, vqarad_split="test")
+        else:
+            val_samples = loader.load_dataset(args.dataset, split=args.val_split)
         val_dataset = LLaVAMedTrainDataset(
-            val_samples, tokenizer, image_processor, model.config,
-            conv_template=args.conv_template, max_length=args.max_length,
+            val_samples,
+            tokenizer,
+            image_processor,
+            model.config,
+            conv_template=args.conv_template,
+            max_length=args.max_length,
             dataset=args.dataset,
+            use_per_sample_instruction=per_sample_instr,
         )
-        print(f"Validation: {len(val_dataset)} samples")
+        if use_all:
+            print(f"Validation: {len(val_dataset)} samples ({dict(Counter(s.dataset for s in val_samples))})")
+        else:
+            print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
         print(f"No validation split available: {e}")
 

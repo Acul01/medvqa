@@ -15,6 +15,18 @@ from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 
 
+def combined_dataset_instruction(dataset_display_name: str) -> str:
+    """
+    Instruction text for joint training (--dataset all).
+    ``dataset_display_name`` should match ``VQASample.dataset`` (e.g. ``PathVQA``).
+    """
+    return (
+        f"You are a medical expert. You answer a question from the {dataset_display_name} dataset. "
+        "Answer the question about the medical image concisely.\n"
+        "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
+    )
+
+
 @dataclass
 class VQASample:
     """Unified data structure for VQA samples"""
@@ -149,6 +161,28 @@ class MedicalVQALoader:
             raise ValueError(f"Unknown format: {config['format']}")
         
         return samples
+
+    def load_combined(self, split: str, vqarad_split: Optional[str] = None) -> List[VQASample]:
+        """
+        Load PathVQA, SLAKE, and VQA-Rad for the given split(s) and concatenate.
+
+        Order: PathVQA, then SLAKE, then VQA-Rad. Each sample's ``VQASample.dataset``
+        field is the source dataset name (``PathVQA``, ``SLAKE``, ``VQA-Rad``).
+
+        Args:
+            split: Split for PathVQA and SLAKE (e.g. ``train``, ``validation``, ``test``).
+            vqarad_split: If set, VQA-Rad is loaded with this split instead of ``split``.
+                Use ``\"test\"`` for validation when PathVQA/SLAKE use ``validation``,
+                since VQA-Rad has no validation split in this loader.
+
+        Returns:
+            Concatenated list of ``VQASample`` instances.
+        """
+        combined: List[VQASample] = []
+        for slug in ("pathvqa", "slake", "vqarad"):
+            use_split = split if slug != "vqarad" or vqarad_split is None else vqarad_split
+            combined.extend(self.load_dataset(slug, use_split))
+        return combined
     
     def _load_csv(self, dataset_name: str, annotation_path: Path, split: str, config: Dict) -> List[VQASample]:
         """Load CSV annotation file"""
