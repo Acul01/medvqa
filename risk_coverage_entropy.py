@@ -38,23 +38,51 @@ def load_results(path: Path) -> List[Dict]:
     return data
 
 
-def prepare_samples(results: List[Dict], max_entropy: float | None = None) -> List[Dict]:
+def metric_value_from_row(row: Dict, risk_metric: str) -> float | None:
+    """Extract per-sample metric value in [0,1] for risk computation."""
+    if risk_metric == "match":
+        gt = row.get("ground_truth_answer")
+        if gt is None or str(gt).strip() == "":
+            return None
+        pred = str(row.get("predicted_answer", ""))
+        return float(exact_match(pred, str(gt)))
+
+    key_map = {
+        "bleu1": "bleu_1",
+        "bleu4": "bleu_4",
+        "rouge": "rougeL",
+        "bertscore": "bert_f1",
+    }
+    metric_key = key_map[risk_metric]
+    val = row.get(metric_key)
+    if not is_valid_number(val):
+        return None
+    val = float(val)
+    # Clamp softly for robustness against tiny numeric drifts.
+    return max(0.0, min(1.0, val))
+
+
+def prepare_samples(
+    results: List[Dict],
+    risk_metric: str,
+    max_entropy: float | None = None,
+) -> List[Dict]:
     samples: List[Dict] = []
     for r in results:
-        gt = r.get("ground_truth_answer")
         entropy = r.get("entropy")
-        if gt is None or str(gt).strip() == "":
-            continue
         if not is_valid_number(entropy):
             continue
         entropy = float(entropy)
         if max_entropy is not None and entropy > max_entropy:
             continue
+        metric_val = metric_value_from_row(r, risk_metric=risk_metric)
+        if metric_val is None:
+            continue
 
         samples.append(
             {
                 "entropy": entropy,
-                "correct": exact_match(str(r.get("predicted_answer", "")), str(gt)),
+                "metric_value": metric_val,
             }
         )
     return samples
@@ -81,12 +109,14 @@ def compute_risk_coverage_at_threshold(samples: List[Dict], threshold: float) ->
             "answered": 0,
             "errors": 0,
             "correct": 0,
+            "metric_mean": 0.0,
         }
 
-    correct = sum(1 for s in answered if s["correct"])
+    metric_mean = sum(float(s["metric_value"]) for s in answered) / n_answered
+    risk = 1.0 - metric_mean
+    correct = sum(1 for s in answered if math.isclose(float(s["metric_value"]), 1.0))
     errors = n_answered - correct
     coverage = n_answered / total
-    risk = errors / n_answered
     return {
         "threshold": threshold,
         "coverage": coverage,
@@ -94,6 +124,7 @@ def compute_risk_coverage_at_threshold(samples: List[Dict], threshold: float) ->
         "answered": n_answered,
         "errors": errors,
         "correct": correct,
+        "metric_mean": metric_mean,
     }
 
 
@@ -136,7 +167,7 @@ def save_curve_csv(curve_rows: List[Dict], path: Path) -> None:
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["threshold", "coverage", "risk", "answered", "correct", "errors"],
+            fieldnames=["threshold", "coverage", "risk", "metric_mean", "answered", "correct", "errors"],
         )
         writer.writeheader()
         for row in curve_rows:
@@ -181,6 +212,13 @@ def parse_args():
         default=None,
         help="Optional max entropy filter (useful for focusing low-entropy regime)",
     )
+    parser.add_argument(
+        "--risk_metric",
+        type=str,
+        default="match",
+        choices=["match", "bleu1", "bleu4", "rouge", "bertscore"],
+        help="Metric used for risk: risk = 1 - metric_value",
+    )
     return parser.parse_args()
 
 
@@ -191,7 +229,11 @@ def main():
         raise FileNotFoundError(f"Results file not found: {results_path}")
 
     results = load_results(results_path)
-    samples = prepare_samples(results, max_entropy=args.max_entropy)
+    samples = prepare_samples(
+        results,
+        risk_metric=args.risk_metric,
+        max_entropy=args.max_entropy,
+    )
     if not samples:
         raise ValueError("No valid samples found with ground truth and numeric entropy.")
 
@@ -215,6 +257,7 @@ def main():
         "valid_samples": len(samples),
         "num_thresholds": len(curve),
         "max_entropy_filter": args.max_entropy,
+        "risk_metric": args.risk_metric,
         "aurc": area,
         **c_at_r,
         **r_at_c,
