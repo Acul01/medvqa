@@ -1,9 +1,4 @@
-"""
-Plot entropy vs. performance metrics for a single results JSON file.
-
-This script helps visualize how predictive entropy relates to model performance.
-Expected input: results JSON produced by inference.py / inference_med.py.
-"""
+"""Create one combined normalized metric-vs-entropy plot."""
 
 import argparse
 import json
@@ -102,42 +97,57 @@ def bin_means(rows: List[Dict], key: str, num_bins: int) -> tuple[List[float], L
     return plot_x, plot_y
 
 
+def minmax_normalize(values: List[float]) -> List[float]:
+    """Min-max normalize to [0,1]. Constant series mapped to 1.0."""
+    if not values:
+        return []
+    vmin, vmax = min(values), max(values)
+    if math.isclose(vmin, vmax):
+        return [1.0 for _ in values]
+    return [(v - vmin) / (vmax - vmin) for v in values]
+
+
 def plot_entropy_relationships(rows: List[Dict], output_path: Path, num_bins: int) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()
+    fig, ax = plt.subplots(1, 1, figsize=(12, 7))
 
     metric_specs = [
-        ("exact_match", "Exact Match"),
-        ("bleu_4", "BLEU-4"),
-        ("rougeL", "ROUGE-L"),
-        ("bert_f1", "BERTScore-F1"),
+        ("exact_match", "Exact Match", "#1f77b4"),
+        ("bleu_4", "BLEU-4", "#ff7f0e"),
+        ("rougeL", "ROUGE-L", "#2ca02c"),
+        ("bert_f1", "BERTScore-F1", "#d62728"),
     ]
 
-    for ax, (metric_key, metric_name) in zip(axes, metric_specs):
+    any_plotted = False
+    for metric_key, metric_name, color in metric_specs:
         valid = [r for r in rows if is_valid_number(r.get(metric_key))]
-        xs = [r["entropy"] for r in valid]
-        ys = [float(r[metric_key]) for r in valid]
-
         if not valid:
-            ax.set_title(f"{metric_name} (no valid samples)")
-            ax.set_xlabel("Entropy")
-            ax.set_ylabel(metric_name)
             continue
 
-        ax.scatter(xs, ys, alpha=0.35, s=18, label="samples")
         bx, by = bin_means(valid, metric_key, num_bins=num_bins)
-        if bx and by:
-            ax.plot(bx, by, color="crimson", linewidth=2, marker="o", label="bin mean")
+        if not bx or not by:
+            continue
+        by_norm = minmax_normalize(by)
+        ax.plot(
+            bx,
+            by_norm,
+            marker="o",
+            linewidth=2,
+            color=color,
+            label=metric_name,
+        )
+        any_plotted = True
 
-        corr = pearson_correlation(xs, ys)
-        corr_txt = f"{corr:.3f}" if is_valid_number(corr) else "n/a"
-        ax.set_title(f"{metric_name} vs Entropy (r={corr_txt})")
-        ax.set_xlabel("Entropy")
-        ax.set_ylabel(metric_name)
-        ax.grid(alpha=0.2)
-        ax.legend(loc="best")
+    if not any_plotted:
+        raise ValueError("No valid metric series available for plotting.")
 
-    fig.suptitle("Entropy vs Performance", fontsize=14)
+    ax.set_xlabel("Entropy (higher -> lower, left to right)")
+    ax.set_ylabel("Normalized metric value [0, 1]")
+    ax.set_title("Normalized Evaluation Metrics vs Entropy")
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best")
+    # Lower entropy is better, so show descending entropy left→right.
+    ax.invert_xaxis()
+
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=180)
