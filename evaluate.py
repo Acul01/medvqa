@@ -21,17 +21,8 @@ EVAL_RUN_COLUMNS = [
     "model_path",
     "n_samples",
     "yesno_accuracy",
-    "yesno_precision",
-    "yesno_recall",
-    "yesno_f1",
     "open_accuracy",
-    "open_precision",
-    "open_recall",
-    "open_f1",
     "overall_accuracy",
-    "overall_precision",
-    "overall_recall",
-    "overall_f1",
     "bleu_1",
     "bleu_4",
     "rougeL",
@@ -144,7 +135,7 @@ def _exact_match_binary_metrics(samples: List[Dict]) -> Dict[str, float]:
     """
     total = len(samples)
     if total == 0:
-        return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+        return {"accuracy": 0.0}
 
     tp = 0
     for s in samples:
@@ -153,13 +144,8 @@ def _exact_match_binary_metrics(samples: List[Dict]) -> Dict[str, float]:
         if pred == gt:
             tp += 1
 
-    # Exact-match-based correctness perspective.
     accuracy = _safe_div(tp, total)
-    precision = accuracy
-    recall = accuracy
-    f1 = accuracy
-
-    return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
+    return {"accuracy": accuracy}
 
 
 def _compute_text_metrics(samples: List[Dict]) -> Dict[str, float]:
@@ -272,17 +258,8 @@ def main():
         "model_path": model_path,
         "n_samples": n_samples,
         "yesno_accuracy": f"{yesno_metrics['accuracy']:.4f}",
-        "yesno_precision": f"{yesno_metrics['precision']:.4f}",
-        "yesno_recall": f"{yesno_metrics['recall']:.4f}",
-        "yesno_f1": f"{yesno_metrics['f1']:.4f}",
         "open_accuracy": f"{open_metrics['accuracy']:.4f}",
-        "open_precision": f"{open_metrics['precision']:.4f}",
-        "open_recall": f"{open_metrics['recall']:.4f}",
-        "open_f1": f"{open_metrics['f1']:.4f}",
         "overall_accuracy": f"{overall_metrics['accuracy']:.4f}",
-        "overall_precision": f"{overall_metrics['precision']:.4f}",
-        "overall_recall": f"{overall_metrics['recall']:.4f}",
-        "overall_f1": f"{overall_metrics['f1']:.4f}",
         "bleu_1": f"{text_metrics['bleu_1']:.4f}",
         "bleu_4": f"{text_metrics['bleu_4']:.4f}",
         "rougeL": f"{text_metrics['rougeL']:.4f}",
@@ -301,18 +278,9 @@ def main():
     print(f"n_samples: {n_samples}")
     print(f"Rows: total={len(results)}, valid={len(valid_samples)}, yes/no={len(yesno_samples)}, open={len(open_samples)}")
     print("-" * 72)
-    print(
-        f"Yes/No  -> acc={yesno_metrics['accuracy']:.4f}, p={yesno_metrics['precision']:.4f}, "
-        f"r={yesno_metrics['recall']:.4f}, f1={yesno_metrics['f1']:.4f}"
-    )
-    print(
-        f"Open    -> acc={open_metrics['accuracy']:.4f}, p={open_metrics['precision']:.4f}, "
-        f"r={open_metrics['recall']:.4f}, f1={open_metrics['f1']:.4f}"
-    )
-    print(
-        f"Overall -> acc={overall_metrics['accuracy']:.4f}, p={overall_metrics['precision']:.4f}, "
-        f"r={overall_metrics['recall']:.4f}, f1={overall_metrics['f1']:.4f}"
-    )
+    print(f"Yes/No  -> accuracy={yesno_metrics['accuracy']:.4f}")
+    print(f"Open    -> accuracy={open_metrics['accuracy']:.4f}")
+    print(f"Overall -> accuracy={overall_metrics['accuracy']:.4f}")
     print("-" * 72)
     print(
         f"BLEU-1={text_metrics['bleu_1']:.4f}, BLEU-4={text_metrics['bleu_4']:.4f}, "
