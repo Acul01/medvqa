@@ -149,21 +149,23 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
     y = [r["risk"] for r in curve_rows]
     t = [r["threshold"] for r in curve_rows]
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, ax1 = plt.subplots(1, 1, figsize=(8, 5))
+    ax2 = ax1.twinx()
 
-    # Main risk-coverage curve (line only; no markers)
-    axes[0].plot(x, y, linewidth=2)
-    axes[0].set_xlabel("Coverage")
-    axes[0].set_ylabel("Risk")
-    axes[0].set_title(title)
-    axes[0].grid(alpha=0.25)
+    # Main risk-coverage curve (left y-axis)
+    line_risk = ax1.plot(x, y, linewidth=2, color="tab:blue", label="Risk")[0]
+    ax1.set_xlabel("Coverage")
+    ax1.set_ylabel("Risk", color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+    ax1.set_title(title)
+    ax1.grid(alpha=0.25)
 
-    # Threshold trace for easy operating-point lookup
-    axes[1].plot(x, t, linewidth=2, color="tab:orange")
-    axes[1].set_xlabel("Coverage")
-    axes[1].set_ylabel("Entropy threshold")
-    axes[1].set_title("Threshold vs Coverage")
-    axes[1].grid(alpha=0.25)
+    # Threshold trace (right y-axis)
+    line_thr = ax2.plot(x, t, linewidth=2, color="tab:orange", label="Entropy threshold")[0]
+    ax2.set_ylabel("Entropy threshold", color="tab:orange")
+    ax2.tick_params(axis="y", labelcolor="tab:orange")
+
+    ax1.legend([line_risk, line_thr], ["Risk", "Entropy threshold"], loc="best")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=180)
