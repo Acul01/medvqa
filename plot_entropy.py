@@ -33,13 +33,15 @@ def load_results(path: Path) -> List[Dict]:
     return data
 
 
-def build_plot_rows(results: List[Dict]) -> List[Dict]:
+def build_plot_rows(results: List[Dict], max_entropy: float | None = None) -> List[Dict]:
     rows: List[Dict] = []
     for r in results:
         entropy = r.get("entropy")
         gt = r.get("ground_truth_answer")
         pred = r.get("predicted_answer", "")
         if not is_valid_number(entropy):
+            continue
+        if max_entropy is not None and float(entropy) > max_entropy:
             continue
         if gt is None or str(gt).strip() == "":
             continue
@@ -201,6 +203,12 @@ def parse_args():
     parser.add_argument("--results_file", type=str, required=True, help="Path to results JSON file")
     parser.add_argument("--output_file", type=str, default=None, help="Path for saved figure (png)")
     parser.add_argument("--num_bins", type=int, default=10, help="Number of entropy bins for trend line")
+    parser.add_argument(
+        "--max_entropy",
+        type=float,
+        default=0.5,
+        help="Only include samples with entropy <= this threshold (default: 0.5)",
+    )
     return parser.parse_args()
 
 
@@ -211,9 +219,12 @@ def main():
         raise FileNotFoundError(f"Results file not found: {results_path}")
 
     results = load_results(results_path)
-    rows = build_plot_rows(results)
+    rows = build_plot_rows(results, max_entropy=args.max_entropy)
     if not rows:
-        raise ValueError("No plottable rows found. Need valid ground_truth_answer + numeric entropy.")
+        raise ValueError(
+            "No plottable rows found. Need valid ground_truth_answer + numeric entropy "
+            f"within threshold (max_entropy={args.max_entropy})."
+        )
 
     if args.output_file:
         output_path = Path(args.output_file)
@@ -222,6 +233,7 @@ def main():
 
     plot_entropy_relationships(rows, output_path=output_path, num_bins=max(2, args.num_bins))
     print(f"Loaded rows: {len(rows)}")
+    print(f"Entropy filter: <= {args.max_entropy}")
     print(f"Saved plot: {output_path}")
 
 
