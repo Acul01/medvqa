@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import pandas as pd
+from bert_score import BERTScorer
+from tqdm import tqdm
 
 from utils.load_data import MedicalVQALoader, VQASample
 
@@ -69,29 +71,59 @@ def build_train_vocab(
 
 
 def bertscore_topk(
+    scorer: BERTScorer,
     gt_text: str,
     candidates: List[str],
     top_k: int,
     batch_size: int,
-    lang: str,
-    device: str | None,
 ) -> Tuple[List[int], List[float]]:
     """Return indices and scores for top-k candidates by BERTScore F1."""
     if not candidates or top_k <= 0:
         return [], []
 
-    from bert_score import score as bert_score_fn
-
     refs = [gt_text] * len(candidates)
-    kwargs = {"lang": lang, "verbose": False, "batch_size": batch_size}
-    if device:
-        kwargs["device"] = device
-
-    _, _, f1 = bert_score_fn(candidates, refs, **kwargs)
+    _, _, f1 = scorer.score(candidates, refs, batch_size=batch_size)
     scores = f1.tolist()
     ranked_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
     keep = ranked_idx[:top_k]
     return keep, [scores[i] for i in keep]
+
+
+class EmbeddingPreRetriever:
+    """Optional semantic pre-retrieval to reduce BERTScore candidate set."""
+
+    def __init__(self, model_name: str, candidate_norms: List[str], candidate_texts: List[str], device: str | None):
+        try:
+            from sentence_transformers import SentenceTransformer, util
+        except ImportError as exc:
+            raise ImportError(
+                "Pre-retrieval requires sentence-transformers. "
+                "Install with: pip install sentence-transformers"
+            ) from exc
+
+        self._util = util
+        self.model = SentenceTransformer(model_name, device=device)
+        self.candidate_norms = candidate_norms
+        self.candidate_embeddings = self.model.encode(
+            candidate_texts,
+            convert_to_tensor=True,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+        )
+
+    def top_k_norms(self, query_text: str, top_k: int) -> List[str]:
+        if top_k <= 0 or not self.candidate_norms:
+            return []
+        query_emb = self.model.encode(
+            [query_text],
+            convert_to_tensor=True,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+        )
+        sims = self._util.cos_sim(query_emb, self.candidate_embeddings)[0]
+        k = min(top_k, len(self.candidate_norms))
+        top_idx = sims.topk(k=k).indices.tolist()
+        return [self.candidate_norms[i] for i in top_idx]
 
 
 def sample_fallback_distractors(
@@ -140,9 +172,12 @@ def build_mc_for_dataset(
     rng: random.Random,
     num_distractors: int,
     batch_size: int,
-    lang: str,
-    device: str | None,
+    scorer: BERTScorer,
     strip_punctuation: bool,
+    use_pre_retrieval: bool,
+    pre_retrieval_top_k: int,
+    embedding_model: str,
+    device: str | None,
 ) -> None:
     print(f"\n=== Dataset: {dataset_slug} ===")
     splits = list(infer_splits(loader, dataset_slug))
@@ -157,11 +192,25 @@ def build_mc_for_dataset(
     all_vocab_norms = list(norm_to_canonical.keys())
     print(f"Train vocab size (normalized): {len(all_vocab_norms)}")
 
-    # Cache top distractor norms per normalized GT answer.
-    top_cache: Dict[str, Tuple[List[str], List[float]]] = {}
-
     dataset_out = output_root / dataset_slug
     ensure_output_dir(dataset_out)
+
+    pre_retriever = None
+    if use_pre_retrieval:
+        print(
+            f"Initializing embedding pre-retrieval with model={embedding_model} "
+            f"(top_k={pre_retrieval_top_k})"
+        )
+        try:
+            pre_retriever = EmbeddingPreRetriever(
+                model_name=embedding_model,
+                candidate_norms=all_vocab_norms,
+                candidate_texts=[norm_to_canonical[n] for n in all_vocab_norms],
+                device=device,
+            )
+        except ImportError as exc:
+            print(f"Warning: {exc}")
+            print("Continuing without pre-retrieval for this dataset.")
 
     for split in splits:
         samples = loader.load_dataset(dataset_slug, split)
@@ -172,28 +221,54 @@ def build_mc_for_dataset(
         all_selected_scores: List[float] = []
         short_answer_count = 0
 
+        # Rank once per unique normalized GT answer in this split.
+        unique_gt_norm_to_original: Dict[str, str] = {}
         for sample in samples:
+            gt_original = str(sample.answer or "").strip()
+            gt_norm = normalize_answer(gt_original, strip_punctuation=strip_punctuation)
+            if gt_norm and gt_norm not in unique_gt_norm_to_original:
+                unique_gt_norm_to_original[gt_norm] = gt_original
+
+        top_cache: Dict[str, Tuple[List[str], List[float]]] = {}
+        ranking_iter = tqdm(
+            unique_gt_norm_to_original.items(),
+            total=len(unique_gt_norm_to_original),
+            desc=f"{dataset_slug}/{split} ranking",
+            unit="gt",
+        )
+        for gt_norm, gt_original in ranking_iter:
+            candidate_norms = [n for n in all_vocab_norms if n != gt_norm]
+            if pre_retriever:
+                pre_norms = pre_retriever.top_k_norms(gt_original, pre_retrieval_top_k)
+                pre_norms = [n for n in pre_norms if n != gt_norm]
+                if pre_norms:
+                    pre_set = set(pre_norms)
+                    candidate_norms = [n for n in candidate_norms if n in pre_set]
+
+            candidate_texts = [norm_to_canonical[n] for n in candidate_norms]
+            idxs, scores = bertscore_topk(
+                scorer=scorer,
+                gt_text=gt_original,
+                candidates=candidate_texts,
+                top_k=num_distractors,
+                batch_size=batch_size,
+            )
+            ranked_norms = [candidate_norms[i] for i in idxs]
+            top_cache[gt_norm] = (ranked_norms, scores)
+
+        sample_iter = tqdm(
+            samples,
+            total=len(samples),
+            desc=f"{dataset_slug}/{split} building",
+            unit="sample",
+        )
+        for sample in sample_iter:
             gt_original = str(sample.answer or "").strip()
             gt_norm = normalize_answer(gt_original, strip_punctuation=strip_punctuation)
             if len(gt_norm.split()) <= 1:
                 short_answer_count += 1
 
-            if gt_norm in top_cache:
-                ranked_norms, ranked_scores = top_cache[gt_norm]
-            else:
-                candidate_norms = [n for n in all_vocab_norms if n != gt_norm]
-                candidate_texts = [norm_to_canonical[n] for n in candidate_norms]
-                idxs, scores = bertscore_topk(
-                    gt_text=gt_original,
-                    candidates=candidate_texts,
-                    top_k=num_distractors,
-                    batch_size=batch_size,
-                    lang=lang,
-                    device=device,
-                )
-                ranked_norms = [candidate_norms[i] for i in idxs]
-                ranked_scores = scores
-                top_cache[gt_norm] = (ranked_norms, ranked_scores)
+            ranked_norms, ranked_scores = top_cache.get(gt_norm, ([], []))
 
             selected_norms = list(ranked_norms[:num_distractors])
             selected_scores = list(ranked_scores[:num_distractors])
@@ -290,7 +365,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lang", type=str, default="en")
+    parser.add_argument("--bert_model_type", type=str, default="roberta-large")
+    parser.add_argument("--num_layers", type=int, default=17)
     parser.add_argument("--device", type=str, default=None, help="Optional torch device for BERTScore.")
+    parser.add_argument(
+        "--disable_pre_retrieval",
+        action="store_true",
+        help="Disable optional embedding pre-retrieval stage.",
+    )
+    parser.add_argument(
+        "--pre_retrieval_top_k",
+        type=int,
+        default=200,
+        help="Candidate count kept by embedding pre-retrieval before BERTScore re-ranking.",
+    )
+    parser.add_argument(
+        "--embedding_model",
+        type=str,
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        help="Sentence-Transformer model for pre-retrieval.",
+    )
     parser.add_argument(
         "--keep_punctuation_in_normalization",
         action="store_true",
@@ -317,8 +411,24 @@ def main() -> None:
     print(f"  seed={args.seed}")
     print(f"  batch_size={args.batch_size}")
     print(f"  lang={args.lang}")
+    print(f"  bert_model_type={args.bert_model_type}")
+    print(f"  num_layers={args.num_layers}")
     print(f"  device={args.device}")
+    print(f"  use_pre_retrieval={not args.disable_pre_retrieval}")
+    print(f"  pre_retrieval_top_k={args.pre_retrieval_top_k}")
+    print(f"  embedding_model={args.embedding_model}")
     print(f"  strip_punctuation={not args.keep_punctuation_in_normalization}")
+
+    print("Initializing BERTScorer once...")
+    scorer_kwargs = {
+        "lang": args.lang,
+        "model_type": args.bert_model_type,
+        "num_layers": args.num_layers,
+        "rescale_with_baseline": False,
+    }
+    if args.device:
+        scorer_kwargs["device"] = args.device
+    scorer = BERTScorer(**scorer_kwargs)
 
     for dataset_slug in args.datasets:
         build_mc_for_dataset(
@@ -328,9 +438,12 @@ def main() -> None:
             rng=rng,
             num_distractors=args.num_distractors,
             batch_size=args.batch_size,
-            lang=args.lang,
-            device=args.device,
+            scorer=scorer,
             strip_punctuation=not args.keep_punctuation_in_normalization,
+            use_pre_retrieval=not args.disable_pre_retrieval,
+            pre_retrieval_top_k=args.pre_retrieval_top_k,
+            embedding_model=args.embedding_model,
+            device=args.device,
         )
 
     print("\nDone.")
