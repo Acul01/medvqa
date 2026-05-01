@@ -134,9 +134,10 @@ def _resolve_device(device_arg: str | None) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _load_mask_generator(model_type: str, checkpoint_path: str, device: str):
+def _load_predictor(model_type: str, checkpoint_path: str, device: str):
+    """Load MedSAM/SAM model as SamPredictor (supports bounding-box prompts)."""
     try:
-        from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
+        from segment_anything import SamPredictor, sam_model_registry
     except ImportError as exc:
         raise ImportError(
             "Could not import segment_anything. Install SAM/MedSAM dependencies first."
@@ -145,7 +146,29 @@ def _load_mask_generator(model_type: str, checkpoint_path: str, device: str):
     model = sam_model_registry[model_type](checkpoint=checkpoint_path)
     model.to(device=device)
     model.eval()
-    return SamAutomaticMaskGenerator(model=model)
+    return SamPredictor(model)
+
+
+def _generate_masks(predictor, image_np: np.ndarray) -> list[dict]:
+    """
+    Run MedSAM inference with the full-image bounding box as prompt.
+
+    MedSAM was fine-tuned for prompted (bbox) segmentation, not automatic
+    mask generation. Passing the full image as the bbox lets MedSAM locate
+    the most salient medical structure. multimask_output=True returns three
+    candidate masks; we sort by predicted_iou so _select_primary_roi picks
+    the best one.
+    """
+    h, w = image_np.shape[:2]
+    predictor.set_image(image_np)
+    bbox = np.array([0, 0, w, h], dtype=float)
+    masks, scores, _ = predictor.predict(box=bbox, multimask_output=True)
+    result = [
+        {"segmentation": mask, "predicted_iou": float(score)}
+        for mask, score in zip(masks, scores)
+    ]
+    result.sort(key=lambda x: x["predicted_iou"], reverse=True)
+    return result
 
 
 def _mask_to_bbox(mask: np.ndarray) -> list[int]:
@@ -358,8 +381,8 @@ def main() -> None:
     index_dir = output_root / "index"
     index_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Initializing MedSAM/SAM mask generator...")
-    mask_generator = _load_mask_generator(
+    print("Initializing MedSAM/SAM predictor (bbox-prompt mode)...")
+    predictor = _load_predictor(
         model_type=args.sam_model_type,
         checkpoint_path=args.sam_checkpoint,
         device=device,
@@ -408,7 +431,7 @@ def main() -> None:
                     image_np = np.array(image)
                     h, w = image_np.shape[:2]
 
-                    masks = mask_generator.generate(image_np)
+                    masks = _generate_masks(predictor, image_np)
                     selected = _select_primary_roi(
                         masks=masks,
                         question=sample.question,
