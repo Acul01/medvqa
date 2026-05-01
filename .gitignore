@@ -1,5 +1,7 @@
 data/
 
+external/loba/
+
 # Trainings-Outputs (können sehr groß sein!)
 outputs/
 *.pt

@@ -40,6 +40,7 @@ DATASET_INSTRUCTIONS = {
     "pathvqa": MED_VQA_INSTRUCTION,
     "slake": MED_VQA_INSTRUCTION,
     "vqarad": MED_VQA_INSTRUCTION,
+    "medvqa2019": MED_VQA_INSTRUCTION,
 }
 
 
@@ -471,7 +472,7 @@ def build_parser():
     p_extract = sub.add_parser("extract", help="Extract multimodal features + labels")
     p_extract.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     p_extract.add_argument("--data_root", type=str, default="data")
-    p_extract.add_argument("--dataset", type=str, required=True, choices=["pathvqa", "slake", "vqarad"])
+    p_extract.add_argument("--dataset", type=str, required=True, choices=["pathvqa", "slake", "vqarad", "medvqa2019"])
     p_extract.add_argument("--split", type=str, default="validation")
     p_extract.add_argument("--features_dir", type=str, default=DEFAULT_FEATURES_DIR)
     p_extract.add_argument("--n_samples", type=int, default=None)

@@ -88,6 +88,16 @@ class MedicalVQALoader:
                     "test": "vqarad_test.csv"
                 },
                 "format": "csv"
+            },
+            "Med-VQA-2019": {
+                "annotations_dir": "medvqa2019_annotations",
+                "images_dir": "medvqa2019_images",
+                "annotation_files": {
+                    "train": "medvqa2019_train.csv",
+                    "validation": "medvqa2019_validation.csv",
+                    "test": "medvqa2019_test.csv"
+                },
+                "format": "csv"
             }
         }
         
@@ -95,7 +105,8 @@ class MedicalVQALoader:
         self.dataset_name_mapping = {
             "pathvqa": "PathVQA",
             "slake": "SLAKE",
-            "vqarad": "VQA-Rad"
+            "vqarad": "VQA-Rad",
+            "medvqa2019": "Med-VQA-2019"
         }
     
     def _normalize_dataset_name(self, dataset_name: str) -> str:
@@ -321,3 +332,9 @@ def load_vqarad(data_root: str = "data", split: str = "train") -> List[VQASample
     """Convenience function to load VQA-Rad dataset"""
     loader = MedicalVQALoader(data_root)
     return loader.load_dataset("VQA-Rad", split)
+
+
+def load_medvqa2019(data_root: str = "data", split: str = "train") -> List[VQASample]:
+    """Convenience function to load Med-VQA-2019 dataset"""
+    loader = MedicalVQALoader(data_root)
+    return loader.load_dataset("Med-VQA-2019", split)

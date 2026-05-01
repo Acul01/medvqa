@@ -42,6 +42,7 @@ DATASET_INSTRUCTIONS = {
     "pathvqa": MED_VQA_INSTRUCTION,
     "slake": MED_VQA_INSTRUCTION,
     "vqarad": MED_VQA_INSTRUCTION,
+    "medvqa2019": MED_VQA_INSTRUCTION,
 }
 
 
@@ -193,8 +194,8 @@ def parse_args():
     parser.add_argument("--data_root", type=str, default="data",
                         help="Root directory containing datasets")
     parser.add_argument("--dataset", type=str, required=True,
-                        choices=["pathvqa", "slake", "vqarad", "all"],
-                        help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad (prompt names from each sample)")
+                        choices=["pathvqa", "slake", "vqarad", "medvqa2019", "all"],
+                        help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad+Med-VQA-2019 (prompt names from each sample)")
     parser.add_argument("--train_split", type=str, default="train",
                         help="Training split name")
     parser.add_argument("--val_split", type=str, default="validation",

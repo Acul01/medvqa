@@ -25,7 +25,7 @@ from tqdm import tqdm
 from utils.load_data import MedicalVQALoader
 
 
-SUPPORTED_DATASETS = ("pathvqa", "vqarad", "slake")
+SUPPORTED_DATASETS = ("pathvqa", "vqarad", "slake", "medvqa2019")
 SUPPORTED_VARIANTS = ("overlay", "crop")
 
 

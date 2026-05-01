@@ -43,12 +43,14 @@ DATASET_INSTRUCTIONS = {
     "pathvqa": MED_VQA_INSTRUCTION,
     "slake": MED_VQA_INSTRUCTION,
     "vqarad": MED_VQA_INSTRUCTION,
+    "medvqa2019": MED_VQA_INSTRUCTION,
 }
 
 DATASET_MAX_NEW_TOKENS = {
     "pathvqa": 64,
     "slake": 64,
     "vqarad": 64,
+    "medvqa2019": 64,
 }
 
 
@@ -67,7 +69,7 @@ def parse_args():
     parser.add_argument("--data_root", type=str, default="data",
                        help="Root directory containing datasets")
     parser.add_argument("--dataset", type=str, required=True,
-                       choices=["pathvqa", "slake", "vqarad"],
+                       choices=["pathvqa", "slake", "vqarad", "medvqa2019"],
                        help="Dataset to use")
     parser.add_argument("--split", type=str, default="test",
                        help="Split to evaluate on")

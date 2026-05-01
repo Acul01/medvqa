@@ -24,11 +24,12 @@ from tqdm import tqdm
 from utils.load_data import MedicalVQALoader, VQASample
 
 
-DATASETS = ["pathvqa", "slake", "vqarad"]
+DATASETS = ["pathvqa", "slake", "vqarad", "medvqa2019"]
 CANONICAL_NAME = {
     "pathvqa": "PathVQA",
     "slake": "SLAKE",
     "vqarad": "VQA-Rad",
+    "medvqa2019": "Med-VQA-2019",
 }
 
 
