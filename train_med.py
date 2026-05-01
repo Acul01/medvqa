@@ -28,22 +28,12 @@ from llava.mm_utils import process_images, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
 
-from utils.load_data import MedicalVQALoader, combined_dataset_instruction
+from utils.load_data import MedicalVQALoader
+from utils.mc_vqa import format_mc_user_text
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 
-MED_VQA_INSTRUCTION = (
-    "You are a medical expert. Answer the question about the medical image concisely.\n"
-    "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
-)
-
-DATASET_INSTRUCTIONS = {
-    "pathvqa": MED_VQA_INSTRUCTION,
-    "slake": MED_VQA_INSTRUCTION,
-    "vqarad": MED_VQA_INSTRUCTION,
-    "medvqa2019": MED_VQA_INSTRUCTION,
-}
 
 
 # ── Dataset ─────────────────────────────────────────────────────────────────────
@@ -72,7 +62,6 @@ class LLaVAMedTrainDataset(Dataset):
         conv_template="mistral_instruct",
         max_length=512,
         dataset="vqarad",
-        use_per_sample_instruction: bool = False,
     ):
         self.samples = samples
         self.tokenizer = tokenizer
@@ -80,12 +69,6 @@ class LLaVAMedTrainDataset(Dataset):
         self.model_config = model_config
         self.conv_template = conv_template
         self.max_length = max_length
-        self.use_per_sample_instruction = use_per_sample_instruction
-        if use_per_sample_instruction:
-            self.instruction = None
-        else:
-            self.instruction = DATASET_INSTRUCTIONS[dataset]
-
         # Ensure pad token
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -103,12 +86,10 @@ class LLaVAMedTrainDataset(Dataset):
         image_tensor = image_tensor.squeeze(0)  # [C, H, W]
 
         # ── Build conversation (same as inference_med.py, but with answer) ─
-        instruction = (
-            combined_dataset_instruction(sample.dataset)
-            if self.use_per_sample_instruction
-            else self.instruction
-        )
-        question = f"{DEFAULT_IMAGE_TOKEN}\n{sample.question}\n{instruction}"
+        if not sample.mc_options:
+            raise ValueError("MC options missing in sample; ensure mc_data_root points to MC exports.")
+        mc_user_text = format_mc_user_text(sample.question, sample.mc_options)
+        question = f"{DEFAULT_IMAGE_TOKEN}\n{mc_user_text}"
 
         # Build prompt WITH answer (full training sequence)
         conv_full = conv_templates[self.conv_template].copy()
@@ -180,7 +161,9 @@ def parse_args():
 
     # Data
     parser.add_argument("--data_root", type=str, default="data",
-                        help="Root directory containing datasets")
+                        help="Root directory containing raw image folders")
+    parser.add_argument("--mc_data_root", type=str, default="data_mc_openai",
+                        help="Root directory containing MC JSON/CSV exports")
     parser.add_argument("--dataset", type=str, required=True,
                         choices=["pathvqa", "slake", "vqarad", "medvqa2019", "all"],
                         help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad+Med-VQA-2019 (prompt names from each sample)")
@@ -320,10 +303,8 @@ def main():
     print(f"Model loaded (context_len={context_len})")
 
     # ── Load datasets ───────────────────────────────────────────────────
-    loader = MedicalVQALoader(data_root=args.data_root)
+    loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     use_all = args.dataset == "all"
-    per_sample_instr = use_all
-
     if use_all:
         # Source tag per sample: VQASample.dataset. VQA-Rad val uses test split (no validation in loader).
         print(f"Loading combined PathVQA+SLAKE+VQA-Rad {args.train_split} split...")
@@ -336,7 +317,6 @@ def main():
             conv_template=args.conv_template,
             max_length=args.max_length,
             dataset=args.dataset,
-            use_per_sample_instruction=per_sample_instr,
         )
         print(f"Train: {len(train_dataset)} samples ({dict(Counter(s.dataset for s in train_samples))})")
     else:
@@ -350,7 +330,6 @@ def main():
             conv_template=args.conv_template,
             max_length=args.max_length,
             dataset=args.dataset,
-            use_per_sample_instruction=False,
         )
         print(f"Train: {len(train_dataset)} samples")
 
@@ -372,7 +351,6 @@ def main():
             conv_template=args.conv_template,
             max_length=args.max_length,
             dataset=args.dataset,
-            use_per_sample_instruction=per_sample_instr,
         )
         if use_all:
             print(f"Validation: {len(val_dataset)} samples ({dict(Counter(s.dataset for s in val_samples))})")

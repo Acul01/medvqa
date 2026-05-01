@@ -12,7 +12,6 @@ import csv
 import json
 import math
 import random
-import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -25,33 +24,16 @@ from tqdm import tqdm
 
 from utils.load_data import MedicalVQALoader
 from utils.save_results import clean_answer
+from utils.mc_vqa import format_mc_user_text, parse_predicted_letter
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 DEFAULT_FEATURES_DIR = "results/selector_features"
 DEFAULT_SELECTOR_DIR = "results/selector_models"
 
-MED_VQA_INSTRUCTION = (
-    "You are a medical expert. Answer the question about the medical image concisely.\n"
-    "Keep the answer as short as possible. If it is a yes/no question, answer only 'yes' or 'no'."
-)
-
-DATASET_INSTRUCTIONS = {
-    "pathvqa": MED_VQA_INSTRUCTION,
-    "slake": MED_VQA_INSTRUCTION,
-    "vqarad": MED_VQA_INSTRUCTION,
-    "medvqa2019": MED_VQA_INSTRUCTION,
-}
-
-
-def normalize_answer(answer: str) -> str:
-    answer = (answer or "").lower()
-    answer = re.sub(r"[^\w\s]", "", answer)
-    return " ".join(answer.split())
-
-
-def exact_match(predicted: str, gt: str) -> float:
-    return float(normalize_answer(predicted) == normalize_answer(gt))
+def exact_match_letter(predicted_text: str, gt_letter: str, n_options: int) -> float:
+    pred_letter = parse_predicted_letter(predicted_text, num_options=n_options)
+    return float(pred_letter == (gt_letter or "").strip().upper())
 
 
 def is_valid_number(v) -> bool:
@@ -110,10 +92,9 @@ def load_llava_med(model_path: str, device: torch.device):
     return tokenizer, model, image_processor
 
 
-def build_prompt(question: str, dataset: str, conv_template: str, default_image_token: str, conv_templates):
-    instruction = DATASET_INSTRUCTIONS[dataset]
+def build_prompt(question: str, options: List[str], conv_template: str, default_image_token: str, conv_templates):
     conv = conv_templates[conv_template].copy()
-    user_text = f"{default_image_token}\n{question}\n{instruction}"
+    user_text = f"{default_image_token}\n{format_mc_user_text(question, options)}"
     conv.append_message(conv.roles[0], user_text)
     conv.append_message(conv.roles[1], None)
     return conv.get_prompt()
@@ -127,7 +108,7 @@ def extract_features(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer, model, image_processor = load_llava_med(args.model_path, device=device)
 
-    loader = MedicalVQALoader(data_root=args.data_root)
+    loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
     if args.n_samples is not None:
         samples = samples[: args.n_samples]
@@ -141,14 +122,14 @@ def extract_features(args):
 
     with torch.no_grad():
         for sample in tqdm(samples, desc="Extracting selector features"):
-            if sample.answer is None or str(sample.answer).strip() == "":
+            if not sample.mc_options or sample.mc_correct_index is None:
                 continue
 
             image = Image.open(sample.image_path).convert("RGB")
             image_tensor = process_images([image], image_processor, model.config).to(device, dtype=torch.float16)
             prompt = build_prompt(
                 question=sample.question,
-                dataset=args.dataset,
+                options=sample.mc_options,
                 conv_template=args.conv_template,
                 default_image_token=DEFAULT_IMAGE_TOKEN,
                 conv_templates=conv_templates,
@@ -170,7 +151,7 @@ def extract_features(args):
             gen_ids = generation.sequences[0]
             pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
             pred = clean_answer(pred)
-            label = exact_match(pred, str(sample.answer))
+            label = exact_match_letter(pred, sample.answer, n_options=len(sample.mc_options))
 
             # Build multimodal features from model forward.
             outputs = model(
@@ -183,7 +164,8 @@ def extract_features(args):
             last_hidden = outputs.hidden_states[-1]
 
             # Text-only question embedding summary
-            q_ids = tokenizer(sample.question, return_tensors="pt", truncation=True, max_length=128)["input_ids"].to(device)
+            mc_text = format_mc_user_text(sample.question, sample.mc_options)
+            q_ids = tokenizer(mc_text, return_tensors="pt", truncation=True, max_length=256)["input_ids"].to(device)
             q_embed = emb_layer(q_ids)
 
             # Answer token embedding summary from generated ids
@@ -207,7 +189,8 @@ def extract_features(args):
                 {
                     "image_path": sample.image_path,
                     "question": sample.question,
-                    "ground_truth_answer": sample.answer,
+                    "ground_truth_letter": sample.answer,
+                    "options": sample.mc_options,
                     "predicted_answer": pred,
                     "correct": int(label),
                     "entropy": entropy,
@@ -472,11 +455,12 @@ def build_parser():
     p_extract = sub.add_parser("extract", help="Extract multimodal features + labels")
     p_extract.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     p_extract.add_argument("--data_root", type=str, default="data")
+    p_extract.add_argument("--mc_data_root", type=str, default="data_mc_openai")
     p_extract.add_argument("--dataset", type=str, required=True, choices=["pathvqa", "slake", "vqarad", "medvqa2019"])
     p_extract.add_argument("--split", type=str, default="validation")
     p_extract.add_argument("--features_dir", type=str, default=DEFAULT_FEATURES_DIR)
     p_extract.add_argument("--n_samples", type=int, default=None)
-    p_extract.add_argument("--max_new_tokens", type=int, default=64)
+    p_extract.add_argument("--max_new_tokens", type=int, default=8)
     p_extract.add_argument("--conv_template", type=str, default="mistral_instruct")
 
     p_train = sub.add_parser("train", help="Train selector MLP regressor")

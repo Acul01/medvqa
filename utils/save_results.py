@@ -1,7 +1,4 @@
-"""
-Shared utilities for saving inference results in multiple formats
-and maintaining a results history log.
-"""
+"""Utilities for saving inference outputs and history logs."""
 
 import csv
 import json
@@ -10,107 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-from bert_score import score as bert_score_fn
-from rouge_score import rouge_scorer
-
-_smoother = SmoothingFunction().method1
-
-BLEU_WEIGHTS = {
-    1: (1, 0, 0, 0),
-    2: (0.5, 0.5, 0, 0),
-    3: (1/3, 1/3, 1/3, 0),
-    4: (0.25, 0.25, 0.25, 0.25),
-}
-
-
-# ── Answer cleaning ─────────────────────────────────────────────────────────────
-
-def clean_answer(text: str) -> str:
-    """Clean a generated answer by removing noise tokens.
-
-    Applied identically for both LLaVA and LLaVA-Med outputs.
-
-    Steps:
-        1. Strip whitespace
-        2. Remove emoji / non-ASCII symbols (e.g. unicode garbage)
-        3. Collapse multiple whitespace
-        4. Strip trailing isolated digits (e.g. "yes 4" → "yes"),
-           but keep standalone numbers ("4" stays "4")
-        5. Strip trailing punctuation
-    """
-    text = text.strip()
-    text = re.sub(r'[^\x00-\x7F\u00C0-\u00FF]+', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    text = re.sub(r'\s+\d+$', '', text)
-    text = re.sub(r'[.,;:!?]+$', '', text)
-    return text.strip()
-
-
-def clean_yesno_answer(text: str) -> str:
-    """Extract 'yes' or 'no' from a generated answer for yes/no questions.
-
-    Handles garbage tokens like "yes 4", "yes, it is", "no there is not"
-    by checking only the first word.
-    """
-    text = clean_answer(text).lower()
-    if text.startswith("yes"):
-        return "yes"
-    if text.startswith("no"):
-        return "no"
-    return text
-
-
-def compute_bleu_scores(prediction: str, reference: str) -> dict:
-    """Compute BLEU-1 through BLEU-4 for a single prediction/reference pair."""
-    pred_tokens = prediction.lower().strip().split()
-    ref_tokens = reference.lower().strip().split()
-    if not pred_tokens or not ref_tokens:
-        return {f"bleu_{n}": 0.0 for n in range(1, 5)}
-    scores = {}
-    for n, weights in BLEU_WEIGHTS.items():
-        scores[f"bleu_{n}"] = sentence_bleu(
-            [ref_tokens], pred_tokens,
-            weights=weights, smoothing_function=_smoother,
-        )
-    return scores
-
-
-_rouge_scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
-
-ROUGE_KEYS = ["rouge1", "rouge2", "rougeL"]
-
-
-def compute_rouge_scores(prediction: str, reference: str) -> dict:
-    """Compute ROUGE-1, ROUGE-2, ROUGE-L F1 for a single prediction/reference pair."""
-    pred = prediction.lower().strip()
-    ref = reference.lower().strip()
-    if not pred or not ref:
-        return {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
-    scores = _rouge_scorer.score(ref, pred)
-    return {k: scores[k].fmeasure for k in ROUGE_KEYS}
-
-
-def compute_bert_scores(predictions: list[str], references: list[str]) -> dict:
-    """Compute BERTScore (Precision, Recall, F1) for a batch of predictions.
-
-    Returns dict with 'per_sample' (list of per-sample F1) and
-    'avg' (dict with mean precision, recall, f1).
-    """
-    if not predictions or not references:
-        return {"per_sample": [], "avg": {"bert_precision": 0.0, "bert_recall": 0.0, "bert_f1": 0.0}}
-
-    P, R, F1 = bert_score_fn(predictions, references, lang="en", verbose=False)
-    per_sample = F1.tolist()
-    return {
-        "per_sample": per_sample,
-        "avg": {
-            "bert_precision": P.mean().item(),
-            "bert_recall": R.mean().item(),
-            "bert_f1": F1.mean().item(),
-        },
-    }
-
 
 RESULTS_DIR = Path("results")
 HISTORY_FILE = RESULTS_DIR / "results_history.csv"
@@ -122,6 +18,9 @@ HISTORY_COLUMNS = [
     "dataset",
     "n_samples",
     "exact_match_accuracy",
+    "mc_overall_accuracy",
+    "mc_closed_accuracy",
+    "mc_open_accuracy",
     "yesno_accuracy",
     "open_accuracy",
     "bleu_1",
@@ -135,8 +34,25 @@ HISTORY_COLUMNS = [
 ]
 
 
+def clean_answer(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"[^\x00-\x7F\u00C0-\u00FF]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+\d+$", "", text)
+    text = re.sub(r"[.,;:!?]+$", "", text)
+    return text.strip()
+
+
+def clean_yesno_answer(text: str) -> str:
+    text = clean_answer(text).lower()
+    if text.startswith("yes"):
+        return "yes"
+    if text.startswith("no"):
+        return "no"
+    return text
+
+
 def _derive_model_short_name(model_path: str) -> str:
-    """Derive a short, filename-safe model name from the full path/ID."""
     name = Path(model_path).name
     name_lower = name.lower()
     if "llava-med" in name_lower:
@@ -159,12 +75,10 @@ def save_results(
     yesno_acc: float | None = None,
     open_acc: float | None = None,
     results_dir: str | Path = RESULTS_DIR,
+    mc_overall_acc: float | None = None,
+    mc_closed_acc: float | None = None,
+    mc_open_acc: float | None = None,
 ) -> None:
-    """Save inference results as JSON, CSV, XLSX and append to history.
-
-    Files are written to ``results_dir`` with the naming scheme
-    ``{model}_{dataset}_{n_samples}.{ext}``.
-    """
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -172,34 +86,30 @@ def save_results(
     n_tag = str(n_samples) if n_samples is not None else "all"
     base_name = f"{model_name}_{dataset}_{n_tag}"
 
-    # ── JSON ────────────────────────────────────────────────────────────────
     json_path = results_dir / f"{base_name}.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     print(f"  Saved: {json_path}")
 
-    # ── Tabular export prep ─────────────────────────────────────────────────
     df = pd.DataFrame(results)
     df_export = df.copy()
-    if "entropy_tokens" in df_export.columns:
-        df_export["entropy_tokens"] = df_export["entropy_tokens"].apply(
-            lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v
-        )
+    for col in ("entropy_tokens", "options"):
+        if col in df_export.columns:
+            df_export[col] = df_export[col].apply(
+                lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+            )
 
-    # ── CSV ─────────────────────────────────────────────────────────────────
     csv_path = results_dir / f"{base_name}.csv"
     df_export.to_csv(csv_path, index=False, encoding="utf-8")
     print(f"  Saved: {csv_path}")
 
-    # ── XLSX ────────────────────────────────────────────────────────────────
     xlsx_path = results_dir / f"{base_name}.xlsx"
     try:
         df_export.to_excel(xlsx_path, index=False)
         print(f"  Saved: {xlsx_path}")
     except ModuleNotFoundError:
-        print(f"  Skipped XLSX (install openpyxl: pip install openpyxl)")
+        print("  Skipped XLSX (install openpyxl: pip install openpyxl)")
 
-    # ── Results history ─────────────────────────────────────────────────────
     _append_history(
         model=model_name,
         finetuned=finetuned,
@@ -212,6 +122,9 @@ def save_results(
         yesno_acc=yesno_acc,
         open_acc=open_acc,
         results_dir=results_dir,
+        mc_overall_acc=mc_overall_acc,
+        mc_closed_acc=mc_closed_acc,
+        mc_open_acc=mc_open_acc,
     )
 
 
@@ -227,8 +140,10 @@ def _append_history(
     yesno_acc: float | None = None,
     open_acc: float | None = None,
     results_dir: Path = RESULTS_DIR,
+    mc_overall_acc: float | None = None,
+    mc_closed_acc: float | None = None,
+    mc_open_acc: float | None = None,
 ) -> None:
-    """Append one row to the results history CSV."""
     history_path = results_dir / "results_history.csv"
     write_header = not history_path.exists()
 
@@ -239,6 +154,9 @@ def _append_history(
         "dataset": dataset,
         "n_samples": n_samples,
         "exact_match_accuracy": f"{exact_acc:.4f}",
+        "mc_overall_accuracy": f"{mc_overall_acc:.4f}" if mc_overall_acc is not None else "",
+        "mc_closed_accuracy": f"{mc_closed_acc:.4f}" if mc_closed_acc is not None else "",
+        "mc_open_accuracy": f"{mc_open_acc:.4f}" if mc_open_acc is not None else "",
         "yesno_accuracy": f"{yesno_acc:.4f}" if yesno_acc is not None else "",
         "open_accuracy": f"{open_acc:.4f}" if open_acc is not None else "",
         "bleu_1": f"{bleu_scores.get('bleu_1', 0):.4f}",

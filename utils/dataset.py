@@ -121,12 +121,14 @@ class MedicalVQADataset(Dataset):
             text_prompt = self.formatter.format_training_prompt(
                 question=sample.question,
                 answer=sample.answer,
-                include_image=True
+                include_image=True,
+                mc_options=sample.mc_options,
             )
         else:
             text_prompt = self.formatter.format_inference_prompt(
                 question=sample.question,
-                include_image=True
+                include_image=True,
+                mc_options=sample.mc_options,
             )
         
         # Tokenize the prompt

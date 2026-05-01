@@ -9,21 +9,34 @@ import argparse
 import csv
 import json
 import math
-import re
 from pathlib import Path
 from typing import Dict, List
 
 import matplotlib.pyplot as plt
 
 
-def normalize_answer(answer: str) -> str:
-    answer = (answer or "").lower()
-    answer = re.sub(r"[^\w\s]", "", answer)
-    return " ".join(answer.split())
+from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
 
 
-def exact_match(pred: str, gt: str) -> bool:
-    return normalize_answer(pred) == normalize_answer(gt)
+def exact_match_letter(row: Dict) -> bool:
+    gt = row.get("ground_truth_letter")
+    if not isinstance(gt, str) or not gt.strip():
+        idx = row.get("correct_index")
+        if isinstance(idx, int) and idx >= 0:
+            gt = correct_index_to_letter(idx)
+    if not isinstance(gt, str) or not gt.strip():
+        return False
+    gt = gt.strip().upper()
+
+    pred = row.get("predicted_letter")
+    if isinstance(pred, str) and pred.strip():
+        pred = pred.strip().upper()
+    else:
+        options = row.get("options")
+        n = len(options) if isinstance(options, list) else 5
+        pred = parse_predicted_letter(str(row.get("predicted_answer", "")), num_options=n)
+
+    return pred == gt
 
 
 def is_valid_number(value) -> bool:
@@ -41,11 +54,7 @@ def load_results(path: Path) -> List[Dict]:
 def metric_value_from_row(row: Dict, risk_metric: str) -> float | None:
     """Extract per-sample metric value in [0,1] for risk computation."""
     if risk_metric == "match":
-        gt = row.get("ground_truth_answer")
-        if gt is None or str(gt).strip() == "":
-            return None
-        pred = str(row.get("predicted_answer", ""))
-        return float(exact_match(pred, str(gt)))
+        return float(exact_match_letter(row))
 
     key_map = {
         "bleu1": "bleu_1",
@@ -235,7 +244,7 @@ def main():
         max_entropy=args.max_entropy,
     )
     if not samples:
-        raise ValueError("No valid samples found with ground truth and numeric entropy.")
+        raise ValueError("No valid samples found with letter labels and numeric entropy.")
 
     curve = compute_curve(samples, num_thresholds=args.num_thresholds)
     area = aurc_trapezoid(curve)

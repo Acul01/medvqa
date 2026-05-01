@@ -450,6 +450,7 @@ Kein zusätzlicher harter Trainingsconstraint nötig; Fusion primär **inferenzz
 python evaluate.py \
   --results_file results/llava_pathvqa_all.json \
   --output_file metrics_pathvqa.json
+# output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
 ```
 
 Berichtet u. a. Accuracy (gesamt, Yes/No vs. offen wo anwendbar), **BLEU-1/4**, **ROUGE-L**, **BERTScore-F1**, Mittelwert der **tokenbasierten Entropie** aus den Ergebniszeilen. Hängt an `ground_truth_answer` und `predicted_answer`.
@@ -537,9 +538,60 @@ print(loader.get_available_datasets())
 print(loader.get_available_splits("slake"))  # u. a. validate
 ```
 
-Jedes Element ist ein **`VQASample`:** `dataset`, `split`, `image_path`, `question`, `answer`, `metadata` (z. B. SLAKE: `location`, `modality`, …).
+Jedes Element ist ein **`VQASample`:** `dataset`, `split`, `image_path`, `question`, `answer` (bei MC: Zielbuchstabe), `metadata`, `mc_options`, `mc_correct_index`, `question_type`.
 
-`loader.load_combined("train")` kombiniert derzeit PathVQA, SLAKE und VQA-Rad. Med-VQA-2019 wird separat über `load_dataset("medvqa2019", ...)` geladen.
+`loader.load_combined("train")` kombiniert PathVQA, SLAKE, VQA-Rad und Med-VQA-2019.
+
+---
+
+## Multiple-Choice-Datensätze mit OpenAI
+
+Mit `build_mc_datasets_openai.py` können MC-Varianten für `pathvqa`, `slake`, `vqarad`, `medvqa2019` erzeugt werden:
+
+- **Closed/Yes-No** (`answer` = `yes` oder `no`): Optionen strikt `["yes", "no"]`
+- **Open**: 4 via OpenAI generierte falsche Optionen + GT (insgesamt 5)
+- Neues Feld pro Sample: `question_type` (`closed` oder `open`)
+
+Voraussetzung:
+
+```bash
+pip install openai
+export OPENAI_API_KEY="..."
+```
+
+Smoke-Test:
+
+```bash
+python build_mc_datasets_openai.py \
+  --data_root data \
+  --output_root data_mc_openai \
+  --datasets pathvqa slake vqarad medvqa2019 \
+  --openai_model gpt-4o-mini \
+  --n_samples 100 \
+  --save_every 20
+```
+
+Fortsetzbarer Lauf (Resume):
+
+```bash
+python build_mc_datasets_openai.py \
+  --data_root data \
+  --output_root data_mc_openai \
+  --datasets pathvqa slake vqarad medvqa2019 \
+  --openai_model gpt-4o-mini \
+  --resume
+```
+
+Ausgabe pro Datensatz:
+
+
+**MC als Standardpfad:** `MedicalVQALoader` lädt standardmäßig aus `data_mc_openai`.
+Wenn die MC-Dateien fehlen, wird ein Fehler mit Verweis auf `build_mc_datasets_openai.py` ausgegeben.
+Legacy-Freitext ist optional über `mc_data_root=None` möglich.
+
+- `<output_root>/<dataset>/<dataset>_<split>_mc_openai.json`
+- `<output_root>/<dataset>/<dataset>_<split>_mc_openai.csv`
+- Cache für Distraktoren: `<output_root>/<dataset>/openai_distractor_cache.jsonl`
 
 ---
 
@@ -584,6 +636,8 @@ Jedes Element ist ein **`VQASample`:** `dataset`, `split`, `image_path`, `questi
 # Training
 python train.py \
   --dataset pathvqa \
+  --data_root data \
+  --mc_data_root data_mc_openai \
   --output_dir ./outputs/llava_pathvqa \
   --num_train_epochs 5 \
   --learning_rate 2e-5
@@ -591,8 +645,11 @@ python train.py \
 # Inferenz
 python inference.py \
   --model_path ./outputs/llava_pathvqa \
+  --data_root data \
+  --mc_data_root data_mc_openai \
   --dataset pathvqa \
   --split test \
+  --max_new_tokens 8 \
   --finetuned \
   --results_dir results
 
@@ -600,6 +657,7 @@ python inference.py \
 python evaluate.py \
   --results_file results/llava_pathvqa_all.json \
   --output_file metrics_pathvqa.json
+# output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
 
 # Risk–Coverage / AURC
 python risk_coverage_entropy.py \
