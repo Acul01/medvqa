@@ -104,8 +104,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max_rois",
         type=int,
-        default=1,
-        help="Maximum ROI masks considered; first ROI is used for variants",
+        default=9,
+        help="Maximum ROI mask candidates ranked; with question-guided multi-bbox prompting up to 9 candidates (3 bboxes × 3 masks) are possible",
     )
     parser.add_argument(
         "--save_index_json",
@@ -149,26 +149,84 @@ def _load_predictor(model_type: str, checkpoint_path: str, device: str):
     return SamPredictor(model)
 
 
-def _generate_masks(predictor, image_np: np.ndarray) -> list[dict]:
+def _question_to_bbox_candidates(
+    question: str, image_h: int, image_w: int
+) -> list[np.ndarray]:
     """
-    Run MedSAM inference with the full-image bounding box as prompt.
+    Derive spatial bounding-box candidates from question keywords.
 
-    MedSAM was fine-tuned for prompted (bbox) segmentation, not automatic
-    mask generation. Passing the full image as the bbox lets MedSAM locate
-    the most salient medical structure. multimask_output=True returns three
-    candidate masks; we sort by predicted_iou so _select_primary_roi picks
-    the best one.
+    Always includes the full-image bbox as fallback. When the question
+    contains spatial keywords (left/right/upper/lower), adds the
+    corresponding half or quadrant bbox so MedSAM is prompted to focus
+    on the relevant region.
+    """
+    text = (question or "").lower()
+    mid_w = image_w // 2
+    mid_h = image_h // 2
+
+    has_left  = bool(re.search(r"\bleft\b",                         text))
+    has_right = bool(re.search(r"\bright\b",                        text))
+    has_upper = bool(re.search(r"\b(upper|top|superior|apical)\b",  text))
+    has_lower = bool(re.search(r"\b(lower|bottom|inferior|basal)\b", text))
+
+    candidates: list[np.ndarray] = [
+        np.array([0, 0, image_w, image_h], dtype=float),  # full image — always present
+    ]
+
+    # halves
+    if has_left and not has_right:
+        candidates.append(np.array([0, 0, mid_w, image_h], dtype=float))
+    if has_right and not has_left:
+        candidates.append(np.array([mid_w, 0, image_w, image_h], dtype=float))
+    if has_upper and not has_lower:
+        candidates.append(np.array([0, 0, image_w, mid_h], dtype=float))
+    if has_lower and not has_upper:
+        candidates.append(np.array([0, mid_h, image_w, image_h], dtype=float))
+
+    # quadrants (combined spatial keywords)
+    if has_left and has_upper:
+        candidates.append(np.array([0, 0, mid_w, mid_h], dtype=float))
+    if has_right and has_upper:
+        candidates.append(np.array([mid_w, 0, image_w, mid_h], dtype=float))
+    if has_left and has_lower:
+        candidates.append(np.array([0, mid_h, mid_w, image_h], dtype=float))
+    if has_right and has_lower:
+        candidates.append(np.array([mid_w, mid_h, image_w, image_h], dtype=float))
+
+    return candidates
+
+
+def _generate_masks(predictor, image_np: np.ndarray, question: str = "") -> list[dict]:
+    """
+    Run MedSAM with question-guided bbox candidates.
+
+    For each candidate bbox (full image + spatial sub-regions derived from
+    the question), MedSAM predicts three masks (multimask_output=True).
+    Duplicate masks across prompts are removed via a coarse hash before
+    returning all candidates sorted by predicted_iou descending.
     """
     h, w = image_np.shape[:2]
     predictor.set_image(image_np)
-    bbox = np.array([0, 0, w, h], dtype=float)
-    masks, scores, _ = predictor.predict(box=bbox, multimask_output=True)
-    result = [
-        {"segmentation": mask, "predicted_iou": float(score)}
-        for mask, score in zip(masks, scores)
-    ]
-    result.sort(key=lambda x: x["predicted_iou"], reverse=True)
-    return result
+
+    bbox_candidates = _question_to_bbox_candidates(question, h, w)
+    all_masks: list[dict] = []
+    seen: set[bytes] = set()
+
+    for bbox in bbox_candidates:
+        masks, scores, _ = predictor.predict(box=bbox, multimask_output=True)
+        for mask, score in zip(masks, scores):
+            key = mask[::8, ::8].tobytes()
+            if key in seen:
+                continue
+            seen.add(key)
+            all_masks.append({
+                "segmentation": mask,
+                "predicted_iou": float(score),
+                "prompt_bbox": bbox.tolist(),
+            })
+
+    all_masks.sort(key=lambda x: x["predicted_iou"], reverse=True)
+    return all_masks
 
 
 def _mask_to_bbox(mask: np.ndarray) -> list[int]:
@@ -431,7 +489,7 @@ def main() -> None:
                     image_np = np.array(image)
                     h, w = image_np.shape[:2]
 
-                    masks = _generate_masks(predictor, image_np)
+                    masks = _generate_masks(predictor, image_np, question=sample.question)
                     selected = _select_primary_roi(
                         masks=masks,
                         question=sample.question,
