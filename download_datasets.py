@@ -10,7 +10,7 @@ Usage on cluster:
 
 import json
 from pathlib import Path
-from datasets import load_dataset
+from datasets import load_dataset, Image as HFImage
 from huggingface_hub import hf_hub_download
 import zipfile
 import pandas as pd
@@ -220,6 +220,10 @@ def download_medvqa2019():
     print("=" * 60)
 
     ds = load_dataset("claudioreeves/imageclef-vqa-med-2019")
+    # Ensure HF image feature is decoded to PIL so export logic can save files.
+    for split_name in ds.keys():
+        if "image" in ds[split_name].features:
+            ds[split_name] = ds[split_name].cast_column("image", HFImage(decode=True))
 
     root = DATA_ROOT / "Med-VQA-2019"
     img_dir = root / "medvqa2019_images"
