@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,9 @@ class RoiInfo:
     area_pixels: int
     area_ratio: float
     score: float | None
+    rank_score: float = 0.0
+    ranking_components: dict[str, float] | None = None
+    guidance_mode: str = "neutral"
 
 
 def parse_args() -> argparse.Namespace:
@@ -152,8 +157,98 @@ def _mask_to_bbox(mask: np.ndarray) -> list[int]:
     return [x_min, y_min, x_max, y_max]
 
 
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _question_guidance(question: str) -> dict[str, Any]:
+    text = (question or "").strip().lower()
+    if not text:
+        return {
+            "mode": "neutral",
+            "reliable": False,
+            "weights": {"iou": 0.45, "area": 0.30, "center": 0.25},
+        }
+
+    # Lightweight rule parser for VQA-Rad style prompts.
+    yn_starts = (
+        "is ",
+        "are ",
+        "does ",
+        "do ",
+        "can ",
+        "could ",
+        "was ",
+        "were ",
+        "has ",
+        "have ",
+    )
+    is_yesno = text.startswith(yn_starts)
+    is_global = bool(
+        re.search(
+            r"(overall|normal|abnormal|study|scan|image|x-?ray|ct|mri|view|quality|status)",
+            text,
+        )
+    )
+    has_location = bool(
+        re.search(
+            r"(left|right|upper|lower|lobe|lung|chest|heart|spine|brain|skull|rib|kidney|liver|abdomen)",
+            text,
+        )
+    )
+    has_measurement = bool(
+        re.search(
+            r"(size|diameter|length|width|measure|cm|mm|enlarged|small|large|severe|mild)",
+            text,
+        )
+    )
+
+    if is_global and not has_location:
+        mode = "global"
+        reliable = True
+        weights = {"iou": 0.50, "area": 0.40, "center": 0.10}
+    elif has_location or has_measurement:
+        mode = "local"
+        reliable = True
+        weights = {"iou": 0.40, "area": 0.20, "center": 0.40}
+    elif is_yesno:
+        mode = "binary"
+        reliable = True
+        weights = {"iou": 0.50, "area": 0.30, "center": 0.20}
+    else:
+        mode = "neutral"
+        reliable = False
+        weights = {"iou": 0.45, "area": 0.30, "center": 0.25}
+
+    return {"mode": mode, "reliable": reliable, "weights": weights}
+
+
+def _bbox_center_distance_norm(bbox_xyxy: list[int], image_w: int, image_h: int) -> float:
+    x1, y1, x2, y2 = bbox_xyxy
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    mx = (image_w - 1) / 2.0
+    my = (image_h - 1) / 2.0
+    dx = cx - mx
+    dy = cy - my
+    dist = math.sqrt(dx * dx + dy * dy)
+    max_dist = math.sqrt(mx * mx + my * my) if image_w > 1 and image_h > 1 else 1.0
+    return _clamp01(dist / max_dist)
+
+
+def _area_preference_score(area_ratio: float) -> float:
+    # Prefers medium-size ROIs, discourages tiny/noisy and near-full-image masks.
+    if area_ratio <= 0.0:
+        return 0.0
+    ideal = 0.18
+    spread = 0.18
+    score = 1.0 - abs(area_ratio - ideal) / spread
+    return _clamp01(score)
+
+
 def _select_primary_roi(
     masks: list[dict[str, Any]],
+    question: str,
     image_h: int,
     image_w: int,
     min_mask_area_ratio: float,
@@ -164,6 +259,11 @@ def _select_primary_roi(
 
     usable = masks[: max(1, max_rois)]
     image_area = float(image_h * image_w)
+    guidance = _question_guidance(question)
+    weights = guidance["weights"]
+    best: tuple[RoiInfo, np.ndarray] | None = None
+    best_score = -1.0
+
     for item in usable:
         seg = item.get("segmentation")
         if seg is None:
@@ -174,10 +274,38 @@ def _select_primary_roi(
         if area_ratio < min_mask_area_ratio:
             continue
         bbox = _mask_to_bbox(seg_arr)
-        score = item.get("predicted_iou")
-        roi = RoiInfo(bbox_xyxy=bbox, area_pixels=area_pixels, area_ratio=area_ratio, score=score)
-        return roi, seg_arr
-    return None
+        pred_iou = float(item.get("predicted_iou", 0.0))
+        center_dist_norm = _bbox_center_distance_norm(bbox, image_w=image_w, image_h=image_h)
+        center_score = 1.0 - center_dist_norm
+        area_score = _area_preference_score(area_ratio)
+
+        rank_score = (
+            weights["iou"] * _clamp01(pred_iou)
+            + weights["area"] * area_score
+            + weights["center"] * center_score
+        )
+        components = {
+            "predicted_iou": _clamp01(pred_iou),
+            "area_score": area_score,
+            "center_score": center_score,
+            "center_dist_norm": center_dist_norm,
+            "w_iou": weights["iou"],
+            "w_area": weights["area"],
+            "w_center": weights["center"],
+        }
+        roi = RoiInfo(
+            bbox_xyxy=bbox,
+            area_pixels=area_pixels,
+            area_ratio=area_ratio,
+            score=pred_iou,
+            rank_score=rank_score,
+            ranking_components=components,
+            guidance_mode=guidance["mode"] if guidance["reliable"] else "neutral_fallback",
+        )
+        if rank_score > best_score:
+            best_score = rank_score
+            best = (roi, seg_arr)
+    return best
 
 
 def _overlay_variant(image: Image.Image, mask: np.ndarray, bbox_xyxy: list[int], alpha: float) -> Image.Image:
@@ -269,6 +397,9 @@ def main() -> None:
                     "mask_area_pixels": None,
                     "mask_area_ratio": None,
                     "predicted_iou": None,
+                    "roi_rank_score": None,
+                    "roi_ranking_components": None,
+                    "guidance_mode": None,
                     "variant_paths": {variant: None for variant in args.variants},
                 }
 
@@ -280,6 +411,7 @@ def main() -> None:
                     masks = mask_generator.generate(image_np)
                     selected = _select_primary_roi(
                         masks=masks,
+                        question=sample.question,
                         image_h=h,
                         image_w=w,
                         min_mask_area_ratio=args.min_mask_area_ratio,
@@ -298,6 +430,9 @@ def main() -> None:
                     base_record["mask_area_pixels"] = roi.area_pixels
                     base_record["mask_area_ratio"] = roi.area_ratio
                     base_record["predicted_iou"] = roi.score
+                    base_record["roi_rank_score"] = roi.rank_score
+                    base_record["roi_ranking_components"] = roi.ranking_components
+                    base_record["guidance_mode"] = roi.guidance_mode
 
                     for variant in args.variants:
                         out_path = output_root / dataset / split / variant / out_name
