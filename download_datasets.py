@@ -201,14 +201,6 @@ def _normalize_medvqa_split(split_name: str) -> str | None:
     return None
 
 
-def _pick_existing_column(df: pd.DataFrame, candidates: list[str]) -> str:
-    lower_to_original = {c.lower(): c for c in df.columns}
-    for c in candidates:
-        if c in lower_to_original:
-            return lower_to_original[c]
-    raise ValueError(f"None of expected columns found: {candidates}. Available: {list(df.columns)}")
-
-
 def _safe_filename(name: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name).strip("._")
     return cleaned or "image"
@@ -238,73 +230,41 @@ def download_medvqa2019():
     }
     rows_by_split = {k: [] for k in csv_targets.keys()}
 
-    all_rows = []
-    for split_name in ds.keys():
-        split_data = ds[split_name]
-        split_df = split_data.to_pandas()
-        split_df["_source_split"] = split_name
-        all_rows.append(split_df)
-
-    if not all_rows:
-        raise ValueError("HF dataset contains no splits.")
-
-    df = pd.concat(all_rows, ignore_index=True)
-    image_col = _pick_existing_column(df, ["image", "img", "image_path", "img_path"])
-    question_col = _pick_existing_column(df, ["question", "query"])
-    answer_col = _pick_existing_column(df, ["answer", "answers", "label"])
-
-    # Optional explicit split column in examples.
-    split_col = None
-    for candidate in ["split", "subset", "set", "fold"]:
-        if candidate in {c.lower() for c in df.columns}:
-            split_col = next(c for c in df.columns if c.lower() == candidate)
-            break
-
-    print(f"Using columns -> image:{image_col}, question:{question_col}, answer:{answer_col}, split:{split_col or '_source_split'}")
-
     image_counter = 0
-    for idx, row in df.iterrows():
-        raw_split = row[split_col] if split_col is not None else row["_source_split"]
-        target_split = _normalize_medvqa_split(str(raw_split))
+    for split_name in ds.keys():
+        target_split = _normalize_medvqa_split(str(split_name))
         if target_split is None:
             continue
 
-        image_value = row[image_col]
-        question = str(row[question_col])
-        answer = row[answer_col]
-        if isinstance(answer, (list, tuple)):
-            answer = answer[0] if answer else ""
-        answer = str(answer)
+        split_data = ds[split_name]
+        for idx, sample in enumerate(split_data):
+            if "image" not in sample or "question" not in sample or "answer" not in sample:
+                continue
 
-        image = image_value
-        if image is None:
-            continue
+            image = sample["image"]
+            question = str(sample["question"])
+            answer = sample["answer"]
+            if isinstance(answer, (list, tuple)):
+                answer = answer[0] if answer else ""
+            answer = str(answer)
 
-        if hasattr(image, "convert"):
+            if image is None or not hasattr(image, "convert"):
+                continue
+
             stem = _safe_filename(f"{target_split}_{idx}")
             img_filename = f"{stem}.jpg"
             img_path = img_dir / img_filename
             if not img_path.exists():
                 image.convert("RGB").save(img_path)
-        else:
-            src_path = Path(str(image))
-            if not src_path.exists():
-                # Skip rows where image path is not directly accessible.
-                continue
-            stem = _safe_filename(src_path.stem)
-            img_filename = f"{target_split}_{stem}_{idx}{src_path.suffix or '.jpg'}"
-            img_path = img_dir / img_filename
-            if not img_path.exists():
-                shutil.copy2(src_path, img_path)
 
-        rows_by_split[target_split].append(
-            {
-                "image_path": img_filename,
-                "question": question,
-                "answer": answer,
-            }
-        )
-        image_counter += 1
+            rows_by_split[target_split].append(
+                {
+                    "image_path": img_filename,
+                    "question": question,
+                    "answer": answer,
+                }
+            )
+            image_counter += 1
 
     for split_name, csv_path in csv_targets.items():
         split_rows = rows_by_split[split_name]
