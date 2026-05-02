@@ -112,9 +112,16 @@ class MedicalVQALoader:
 
     def _resolve_image_path(self, dataset_name: str, config: Dict, image_path: str) -> Path:
         dataset_root = self.data_root / dataset_name
-        image_path_str = str(image_path)
+        image_path_str = str(image_path).strip()
+        if not image_path_str:
+            raise ValueError("empty image_path")
         if os.path.isabs(image_path_str):
             return Path(image_path_str)
+        # MC records may store a repo-relative path (e.g. data/VQA-Rad/vqarad_images/train_0.jpg).
+        # Do not prefix dataset_root/images_dir again in that case.
+        rel = Path(image_path_str)
+        if rel.exists():
+            return rel.resolve()
         if image_path_str.startswith(config["images_dir"]):
             return dataset_root / image_path_str
         return dataset_root / config["images_dir"] / image_path_str
