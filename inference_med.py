@@ -1,10 +1,16 @@
 """Inference script for LLaVA-Med on MC Medical VQA."""
 
+from __future__ import annotations
+
 import argparse
 import json
+import logging
 import math
+import re
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import wandb
 from PIL import Image
@@ -17,22 +23,47 @@ from llava.mm_utils import process_images, tokenizer_image_token
 from llava.model import LlavaMistralForCausalLM
 from llava.model.builder import load_pretrained_model
 
+from gradcam.gradcam_llava import LLaVAGradCAM
+from gradcam.overlay import create_gradcam_overlay
 from utils.load_data import MedicalVQALoader
-from utils.mc_vqa import format_mc_user_text, parse_predicted_letter
+from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.save_results import clean_answer, save_results
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 DATASET_MAX_NEW_TOKENS = {"pathvqa": 8, "slake": 8, "vqarad": 8, "medvqa2019": 8}
 
 
+def parse_mc_options_cli(options_line: str) -> List[str]:
+    """Parse ``'A) Yes B) No'``-style option text into plain option strings."""
+    s = options_line.strip()
+    chunks = re.split(r"\s+(?=[A-Z]\))", s)
+    out: List[str] = []
+    for c in chunks:
+        t = re.sub(r"^[A-Z]\)\s*", "", c).strip()
+        if t:
+            out.append(t)
+    if len(out) < 2:
+        raise ValueError(f"Could not parse at least two MC options from: {options_line!r}")
+    return out
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with LLaVA-Med on MC Medical VQA")
+    parser.add_argument("--mode", type=str, default="eval", choices=["eval", "path2"], help="eval: dataset MC; path2: rationale + GradCAM + MC")
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--model_base", type=str, default=None)
     parser.add_argument("--conv_template", type=str, default="mistral_instruct")
     parser.add_argument("--data_root", type=str, default="data", help="Root directory containing raw image folders")
     parser.add_argument("--mc_data_root", type=str, default="data_mc_openai", help="Root directory containing MC JSON/CSV exports")
-    parser.add_argument("--dataset", type=str, required=True, choices=["pathvqa", "slake", "vqarad", "medvqa2019"])
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        choices=["pathvqa", "slake", "vqarad", "medvqa2019"],
+        help="Required when mode=eval",
+    )
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--max_new_tokens", type=int, default=None)
     parser.add_argument("--do_sample", action="store_true", default=False)
@@ -44,7 +75,20 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
-    return parser.parse_args()
+    # path2-only
+    parser.add_argument("--image", type=str, default=None, help="path2: path to input image")
+    parser.add_argument("--question", type=str, default=None, help="path2: clinical question")
+    parser.add_argument("--options", type=str, default=None, help='path2: e.g. "A) Yes B) No"')
+    parser.add_argument("--path2_output", type=str, default=None, help="path2: optional JSON path for results + sidecar heatmap/overlay")
+    parser.add_argument("--rationale_max_new_tokens", type=int, default=128)
+    args = parser.parse_args()
+
+    if args.mode == "eval" and args.dataset is None:
+        parser.error("--dataset is required when mode=eval")
+    if args.mode == "path2":
+        if not args.image or not args.question or not args.options:
+            parser.error("path2 requires --image, --question, and --options")
+    return args
 
 
 def _model_short_name(model_path: str) -> str:
@@ -91,16 +135,8 @@ def _safe_div(a: int, b: int) -> float:
     return (a / b) if b else 0.0
 
 
-def main():
-    args = parse_args()
-    if args.max_new_tokens is None:
-        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
-
-    model_short = _model_short_name(args.model_path)
-    ft_tag = "finetuned" if args.finetuned else "pretrained"
-    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_eval_mc"
-    wandb.init(project=args.wandb_project, name=run_name, group=args.dataset, tags=["inference", "mc", model_short, args.dataset, ft_tag], config=vars(args))
-
+def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
+    """Load tokenizer, model, image_processor for inference (same logic as legacy main)."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model_path = Path(args.model_path)
@@ -143,6 +179,255 @@ def main():
         )
 
     model.eval()
+    return device, model, tokenizer, image_processor
+
+
+def process_image(
+    image: Image.Image,
+    image_processor: CLIPImageProcessor,
+    model_config: Any,
+    device: torch.device,
+    model: torch.nn.Module,
+) -> torch.Tensor:
+    """Preprocess PIL image to model input tensor (B, C, H, W) in ``model.dtype``."""
+    t = process_images([image.convert("RGB")], image_processor, model_config)
+    if t.ndim == 3:
+        t = t.unsqueeze(0)
+    dtype = getattr(model, "dtype", torch.float16)
+    return t.to(device=device, dtype=dtype)
+
+
+def generate_with_token_ids(
+    image: Image.Image,
+    rationale_prompt: str,
+    model: torch.nn.Module,
+    tokenizer: Any,
+    image_processor: CLIPImageProcessor,
+    device: torch.device,
+    model_config: Any,
+    conv_template: str,
+    max_new_tokens: int = 128,
+) -> Dict[str, Any]:
+    """Generate rationale; return full token ids and compact indices for GradCAM."""
+    image_tensor = process_image(image, image_processor, model_config, device, model)
+
+    conv = conv_templates[conv_template].copy()
+    question = f"{DEFAULT_IMAGE_TOKEN}\n{rationale_prompt}"
+    conv.append_message(conv.roles[0], question)
+    conv.append_message(conv.roles[1], None)
+    prompt = conv.get_prompt()
+
+    input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
+
+    with torch.inference_mode():
+        gen = model.generate(
+            input_ids,
+            images=image_tensor,
+            attention_mask=torch.ones_like(input_ids),
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            return_dict_in_generate=True,
+        )
+
+    full_ids = gen.sequences
+    prompt_len = int(input_ids.shape[1])
+    rationale_text = clean_answer(tokenizer.decode(full_ids[0], skip_special_tokens=True).strip())
+    output_indices = list(range(prompt_len, int(full_ids.shape[1])))
+    attention_mask = torch.ones(full_ids.shape[0], full_ids.shape[1], device=device, dtype=torch.long)
+
+    return {
+        "rationale": rationale_text,
+        "input_ids": full_ids,
+        "attention_mask": attention_mask,
+        "output_indices": output_indices,
+        "image_tensor": image_tensor,
+    }
+
+
+def generate_mc_answer(
+    overlay_image: Image.Image,
+    final_prompt: str,
+    model: torch.nn.Module,
+    image_processor: CLIPImageProcessor,
+    tokenizer: Any,
+    device: torch.device,
+    model_config: Any,
+    conv_template: str,
+    num_options: int,
+    max_new_tokens: int = 8,
+) -> Tuple[str, Dict[str, float]]:
+    """Greedy MC generation on (possibly overlaid) image; probs from first generated-token softmax over A.."""
+    image_tensor = process_image(overlay_image, image_processor, model_config, device, model)
+
+    conv = conv_templates[conv_template].copy()
+    question = f"{DEFAULT_IMAGE_TOKEN}\n{final_prompt}"
+    conv.append_message(conv.roles[0], question)
+    conv.append_message(conv.roles[1], None)
+    prompt = conv.get_prompt()
+
+    input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
+
+    with torch.inference_mode():
+        gen = model.generate(
+            input_ids,
+            images=image_tensor,
+            attention_mask=torch.ones_like(input_ids),
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+
+    seq = gen.sequences[0]
+    text = clean_answer(tokenizer.decode(seq, skip_special_tokens=True).strip())
+    letter = parse_predicted_letter(text, num_options=num_options)
+
+    probs: Dict[str, float] = {}
+    if gen.scores and len(gen.scores) > 0:
+        first_logits = gen.scores[0][0]
+        dist = torch.softmax(first_logits.float(), dim=-1)
+
+        for i in range(num_options):
+            ch = LETTER_POOL[i]
+            ids = tokenizer.encode(ch, add_special_tokens=False)
+            tid = ids[0] if ids else None
+            if tid is not None and tid < dist.shape[-1]:
+                probs[ch] = float(dist[tid].item())
+            else:
+                probs[ch] = float("nan")
+    else:
+        for i in range(num_options):
+            probs[LETTER_POOL[i]] = float("nan")
+
+    return text, probs
+
+
+def run_path2(
+    image: Image.Image,
+    question: str,
+    mc_options: List[str],
+    model: torch.nn.Module,
+    tokenizer: Any,
+    image_processor: CLIPImageProcessor,
+    device: torch.device,
+    conv_template: str = "mistral_instruct",
+    rationale_max_new_tokens: int = 128,
+) -> Dict[str, Any]:
+    """Rationale → GradCAM (last 4 ViT layers, averaged) → overlay → final MC answer."""
+    rationale_prompt = f"Explain your reasoning for answering: {question}"
+    tok = generate_with_token_ids(
+        image,
+        rationale_prompt,
+        model,
+        tokenizer,
+        image_processor,
+        device,
+        model.config,
+        conv_template,
+        max_new_tokens=rationale_max_new_tokens,
+    )
+    rationale = tok["rationale"]
+
+    heatmap: Optional[torch.Tensor] = None
+    overlay_pil: Image.Image = image.convert("RGB")
+    try:
+        gradcam = LLaVAGradCAM(model, target_layers=[-1, -2, -3, -4])
+        heatmap = gradcam.compute_gradcam(
+            image_tensor=tok["image_tensor"],
+            input_ids=tok["input_ids"],
+            attention_mask=tok["attention_mask"],
+            target_token_indices=tok["output_indices"],
+            image_token_index=IMAGE_TOKEN_INDEX,
+            output_spatial_size=(image.height, image.width),
+        )
+        _, overlay_pil = create_gradcam_overlay(image, heatmap, alpha=0.4)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("GradCAM failed (%s); using original image without overlay.", e)
+        heatmap = None
+        _, overlay_pil = create_gradcam_overlay(image, None, alpha=0.4)
+
+    mc_block = format_mc_user_text(question, mc_options)
+    final_prompt = (
+        f"The relevant region is highlighted in the image. "
+        f"Your reasoning was: {rationale}. "
+        f"Based on this, answer the following.\n\n{mc_block}"
+    )
+    answer, probs = generate_mc_answer(
+        overlay_pil,
+        final_prompt,
+        model,
+        image_processor,
+        tokenizer,
+        device,
+        model.config,
+        conv_template,
+        num_options=len(mc_options),
+    )
+    letter = parse_predicted_letter(answer, num_options=len(mc_options))
+
+    return {
+        "rationale": rationale,
+        "heatmap": heatmap,
+        "overlay_image": overlay_pil,
+        "answer": answer,
+        "predicted_letter": letter,
+        "probabilities": probs,
+    }
+
+
+def _run_path2_cli(args) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    device, model, tokenizer, image_processor = load_llava_med_bundle(args)
+    image = Image.open(args.image).convert("RGB")
+    mc_options = parse_mc_options_cli(args.options)
+    out = run_path2(
+        image,
+        args.question,
+        mc_options,
+        model,
+        tokenizer,
+        image_processor,
+        device,
+        conv_template=args.conv_template,
+        rationale_max_new_tokens=args.rationale_max_new_tokens,
+    )
+
+    serial: Dict[str, Any] = {
+        "rationale": out["rationale"],
+        "answer": out["answer"],
+        "predicted_letter": out["predicted_letter"],
+        "probabilities": out["probabilities"],
+    }
+    if args.path2_output:
+        base = Path(args.path2_output)
+        base.parent.mkdir(parents=True, exist_ok=True)
+        if out["heatmap"] is not None:
+            np.save(str(base.with_name(base.stem + "_heatmap.npy")), out["heatmap"].numpy())
+            serial["heatmap_npy"] = str(base.with_name(base.stem + "_heatmap.npy"))
+        out["overlay_image"].save(str(base.with_name(base.stem + "_overlay.png")))
+        serial["overlay_png"] = str(base.with_name(base.stem + "_overlay.png"))
+        with open(base, "w", encoding="utf-8") as f:
+            json.dump(serial, f, indent=2, ensure_ascii=False)
+        logger.info("Wrote %s", base)
+    print(json.dumps(serial, indent=2, ensure_ascii=False))
+
+
+def main():
+    args = parse_args()
+
+    if args.mode == "path2":
+        _run_path2_cli(args)
+        return
+
+    if args.max_new_tokens is None:
+        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
+
+    model_short = _model_short_name(args.model_path)
+    ft_tag = "finetuned" if args.finetuned else "pretrained"
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_eval_mc"
+    wandb.init(project=args.wandb_project, name=run_name, group=args.dataset, tags=["inference", "mc", model_short, args.dataset, ft_tag], config=vars(args))
+
+    device, model, tokenizer, image_processor = load_llava_med_bundle(args)
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)

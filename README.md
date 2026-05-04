@@ -415,6 +415,24 @@ Empfohlene Smoke-Validierung:
 - In Experimenten: **mit ROI / ohne ROI** vergleichen.
 - **Wichtiger Hinweis:** Pseudo-ROIs sind potentiell verrauscht und können Performance verschlechtern; Effekt immer mit Ablationen validieren.
 
+### Vokabular: lokalisierbare Tokens (Reasoning / NER-Vorbereitung)
+
+Skript [`build_vocab_localizable_openai.py`](build_vocab_localizable_openai.py): eindeutiges **Trainings**-Vokabular aus **SLAKE + VQA-Rad + Med-VQA-2019** (Freitext über `MedicalVQALoader(..., mc_data_root=None)`), englische **Stopwords** (NLTK mit Fallback; optional `--extra_stopwords_file`), danach **OpenAI**-Batch-Klassifikation, ob ein Token in typischen medizinischen Bildern **visuell lokalisierbar** ist. Artefakte: `vocab_localizable_train.json`, `vocab_localizable_train.csv`, Cache `openai_localizable_cache.jsonl` unter `--output_dir` (Default `results/reasoning_vocab/`).
+
+Abhängigkeiten: `pip install openai python-dotenv nltk` (NLTK lädt `stopwords` bei Bedarf nach).
+
+```bash
+export OPENAI_API_KEY="..."
+python build_vocab_localizable_openai.py \
+  --data_root data \
+  --output_dir results/reasoning_vocab \
+  --batch_size 30 \
+  --resume
+
+# Kurztest ohne volles Vokabular:
+python build_vocab_localizable_openai.py --data_root data --n_tokens 50
+```
+
 ---
 
 ## Schritt 5: Konsistenz & Abstain (geplant)
