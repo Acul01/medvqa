@@ -25,3 +25,19 @@ __pycache__/
 general_guide.md
 HPC_JUPYTERLAB_GPU_ANLEITUNG.md
 setup.txt
+
+# local/cluster secrets
+.env
+
+# experiment artifacts
+logs/
+results/
+results_debug/
+wandb/
+nohup.out
+
+# local generated datasets
+data_mc_openai/
+
+# local external clone
+LLaVA-Med/
