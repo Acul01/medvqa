@@ -494,8 +494,7 @@ def main():
                 output_scores=True,
             )
 
-            input_length = input_ids.shape[1]
-            generated_ids = generation_output.sequences[0][input_length:]
+            generated_ids = generation_output.sequences[0]
             generated_text = clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())
             predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
             ground_truth_letter = sample.answer
@@ -515,7 +514,7 @@ def main():
                         return_dict_in_generate=True,
                         output_scores=False,
                     )
-                    sample_generated_ids = sample_output.sequences[0][input_length:]
+                    sample_generated_ids = sample_output.sequences[0]
                     sample_text = clean_answer(tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip())
                     sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
                     sampled_predicted_letters.append(sample_letter)
