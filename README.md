@@ -323,6 +323,7 @@ Mit `--use_two_stage_reasoning` läuft die Inferenz in zwei Schritten:
 2. **Finale MC-Phase**: Zweiter Prompt mit den extrahierten Feldern und Ausgabe nur als Optionsbuchstabe.
 
 Die Stage-1-Ausgabe soll mit `<END_REASONING>` enden. Das Parsing nutzt bevorzugt den Text bis zu diesem Marker; falls der Marker fehlt, greift best-effort Fallback (fehlende Felder werden als `unknown` gesetzt und Schritt 2 wird trotzdem ausgeführt).
+Im 2-Stage-Modus wird Schritt 2 strikt über die **Option-Logits des ersten Antworttokens** decodiert (`stage2_decoding_mode = letter_logits_only`), um Freitext-Drift wie `\"C, D\"` zu vermeiden.
 
 Wichtig: `--reasoning_max_new_tokens` steuert nur Schritt 1 (Reasoning, Default `192`), während `--max_new_tokens` weiterhin für die finale MC-Antwort gilt.
 
@@ -391,6 +392,7 @@ python inference.py \
 - `image_path`, `source_image_path`, `ablation_mode`, `question`, `ground_truth_answer`, `predicted_answer`
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - optional 2-stage Felder: `reasoning_raw`, `reasoning_region`, `reasoning_observation`, `reasoning_explanation`, `reasoning_parse_mode` (`best_effort_marker` oder `best_effort_no_marker`)
+- optionale Strict-Decoding-Felder: `stage2_decoding_mode`, `stage2_option_probs`
 - nach Inferenz ergänzt: `bleu_1` … `bleu_4`, `rougeL`, `bert_f1` (und weitere ROUGE-Keys je nach Version)
 
 Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veraltet**; das tatsächliche Format folgt dem Chat-Template des Processors und den Feldern oben.

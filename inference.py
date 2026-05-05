@@ -15,7 +15,7 @@ from tqdm import tqdm
 from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from utils.load_data import MedicalVQALoader
-from utils.mc_vqa import format_mc_user_text, parse_predicted_letter
+from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.save_results import clean_answer, save_results
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -198,6 +198,35 @@ def _compute_generation_confidence(step_scores) -> float:
     return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
 
 
+def _stage2_letter_probs_from_first_step(step_scores, tokenizer, num_options: int) -> dict[str, float]:
+    probs_map: dict[str, float] = {}
+    if not step_scores:
+        for i in range(num_options):
+            probs_map[LETTER_POOL[i]] = float("nan")
+        return probs_map
+
+    first_logits = step_scores[0][0]
+    dist = torch.softmax(first_logits.float(), dim=-1)
+    for i in range(num_options):
+        letter = LETTER_POOL[i]
+        candidate_ids = []
+        for token_variant in (letter, f" {letter}"):
+            ids = tokenizer.encode(token_variant, add_special_tokens=False)
+            if ids:
+                candidate_ids.append(ids[0])
+        probs = [float(dist[tid].item()) for tid in candidate_ids if 0 <= tid < dist.shape[-1]]
+        probs_map[letter] = max(probs) if probs else float("nan")
+    return probs_map
+
+
+def _pick_letter_from_probs(probs_map: dict[str, float]) -> str | None:
+    valid = [(k, v) for k, v in probs_map.items() if isinstance(v, (int, float)) and not math.isnan(v)]
+    if not valid:
+        return None
+    valid.sort(key=lambda x: x[1], reverse=True)
+    return valid[0][0]
+
+
 def _compute_agreement(letter_predictions: list[str | None]) -> float:
     valid = [letter for letter in letter_predictions if letter]
     if not valid:
@@ -334,7 +363,19 @@ def main():
             generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True)
             generated_ids = generation_output.sequences[0][input_length:]
             generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
-            predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
+            stage2_option_probs = {}
+            stage2_decoding_mode = "text_parse"
+            if args.use_two_stage_reasoning:
+                stage2_option_probs = _stage2_letter_probs_from_first_step(
+                    generation_output.scores,
+                    tokenizer=processor.tokenizer,
+                    num_options=len(sample.mc_options),
+                )
+                predicted_letter = _pick_letter_from_probs(stage2_option_probs)
+                generated_text = predicted_letter or ""
+                stage2_decoding_mode = "letter_logits_only"
+            else:
+                predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
             ground_truth_letter = sample.answer
 
             entropy_tokens, entropy_mean = _compute_token_entropies(
@@ -354,8 +395,16 @@ def main():
                     output_scores=True,
                 )
                 sample_generated_ids = sample_output.sequences[0][input_length:]
-                sample_text = clean_answer(processor.decode(sample_generated_ids, skip_special_tokens=True).strip())
-                sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
+                if args.use_two_stage_reasoning:
+                    sample_probs = _stage2_letter_probs_from_first_step(
+                        sample_output.scores,
+                        tokenizer=processor.tokenizer,
+                        num_options=len(sample.mc_options),
+                    )
+                    sample_letter = _pick_letter_from_probs(sample_probs)
+                else:
+                    sample_text = clean_answer(processor.decode(sample_generated_ids, skip_special_tokens=True).strip())
+                    sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
                 sampled_predicted_letters.append(sample_letter)
                 _, sample_entropy = _compute_token_entropies(
                     sample_output.scores,
@@ -381,6 +430,8 @@ def main():
                     "reasoning_observation": reasoning_observation,
                     "reasoning_explanation": reasoning_explanation,
                     "reasoning_parse_mode": reasoning_parse_mode,
+                    "stage2_decoding_mode": stage2_decoding_mode,
+                    "stage2_option_probs": stage2_option_probs,
                     "question": sample.question,
                     "options": sample.mc_options,
                     "correct_index": sample.mc_correct_index,
