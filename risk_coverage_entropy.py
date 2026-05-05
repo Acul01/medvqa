@@ -74,15 +74,16 @@ def metric_value_from_row(row: Dict, risk_metric: str) -> float | None:
 def prepare_samples(
     results: List[Dict],
     risk_metric: str,
+    score_field: str = "entropy",
     max_entropy: float | None = None,
 ) -> List[Dict]:
     samples: List[Dict] = []
     for r in results:
-        entropy = r.get("entropy")
-        if not is_valid_number(entropy):
+        score_value = r.get(score_field)
+        if not is_valid_number(score_value):
             continue
-        entropy = float(entropy)
-        if max_entropy is not None and entropy > max_entropy:
+        score_value = float(score_value)
+        if score_field == "entropy" and max_entropy is not None and score_value > max_entropy:
             continue
         metric_val = metric_value_from_row(r, risk_metric=risk_metric)
         if metric_val is None:
@@ -90,15 +91,15 @@ def prepare_samples(
 
         samples.append(
             {
-                "entropy": entropy,
+                "score_value": score_value,
                 "metric_value": metric_val,
             }
         )
     return samples
 
 
-def unique_thresholds(entropies: List[float], num_thresholds: int) -> List[float]:
-    uniq = sorted(set(entropies))
+def unique_thresholds(values: List[float], num_thresholds: int) -> List[float]:
+    uniq = sorted(set(values))
     if len(uniq) <= num_thresholds:
         return uniq
     # evenly sample thresholds over sorted support
@@ -106,9 +107,12 @@ def unique_thresholds(entropies: List[float], num_thresholds: int) -> List[float
     return [uniq[i] for i in sorted(set(idxs))]
 
 
-def compute_risk_coverage_at_threshold(samples: List[Dict], threshold: float) -> Dict:
+def compute_risk_coverage_at_threshold(samples: List[Dict], threshold: float, answer_when_higher: bool) -> Dict:
     total = len(samples)
-    answered = [s for s in samples if s["entropy"] <= threshold]
+    if answer_when_higher:
+        answered = [s for s in samples if s["score_value"] >= threshold]
+    else:
+        answered = [s for s in samples if s["score_value"] <= threshold]
     n_answered = len(answered)
     if n_answered == 0:
         return {
@@ -137,9 +141,9 @@ def compute_risk_coverage_at_threshold(samples: List[Dict], threshold: float) ->
     }
 
 
-def compute_curve(samples: List[Dict], num_thresholds: int) -> List[Dict]:
-    thresholds = unique_thresholds([s["entropy"] for s in samples], max(2, num_thresholds))
-    rows = [compute_risk_coverage_at_threshold(samples, t) for t in thresholds]
+def compute_curve(samples: List[Dict], num_thresholds: int, answer_when_higher: bool) -> List[Dict]:
+    thresholds = unique_thresholds([s["score_value"] for s in samples], max(2, num_thresholds))
+    rows = [compute_risk_coverage_at_threshold(samples, t, answer_when_higher=answer_when_higher) for t in thresholds]
     rows = sorted(rows, key=lambda x: x["coverage"])
     return rows
 
@@ -228,6 +232,13 @@ def parse_args():
         choices=["match", "bleu1", "bleu4", "rouge", "bertscore"],
         help="Metric used for risk: risk = 1 - metric_value",
     )
+    parser.add_argument(
+        "--score_field",
+        type=str,
+        default="entropy",
+        choices=["entropy", "agreement", "confidence"],
+        help="Field used for thresholding (entropy lower=more confident, agreement/confidence higher=more confident)",
+    )
     return parser.parse_args()
 
 
@@ -241,12 +252,14 @@ def main():
     samples = prepare_samples(
         results,
         risk_metric=args.risk_metric,
+        score_field=args.score_field,
         max_entropy=args.max_entropy,
     )
     if not samples:
         raise ValueError("No valid samples found with letter labels and numeric entropy.")
 
-    curve = compute_curve(samples, num_thresholds=args.num_thresholds)
+    answer_when_higher = args.score_field in {"agreement", "confidence"}
+    curve = compute_curve(samples, num_thresholds=args.num_thresholds, answer_when_higher=answer_when_higher)
     area = aurc_trapezoid(curve)
     c_at_r = coverage_at_risk(curve, risk_targets=[0.01, 0.05, 0.10])
     r_at_c = risk_at_coverage(curve, cov_targets=[0.20, 0.50, 0.80])
@@ -267,6 +280,7 @@ def main():
         "num_thresholds": len(curve),
         "max_entropy_filter": args.max_entropy,
         "risk_metric": args.risk_metric,
+        "score_field": args.score_field,
         "aurc": area,
         **c_at_r,
         **r_at_c,

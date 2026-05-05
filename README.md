@@ -48,12 +48,12 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Einheitlicher Datenloader (`MedicalVQALoader`, `VQASample`) | **Implementiert** (`utils/load_data.py`) |
 | Training Standard-LLaVA (HF `LlavaForConditionalGeneration` + `Trainer`) | **Implementiert** (`train.py`) |
 | Training LLaVA-Med (Microsoft-`llava` + `Trainer`) | **Implementiert** (`train_med.py`, benötigt installiertes LLaVA-Med) |
-| Inferenz LLaVA + Entropie pro Generierung (`entropy`, `entropy_tokens`) | **Implementiert** (`inference.py`) |
+| Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`inference.py`) |
 | Inferenz LLaVA-Med | **Implementiert** (`inference_med.py`) |
 | Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`evaluate.py`) |
 | Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`risk_coverage_entropy.py`) |
 | Selector / MLP-Workflow (LLaVA-Med-Features) | **Implementiert** (`selector_multimodal.py`) |
-| **N-faches Sampling, Agreement, `combine_scores`** | **Geplant – zentrale Erweiterung** (Blueprint Path 1) |
+| **5-fach Sampling + Agreement** | **Implementiert** (`inference.py`, `inference_med.py`) |
 | **Pfad 2: Evidence-JSON, konditionierte finale Antwort** | **Geplant** |
 | **ROI-Pipeline mit Ablations-Toggle** (SAM/Attention, Crop/Overlay) | **Geplant** |
 | **Dual-Path-Konsistenz & Abstain-Regeln** | **Geplant** |
@@ -261,15 +261,16 @@ Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei S
 
 1. Bild + Frage
 2. Vorwärts-Generierung (greedy oder sampling)
-3. **Geplant:** \(N\) unabhängige Samples bei `temperature > 0`, Speicherung aller Antworten und Logits-basierter Statistiken
-4. **Geplant (zentrale Erweiterung):** Agreement über die \(N\) decodierten Strings, Kombination mit Entropie (`combine_scores`) → **Konfidenz-Score** für Schwellen \( \tau \)
+3. \(N\) unabhängige Samples (Default: **5**) bei `temperature > 0` für Agreement-Berechnung
+4. Agreement über die \(N\) decodierten Buchstaben als zusätzlicher Unsicherheits-/Stabilitätsindikator
 
 ### Ist-Zustand (`inference.py`)
 
-- **Ein** `model.generate(..., output_scores=True)`-Durchlauf pro Beispiel.
+- Hauptlauf mit `model.generate(..., output_scores=True)` pro Beispiel für Antwort, Entropie und Confidence.
 - **Entropie (aktueller Stand):** Für jedes generierte Token aus den Step-Logits; pro Token ein Eintrag in `entropy_tokens`; **`entropy`** wird derzeit als Mittelwert über **einzigartige** Token-Strings aggregiert (Implementierungs-Approximation).
 - **Wichtige Präzisierung:** Diese Aggregation ist methodisch nur eine Übergangslösung. Zieldefinition ist token-distributionsbasiert über **alle** generierten Positionen ohne Unique-Filter, z. B. \(H = -\sum_t p(y_t)\log p(y_t)\) bzw. eine äquivalente positionsweise Aggregation.
-- **Sampling:** `--do_sample` aktiviert stochastische Decodierung (`--temperature`, `--top_p`); **kein** automatisches \(N\)-faches Speichern mehrerer kompletter Antworten.
+- **Agreement-Sampling:** Zusätzlich werden standardmäßig `--agreement_samples 5` stochastische Läufe ausgeführt (mit `temperature`/`top_p`) und als Mehrheitsanteil aggregiert.
+- **Confidence:** `confidence` wird als mittlere Top-1-Tokenwahrscheinlichkeit über die generierten Schritte des Hauptlaufs gespeichert.
 
 ### Aufruf (Beispiele)
 
@@ -312,7 +313,7 @@ python inference.py \
   --results_dir results
 ```
 
-Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
+Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--agreement_samples`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
 
 ### Ausgabe-Dateien
 
@@ -326,7 +327,7 @@ Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--n_samples` (
 ### JSON-Felder pro Sample (mindestens)
 
 - `image_path`, `question`, `ground_truth_answer`, `predicted_answer`
-- `entropy`, `entropy_tokens`
+- `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - nach Inferenz ergänzt: `bleu_1` … `bleu_4`, `rougeL`, `bert_f1` (und weitere ROUGE-Keys je nach Version)
 
 Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veraltet**; das tatsächliche Format folgt dem Chat-Template des Processors und den Feldern oben.
@@ -471,7 +472,7 @@ python evaluate.py \
 # output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
 ```
 
-Berichtet u. a. Accuracy (gesamt, Yes/No vs. offen wo anwendbar), **BLEU-1/4**, **ROUGE-L**, **BERTScore-F1**, Mittelwert der **tokenbasierten Entropie** aus den Ergebniszeilen. Hängt an `ground_truth_answer` und `predicted_answer`.
+Berichtet u. a. Accuracy (gesamt, Yes/No vs. offen wo anwendbar), **BLEU-1/4**, **ROUGE-L**, **BERTScore-F1**, Mittelwert der **tokenbasierten Entropie**, sowie Mittelwerte für **agreement** und **confidence** aus den Ergebniszeilen. Hängt an `ground_truth_answer` und `predicted_answer`.
 
 Optional: `--eval_runs_file` (Standard `results/eval_runs.csv`) – eine Zeile pro Lauf.
 
@@ -479,20 +480,22 @@ Optional: `--eval_runs_file` (Standard `results/eval_runs.csv`) – eine Zeile p
 
 ### Risk–Coverage & AURC (`risk_coverage_entropy.py`)
 
-Erwartet eine **JSON-Liste** wie von `inference.py`, mit numerischem Feld **`entropy`** und Ground Truth für die gewählte Risk-Metrik.
+Erwartet eine **JSON-Liste** wie von `inference.py`, mit numerischem Score-Feld für Schwellenbildung (`entropy`, `agreement` oder `confidence`) und Ground Truth für die gewählte Risk-Metrik.
 
 ```bash
 python risk_coverage_entropy.py \
   --results_file results/llava_pathvqa_all.json \
   --output_dir results \
+  --score_field entropy \
   --risk_metric match \
   --num_thresholds 200
 ```
 
 - **`--risk_metric`:** `match` (1 − Exact Match pro Zeile), oder `bleu1`, `bleu4`, `rouge`, `bertscore` (nutzt gespeicherte Felder pro Sample).
+- **`--score_field`:** `entropy` (niedriger = sicherer), `agreement` oder `confidence` (höher = sicherer).
 - Ausgaben: `*_risk_coverage.csv`, `*_risk_coverage_curve.png`, `*_risk_coverage_summary.json` (enthält **AURC**, Coverage bei Ziel-Risk, Risk bei Ziel-Coverage).
 
-**Logik:** Samples mit **kleiner Entropie als Schwelle** werden „beantwortet“; über Schwellen-Sweep entstehen Risk–Coverage-Paare.
+**Logik:** Bei `entropy` werden Samples mit **kleiner/gleich Schwelle** beantwortet; bei `agreement`/`confidence` mit **größer/gleich Schwelle**.
 
 ### Geplant: ECE & erweiterte Kalibrierung
 
@@ -681,6 +684,7 @@ python evaluate.py \
 python risk_coverage_entropy.py \
   --results_file results/llava_pathvqa_all.json \
   --output_dir results \
+  --score_field entropy \
   --risk_metric match
 ```
 

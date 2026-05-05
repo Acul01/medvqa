@@ -19,6 +19,8 @@ EVAL_RUN_COLUMNS = [
     "open_accuracy",
     "mc_overall_accuracy",
     "token_based_entropy",
+    "mean_agreement",
+    "mean_confidence",
 ]
 
 
@@ -86,6 +88,15 @@ def _compute_token_based_entropy(results: List[Dict]) -> float:
     return _safe_div(sum(values), len(values)) if values else float("nan")
 
 
+def _compute_mean_metric(results: List[Dict], field: str) -> float:
+    values = []
+    for row in results:
+        value = row.get(field)
+        if isinstance(value, (int, float)) and not math.isnan(value):
+            values.append(float(value))
+    return _safe_div(sum(values), len(values)) if values else float("nan")
+
+
 def _append_eval_runs_csv(eval_runs_path: Path, row: Dict) -> None:
     eval_runs_path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not eval_runs_path.exists()
@@ -122,6 +133,8 @@ def main():
     open_acc = _accuracy(open_rows)
     overall_acc = _accuracy(valid_rows)
     token_entropy = _compute_token_based_entropy(results)
+    mean_agreement = _compute_mean_metric(results, "agreement")
+    mean_confidence = _compute_mean_metric(results, "confidence")
 
     metrics = {
         "start_time": start_time,
@@ -138,6 +151,8 @@ def main():
         "open": {"accuracy": open_acc},
         "overall": {"accuracy": overall_acc},
         "token_based_entropy": token_entropy,
+        "mean_agreement": mean_agreement,
+        "mean_confidence": mean_confidence,
     }
 
     run_row = {
@@ -149,6 +164,8 @@ def main():
         "open_accuracy": f"{open_acc:.4f}",
         "mc_overall_accuracy": f"{overall_acc:.4f}",
         "token_based_entropy": "" if math.isnan(token_entropy) else f"{token_entropy:.6f}",
+        "mean_agreement": "" if math.isnan(mean_agreement) else f"{mean_agreement:.6f}",
+        "mean_confidence": "" if math.isnan(mean_confidence) else f"{mean_confidence:.6f}",
     }
     _append_eval_runs_csv(Path(args.eval_runs_file), run_row)
 
@@ -165,6 +182,8 @@ def main():
     print(f"Open    -> accuracy={open_acc:.4f}")
     print(f"Overall -> accuracy={overall_acc:.4f}")
     print(f"Token-based entropy={token_entropy:.6f}" if not math.isnan(token_entropy) else "Token-based entropy=N/A")
+    print(f"Mean agreement={mean_agreement:.6f}" if not math.isnan(mean_agreement) else "Mean agreement=N/A")
+    print(f"Mean confidence={mean_confidence:.6f}" if not math.isnan(mean_confidence) else "Mean confidence=N/A")
     print(f"eval_runs.csv updated: {args.eval_runs_file}")
     print("=" * 72)
 

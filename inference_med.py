@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -70,6 +71,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--num_beams", type=int, default=1)
+    parser.add_argument("--agreement_samples", type=int, default=5, help="Number of stochastic generations used to compute agreement")
     parser.add_argument("--results_dir", type=str, default="results")
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--finetuned", action="store_true", default=False)
@@ -129,6 +131,22 @@ def _compute_token_entropies(step_scores, generated_ids, tokenizer) -> tuple[dic
 
     entropy_mean = sum(entropy_tokens.values()) / len(entropy_tokens) if entropy_tokens else float("nan")
     return entropy_tokens, entropy_mean
+
+
+def _compute_generation_confidence(step_scores) -> float:
+    token_confidences = []
+    for step_logits in step_scores:
+        probs = torch.softmax(step_logits[0], dim=-1)
+        token_confidences.append(float(torch.max(probs).item()))
+    return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
+
+
+def _compute_agreement(letter_predictions: list[str | None]) -> float:
+    valid = [letter for letter in letter_predictions if letter]
+    if not valid:
+        return 0.0
+    counts = Counter(valid)
+    return max(counts.values()) / len(valid)
 
 
 def _safe_div(a: int, b: int) -> float:
@@ -442,6 +460,14 @@ def main():
     if args.num_beams > 1:
         gen_kwargs["num_beams"] = args.num_beams
 
+    agreement_samples = max(1, int(args.agreement_samples))
+    agreement_gen_kwargs = {
+        "max_new_tokens": args.max_new_tokens,
+        "do_sample": True,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+    }
+
     results = []
     with torch.no_grad():
         for sample in tqdm(samples):
@@ -468,11 +494,32 @@ def main():
                 output_scores=True,
             )
 
-            generated_ids = generation_output.sequences[0]
+            input_length = input_ids.shape[1]
+            generated_ids = generation_output.sequences[0][input_length:]
             generated_text = clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())
             predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
             ground_truth_letter = sample.answer
             entropy_tokens, entropy_mean = _compute_token_entropies(generation_output.scores, generated_ids, tokenizer)
+            confidence = _compute_generation_confidence(generation_output.scores)
+
+            sampled_predicted_letters = []
+            if agreement_samples == 1:
+                sampled_predicted_letters.append(predicted_letter)
+            else:
+                for _ in range(agreement_samples):
+                    sample_output = model.generate(
+                        input_ids,
+                        images=image_tensor,
+                        attention_mask=torch.ones_like(input_ids),
+                        **agreement_gen_kwargs,
+                        return_dict_in_generate=True,
+                        output_scores=False,
+                    )
+                    sample_generated_ids = sample_output.sequences[0][input_length:]
+                    sample_text = clean_answer(tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip())
+                    sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
+                    sampled_predicted_letters.append(sample_letter)
+            agreement = _compute_agreement(sampled_predicted_letters)
 
             is_correct = predicted_letter == ground_truth_letter
             qtype = sample.question_type or "unknown"
@@ -490,6 +537,9 @@ def main():
                     "is_correct": is_correct,
                     "entropy_tokens": entropy_tokens,
                     "entropy": entropy_mean,
+                    "agreement": agreement,
+                    "confidence": confidence,
+                    "agreement_samples": sampled_predicted_letters,
                 }
             )
 
@@ -530,7 +580,7 @@ def main():
         wandb.summary["mc_open_accuracy"] = open_acc
     wandb.summary["total_samples"] = total
 
-    table = wandb.Table(columns=["image_path", "question", "question_type", "ground_truth_letter", "predicted_letter", "is_correct", "options", "entropy"])
+    table = wandb.Table(columns=["image_path", "question", "question_type", "ground_truth_letter", "predicted_letter", "is_correct", "options", "entropy", "agreement", "confidence"])
     for row in results:
         table.add_data(
             row["image_path"],
@@ -541,6 +591,8 @@ def main():
             bool(row.get("is_correct")),
             json.dumps(row.get("options", []), ensure_ascii=False),
             row.get("entropy", math.nan),
+            row.get("agreement", math.nan),
+            row.get("confidence", math.nan),
         )
     wandb.log({"predictions": table})
     wandb.finish()
