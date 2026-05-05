@@ -11,16 +11,19 @@ from typing import Dict, List, Tuple
 from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
 
 EVAL_RUN_COLUMNS = [
-    "start_time",
-    "dataset",
-    "model_path",
-    "n_samples",
-    "closed_accuracy",
+    "input_path",
+    "yesno_accuracy",
+    "yesno_entropy",
+    "yesno_confidence",
+    "yesno_agreement",
     "open_accuracy",
-    "mc_overall_accuracy",
-    "token_based_entropy",
-    "mean_agreement",
-    "mean_confidence",
+    "open_entropy",
+    "open_confidence",
+    "open_agreement",
+    "overall_accuracy",
+    "overall_entropy",
+    "overall_confidence",
+    "overall_agreement",
 ]
 
 
@@ -79,19 +82,10 @@ def _accuracy(samples: List[Dict]) -> float:
     return _safe_div(correct, len(samples))
 
 
-def _compute_token_based_entropy(results: List[Dict]) -> float:
+def _compute_mean_metric_from_group(samples: List[Dict], field: str) -> float:
     values = []
-    for row in results:
-        value = row.get("entropy")
-        if isinstance(value, (int, float)) and not math.isnan(value):
-            values.append(float(value))
-    return _safe_div(sum(values), len(values)) if values else float("nan")
-
-
-def _compute_mean_metric(results: List[Dict], field: str) -> float:
-    values = []
-    for row in results:
-        value = row.get(field)
+    for sample in samples:
+        value = sample.get("row", {}).get(field)
         if isinstance(value, (int, float)) and not math.isnan(value):
             values.append(float(value))
     return _safe_div(sum(values), len(values)) if values else float("nan")
@@ -132,9 +126,15 @@ def main():
     closed_acc = _accuracy(closed_rows)
     open_acc = _accuracy(open_rows)
     overall_acc = _accuracy(valid_rows)
-    token_entropy = _compute_token_based_entropy(results)
-    mean_agreement = _compute_mean_metric(results, "agreement")
-    mean_confidence = _compute_mean_metric(results, "confidence")
+    overall_entropy = _compute_mean_metric_from_group(valid_rows, "entropy")
+    overall_agreement = _compute_mean_metric_from_group(valid_rows, "agreement")
+    overall_confidence = _compute_mean_metric_from_group(valid_rows, "confidence")
+    closed_entropy = _compute_mean_metric_from_group(closed_rows, "entropy")
+    closed_agreement = _compute_mean_metric_from_group(closed_rows, "agreement")
+    closed_confidence = _compute_mean_metric_from_group(closed_rows, "confidence")
+    open_entropy = _compute_mean_metric_from_group(open_rows, "entropy")
+    open_agreement = _compute_mean_metric_from_group(open_rows, "agreement")
+    open_confidence = _compute_mean_metric_from_group(open_rows, "confidence")
 
     metrics = {
         "start_time": start_time,
@@ -147,25 +147,40 @@ def main():
             "closed_rows": len(closed_rows),
             "open_rows": len(open_rows),
         },
-        "closed": {"accuracy": closed_acc},
-        "open": {"accuracy": open_acc},
-        "overall": {"accuracy": overall_acc},
-        "token_based_entropy": token_entropy,
-        "mean_agreement": mean_agreement,
-        "mean_confidence": mean_confidence,
+        "closed": {
+            "accuracy": closed_acc,
+            "entropy": closed_entropy,
+            "confidence": closed_confidence,
+            "agreement": closed_agreement,
+        },
+        "open": {
+            "accuracy": open_acc,
+            "entropy": open_entropy,
+            "confidence": open_confidence,
+            "agreement": open_agreement,
+        },
+        "overall": {
+            "accuracy": overall_acc,
+            "entropy": overall_entropy,
+            "confidence": overall_confidence,
+            "agreement": overall_agreement,
+        },
     }
 
     run_row = {
-        "start_time": start_time,
-        "dataset": dataset,
-        "model_path": model_path,
-        "n_samples": n_samples,
-        "closed_accuracy": f"{closed_acc:.4f}",
+        "input_path": str(results_path),
+        "yesno_accuracy": f"{closed_acc:.4f}",
+        "yesno_entropy": "" if math.isnan(closed_entropy) else f"{closed_entropy:.6f}",
+        "yesno_confidence": "" if math.isnan(closed_confidence) else f"{closed_confidence:.6f}",
+        "yesno_agreement": "" if math.isnan(closed_agreement) else f"{closed_agreement:.6f}",
         "open_accuracy": f"{open_acc:.4f}",
-        "mc_overall_accuracy": f"{overall_acc:.4f}",
-        "token_based_entropy": "" if math.isnan(token_entropy) else f"{token_entropy:.6f}",
-        "mean_agreement": "" if math.isnan(mean_agreement) else f"{mean_agreement:.6f}",
-        "mean_confidence": "" if math.isnan(mean_confidence) else f"{mean_confidence:.6f}",
+        "open_entropy": "" if math.isnan(open_entropy) else f"{open_entropy:.6f}",
+        "open_confidence": "" if math.isnan(open_confidence) else f"{open_confidence:.6f}",
+        "open_agreement": "" if math.isnan(open_agreement) else f"{open_agreement:.6f}",
+        "overall_accuracy": f"{overall_acc:.4f}",
+        "overall_entropy": "" if math.isnan(overall_entropy) else f"{overall_entropy:.6f}",
+        "overall_confidence": "" if math.isnan(overall_confidence) else f"{overall_confidence:.6f}",
+        "overall_agreement": "" if math.isnan(overall_agreement) else f"{overall_agreement:.6f}",
     }
     _append_eval_runs_csv(Path(args.eval_runs_file), run_row)
 
@@ -179,11 +194,23 @@ def main():
     print(f"Rows: total={len(results)}, valid={len(valid_rows)}, closed={len(closed_rows)}, open={len(open_rows)}")
     print("-" * 72)
     print(f"Closed  -> accuracy={closed_acc:.4f}")
+    print(
+        f"          entropy={closed_entropy:.6f}, confidence={closed_confidence:.6f}, agreement={closed_agreement:.6f}"
+        if not any(math.isnan(v) for v in [closed_entropy, closed_confidence, closed_agreement])
+        else "          entropy/confidence/agreement=N/A"
+    )
     print(f"Open    -> accuracy={open_acc:.4f}")
+    print(
+        f"          entropy={open_entropy:.6f}, confidence={open_confidence:.6f}, agreement={open_agreement:.6f}"
+        if not any(math.isnan(v) for v in [open_entropy, open_confidence, open_agreement])
+        else "          entropy/confidence/agreement=N/A"
+    )
     print(f"Overall -> accuracy={overall_acc:.4f}")
-    print(f"Token-based entropy={token_entropy:.6f}" if not math.isnan(token_entropy) else "Token-based entropy=N/A")
-    print(f"Mean agreement={mean_agreement:.6f}" if not math.isnan(mean_agreement) else "Mean agreement=N/A")
-    print(f"Mean confidence={mean_confidence:.6f}" if not math.isnan(mean_confidence) else "Mean confidence=N/A")
+    print(
+        f"          entropy={overall_entropy:.6f}, confidence={overall_confidence:.6f}, agreement={overall_agreement:.6f}"
+        if not any(math.isnan(v) for v in [overall_entropy, overall_confidence, overall_agreement])
+        else "          entropy/confidence/agreement=N/A"
+    )
     print(f"eval_runs.csv updated: {args.eval_runs_file}")
     print("=" * 72)
 
