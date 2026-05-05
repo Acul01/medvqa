@@ -313,7 +313,7 @@ python inference.py \
   --results_dir results
 ```
 
-Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--agreement_samples`, `--use_two_stage_reasoning`, `--ablation_mode`, `--ablation_seed`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
+Weitere Flags: `--data_root`, `--max_new_tokens`, `--reasoning_max_new_tokens`, `--num_beams`, `--agreement_samples`, `--use_two_stage_reasoning`, `--ablation_mode`, `--ablation_seed`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
 
 ### Optional: 2-stufiges Reasoning (`inference.py`, `inference_med.py`)
 
@@ -323,6 +323,8 @@ Mit `--use_two_stage_reasoning` läuft die Inferenz in zwei Schritten:
 2. **Finale MC-Phase**: Zweiter Prompt mit den extrahierten Feldern und Ausgabe nur als Optionsbuchstabe.
 
 Das Parsing der Reasoning-Ausgabe ist best-effort: fehlende Felder werden als `unknown` gesetzt und Schritt 2 wird trotzdem ausgeführt.
+
+Wichtig: `--reasoning_max_new_tokens` steuert nur Schritt 1 (Reasoning, Default `192`), während `--max_new_tokens` weiterhin für die finale MC-Antwort gilt.
 
 Beispiel (`inference.py`):
 

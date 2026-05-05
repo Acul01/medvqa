@@ -74,6 +74,7 @@ def parse_args():
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--agreement_samples", type=int, default=5, help="Number of stochastic generations used to compute agreement")
     parser.add_argument("--use_two_stage_reasoning", action="store_true", default=False, help="Run 2-stage reasoning before final MC answer")
+    parser.add_argument("--reasoning_max_new_tokens", type=int, default=192, help="Maximum new tokens for stage-1 reasoning generation")
     parser.add_argument(
         "--ablation_mode",
         type=str,
@@ -577,7 +578,7 @@ def main():
                     reasoning_input_ids,
                     images=image_tensor,
                     attention_mask=torch.ones_like(reasoning_input_ids),
-                    max_new_tokens=max(64, args.max_new_tokens),
+                    max_new_tokens=args.reasoning_max_new_tokens,
                     do_sample=False,
                     return_dict_in_generate=True,
                     output_scores=False,
