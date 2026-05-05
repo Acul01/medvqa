@@ -149,6 +149,11 @@ def _compute_agreement(letter_predictions: list[str | None]) -> float:
     return max(counts.values()) / len(valid)
 
 
+def _nanmean(values: list[float]) -> float:
+    valid = [float(v) for v in values if isinstance(v, (int, float)) and not math.isnan(v)]
+    return sum(valid) / len(valid) if valid else float("nan")
+
+
 def _safe_div(a: int, b: int) -> float:
     return (a / b) if b else 0.0
 
@@ -499,25 +504,29 @@ def main():
             predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
             ground_truth_letter = sample.answer
             entropy_tokens, entropy_mean = _compute_token_entropies(generation_output.scores, generated_ids, tokenizer)
-            confidence = _compute_generation_confidence(generation_output.scores)
 
             sampled_predicted_letters = []
-            if agreement_samples == 1:
-                sampled_predicted_letters.append(predicted_letter)
-            else:
-                for _ in range(agreement_samples):
-                    sample_output = model.generate(
-                        input_ids,
-                        images=image_tensor,
-                        attention_mask=torch.ones_like(input_ids),
-                        **agreement_gen_kwargs,
-                        return_dict_in_generate=True,
-                        output_scores=False,
-                    )
-                    sample_generated_ids = sample_output.sequences[0]
-                    sample_text = clean_answer(tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip())
-                    sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
-                    sampled_predicted_letters.append(sample_letter)
+            sampled_entropies = []
+            sampled_confidences = []
+            for _ in range(agreement_samples):
+                sample_output = model.generate(
+                    input_ids,
+                    images=image_tensor,
+                    attention_mask=torch.ones_like(input_ids),
+                    **agreement_gen_kwargs,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                )
+                sample_generated_ids = sample_output.sequences[0]
+                sample_text = clean_answer(tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip())
+                sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
+                sampled_predicted_letters.append(sample_letter)
+                _, sample_entropy = _compute_token_entropies(sample_output.scores, sample_generated_ids, tokenizer)
+                sampled_entropies.append(sample_entropy)
+                sampled_confidences.append(_compute_generation_confidence(sample_output.scores))
+
+            entropy_mean = _nanmean(sampled_entropies)
+            confidence = _nanmean(sampled_confidences)
             agreement = _compute_agreement(sampled_predicted_letters)
 
             is_correct = predicted_letter == ground_truth_letter

@@ -267,10 +267,10 @@ Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei S
 ### Ist-Zustand (`inference.py`)
 
 - Hauptlauf mit `model.generate(..., output_scores=True)` pro Beispiel für Antwort, Entropie und Confidence.
-- **Entropie (aktueller Stand):** Für jedes generierte Token aus den Step-Logits; pro Token ein Eintrag in `entropy_tokens`; **`entropy`** wird derzeit als Mittelwert über **einzigartige** Token-Strings aggregiert (Implementierungs-Approximation).
+- **Entropie (aktueller Stand):** Pro Beispiel werden `--agreement_samples` stochastische Läufe durchgeführt; `entropy` ist der Mittelwert der laufweisen Entropie-Mittelwerte. `entropy_tokens` bleibt als tokenweise Entropie aus dem Hauptlauf gespeichert.
 - **Wichtige Präzisierung:** Diese Aggregation ist methodisch nur eine Übergangslösung. Zieldefinition ist token-distributionsbasiert über **alle** generierten Positionen ohne Unique-Filter, z. B. \(H = -\sum_t p(y_t)\log p(y_t)\) bzw. eine äquivalente positionsweise Aggregation.
 - **Agreement-Sampling:** Zusätzlich werden standardmäßig `--agreement_samples 5` stochastische Läufe ausgeführt (mit `temperature`/`top_p`) und als Mehrheitsanteil aggregiert.
-- **Confidence:** `confidence` wird als mittlere Top-1-Tokenwahrscheinlichkeit über die generierten Schritte des Hauptlaufs gespeichert.
+- **Confidence:** `confidence` wird als Mittelwert der laufweisen Top-1-Tokenwahrscheinlichkeiten über alle Agreement-Samples gespeichert.
 
 ### Aufruf (Beispiele)
 
