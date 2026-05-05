@@ -73,6 +73,7 @@ def parse_args():
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--agreement_samples", type=int, default=5, help="Number of stochastic generations used to compute agreement")
+    parser.add_argument("--use_two_stage_reasoning", action="store_true", default=False, help="Run 2-stage reasoning before final MC answer")
     parser.add_argument(
         "--ablation_mode",
         type=str,
@@ -109,6 +110,57 @@ def _model_short_name(model_path: str) -> str:
     if "llava" in name:
         return "llava"
     return Path(model_path).name
+
+
+def _format_mc_options_block(options: List[str]) -> str:
+    lines = [f"{LETTER_POOL[idx]}) {str(opt).strip()}" for idx, opt in enumerate(options)]
+    return "\n".join(lines)
+
+
+def build_reasoning_prompt(question: str) -> str:
+    return (
+        "You are a medical imaging expert analyzing an image.\n\n"
+        f"Question: {question}\n\n"
+        "Provide your reasoning in exactly this format:\n"
+        "REGION: [identify the anatomical region relevant to this question]\n"
+        "OBSERVATION: [describe what you observe in that region]\n"
+        "REASONING: [explain how this observation relates to the question]"
+    )
+
+
+def build_final_prompt(question: str, options: List[str], region: str, observation: str, reasoning: str) -> str:
+    return (
+        "You are a medical imaging expert analyzing an image.\n\n"
+        "You have already analyzed this image and provided the following reasoning:\n"
+        f"REGION: {region}\n"
+        f"OBSERVATION: {observation}\n"
+        f"REASONING: {reasoning}\n\n"
+        "Based on this analysis, answer the following question \n"
+        "by selecting exactly one option.\n\n"
+        f"Question: {question}\n"
+        f"Options: {_format_mc_options_block(options)}\n\n"
+        "Answer with the option letter only (e.g. A, B, C, D or A, B for Yes/No questions)."
+    )
+
+
+def parse_reasoning_fields(text: str) -> Dict[str, str]:
+    source = text or ""
+    fields = {"region": "unknown", "observation": "unknown", "reasoning": "unknown"}
+    upper = source.upper()
+    markers = [("region", "REGION:"), ("observation", "OBSERVATION:"), ("reasoning", "REASONING:")]
+    positions = []
+    for key, marker in markers:
+        idx = upper.find(marker)
+        if idx != -1:
+            positions.append((idx, key, marker))
+    positions.sort(key=lambda x: x[0])
+    for pos_idx, (start, key, marker) in enumerate(positions):
+        content_start = start + len(marker)
+        content_end = positions[pos_idx + 1][0] if pos_idx + 1 < len(positions) else len(source)
+        value = source[content_start:content_end].strip()
+        if value:
+            fields[key] = re.sub(r"\s+", " ", value)
+    return fields
 
 
 def _compute_token_entropies(step_scores, generated_ids, tokenizer) -> tuple[dict, float]:
@@ -505,8 +557,49 @@ def main():
             image_tensor = process_images([image], image_processor, model.config).to(device, dtype=torch.float16)
 
             conv = conv_templates[args.conv_template].copy()
-            user_text = format_mc_user_text(sample.question, sample.mc_options)
-            question = f"{DEFAULT_IMAGE_TOKEN}\n{user_text}"
+            reasoning_raw = ""
+            reasoning_region = "unknown"
+            reasoning_observation = "unknown"
+            reasoning_explanation = "unknown"
+            reasoning_parse_mode = "disabled"
+
+            if args.use_two_stage_reasoning:
+                reasoning_prompt = build_reasoning_prompt(sample.question)
+                reasoning_question = f"{DEFAULT_IMAGE_TOKEN}\n{reasoning_prompt}"
+                reasoning_conv = conv_templates[args.conv_template].copy()
+                reasoning_conv.append_message(reasoning_conv.roles[0], reasoning_question)
+                reasoning_conv.append_message(reasoning_conv.roles[1], None)
+                reasoning_full_prompt = reasoning_conv.get_prompt()
+                reasoning_input_ids = tokenizer_image_token(
+                    reasoning_full_prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
+                ).unsqueeze(0).to(device)
+                reasoning_output = model.generate(
+                    reasoning_input_ids,
+                    images=image_tensor,
+                    attention_mask=torch.ones_like(reasoning_input_ids),
+                    max_new_tokens=max(64, args.max_new_tokens),
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=False,
+                )
+                reasoning_generated_ids = reasoning_output.sequences[0]
+                reasoning_raw = clean_answer(tokenizer.decode(reasoning_generated_ids, skip_special_tokens=True).strip())
+                parsed_reasoning = parse_reasoning_fields(reasoning_raw)
+                reasoning_region = parsed_reasoning["region"]
+                reasoning_observation = parsed_reasoning["observation"]
+                reasoning_explanation = parsed_reasoning["reasoning"]
+                reasoning_parse_mode = "best_effort"
+                final_user_text = build_final_prompt(
+                    sample.question,
+                    sample.mc_options,
+                    reasoning_region,
+                    reasoning_observation,
+                    reasoning_explanation,
+                )
+            else:
+                final_user_text = format_mc_user_text(sample.question, sample.mc_options)
+
+            question = f"{DEFAULT_IMAGE_TOKEN}\n{final_user_text}"
             conv.append_message(conv.roles[0], question)
             conv.append_message(conv.roles[1], None)
             prompt = conv.get_prompt()
@@ -558,6 +651,11 @@ def main():
                     "image_path": effective_image_path,
                     "source_image_path": source_image_path,
                     "ablation_mode": args.ablation_mode,
+                    "reasoning_raw": reasoning_raw,
+                    "reasoning_region": reasoning_region,
+                    "reasoning_observation": reasoning_observation,
+                    "reasoning_explanation": reasoning_explanation,
+                    "reasoning_parse_mode": reasoning_parse_mode,
                     "question": sample.question,
                     "options": sample.mc_options,
                     "correct_index": sample.mc_correct_index,
