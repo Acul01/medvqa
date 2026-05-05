@@ -1,0 +1,154 @@
+============================================================
+# TRAINING (train.py or train_med.py)
+============================================================
+# Full-Finetuning
+------------------------------------------------------------
+#--resume_from_checkpoint ./outputs/llava-med/vqarad_MC_full/checkpoint-3000 \
+
+nohup python train_med.py \
+    --dataset slake \
+    --mc_data_root data_mc_openai \
+    --train_split train \
+    --val_split validation \
+    --gradient_checkpointing \
+    --save_steps 500 \
+    --eval_steps 500 \
+    --bf16 \
+    --max_length 1024 \
+    --dataloader_num_workers 1 \
+    --num_train_epochs 5 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 2e-5 \
+    --model_path microsoft/llava-med-v1.5-mistral-7b \
+    --output_dir ./outputs/mc/llava-med/slake_MC_full \
+    > logs/train_llava-med_slake_MC_full.log 2>&1 &
+
+nohup python train.py \
+    --dataset medvqa2019 \
+    --mc_data_root data_mc_openai \
+    --train_split train \
+    --val_split validation \
+    --gradient_checkpointing \
+    --save_steps 500 \
+    --eval_steps 500 \
+    --bf16 \
+    --max_length 1024 \
+    --dataloader_num_workers 1 \
+    --num_train_epochs 5 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 2e-5 \
+    --output_dir ./outputs/mc/llava/medvqa2019_MC_full \
+    > logs/train_llava_medvqa2019_MC_full.log 2>&1 &
+
+------------------------------------------------------------
+# LoRA-Finetuning
+------------------------------------------------------------
+nohup python train_med.py \
+    --dataset slake \
+    --mc_data_root data_mc_openai \
+    --train_split train \
+    --val_split validation \
+    --gradient_checkpointing \
+    --save_steps 500 \
+    --eval_steps 500 \
+    --bf16 \
+    --max_length 1024 \
+    --dataloader_num_workers 1 \
+    --use_lora \
+    --num_train_epochs 5 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 2e-5 \
+    --model_path microsoft/llava-med-v1.5-mistral-7b \
+    --output_dir ./outputs/mc/llava-med/slake_MC_LoRA \
+    > logs/train_llava-med_slake_MC_LoRA.log 2>&1 &
+
+nohup python train.py \
+    --dataset medvqa2019 \
+    --mc_data_root data_mc_openai \
+    --train_split train \
+    --val_split validation \
+    --gradient_checkpointing \
+    --save_steps 500 \
+    --eval_steps 500 \
+    --bf16 \
+    --max_length 1024 \
+    --dataloader_num_workers 1 \
+    --use_lora \
+    --num_train_epochs 5 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 2e-5 \
+    --output_dir ./outputs/mc/llava/medvqa2019_MC_LoRA \
+    > logs/train_llava_medvqa2019_MC_LoRA.log 2>&1 &
+
+
+------------------------------------------------------------
+# Resume from Checkpoint (full ft)
+------------------------------------------------------------
+nohup python train_med.py \
+  --dataset all \
+  --gradient_checkpointing \
+  --bf16 \
+  --max_length 1024 \
+  --dataloader_num_workers 1 \
+  --num_train_epochs 5 \
+  --learning_rate 2e-5 \
+  --output_dir ./outputs/llava-med/alldatasets_5ep_2e-5_full \
+  --resume_from_checkpoint ./outputs/llava-med/alldatasets_5ep_2e-5_full/checkpoint-3000 \
+  >> logs/train_llava-med_alldatasets_full_resume.log 2>&1 &
+
+---------------------------------------------
+# LoRA Resume
+---------------------------------------------
+nohup python train_med.py \
+    --dataset all \
+    --gradient_checkpointing \
+    --bf16 \
+    --max_length 1024 \
+    --dataloader_num_workers 1 \
+    --num_train_epochs 5 \
+    --learning_rate 2e-5 \
+    --use_lora \
+    --lora_r 16 \
+    --lora_alpha 32 \
+    --lora_dropout 0.05 \
+    --lora_target_modules q_proj v_proj \
+    --output_dir ./outputs/llava-med/alldatasets_5ep_2e-5_LoRA \
+    --resume_from_checkpoint ./outputs/llava-med/alldatasets_5ep_2e-5_LoRA/checkpoint-20500 \
+    > logs/train_llava_med_alldatasets_LoRA_resume.log 2>&1 &
+
+============================================================
+# INFERENCE (inference.py or inference_med.py)
+============================================================
+nohup python inference_med.py \
+  --model_path ./outputs/mc/llava-med/vqarad_MC_full \
+  --dataset vqarad \
+  --split test \
+  >> logs/inference_llava-med_vqarad_MC_full.log 2>&1 &
+
+nohup python inference.py \
+  --dataset vqarad \
+  --split test \
+  >> logs/inference_llava_vqarad_base.log 2>&1 &
+
+python evaluate.py \
+  --results_file results/llava/pathvqa/pathvqa_5ep_2e-5_full_pathvqa_all.json \
+  --eval_runs_file results/eval_runs.csv
+
+
+python plot_entropy.py \
+  --results_file results/llava-med/vqarad/vqarad_5ep_2e-5_LoRA_vqarad_all.json \
+  --output_file results/vqarada_entropy_plot.png \
+  --num_bins 45
+
+
+
+python risk_coverage_entropy.py \
+  --results_file results/llava-med/vqarad/vqarad_5ep_2e-5_LoRA_vqarad_all.json \
+  --output_dir results/reliable_baseline \
+  --risk_metric rouge \
+  --num_thresholds 10000
+
