@@ -19,6 +19,7 @@ from utils.mc_vqa import format_mc_user_text, parse_predicted_letter
 from utils.save_results import clean_answer, save_results
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
+END_REASONING_TOKEN = "<END_REASONING>"
 
 DATASET_MAX_NEW_TOKENS = {
     "pathvqa": 8,
@@ -97,7 +98,8 @@ def build_reasoning_prompt(question: str) -> str:
         "Provide your reasoning in exactly this format:\n"
         "REGION: [identify the anatomical region relevant to this question]\n"
         "OBSERVATION: [describe what you observe in that region]\n"
-        "REASONING: [explain how this observation relates to the question]"
+        "REASONING: [explain how this observation relates to the question]\n\n"
+        f"End your response with exactly this token: {END_REASONING_TOKEN}"
     )
 
 
@@ -116,10 +118,17 @@ def build_final_prompt(question: str, options: list[str], region: str, observati
     )
 
 
-def parse_reasoning_fields(text: str) -> dict:
+def parse_reasoning_fields(text: str) -> tuple[dict, str]:
     source = text or ""
+    marker_idx = source.find(END_REASONING_TOKEN)
+    if marker_idx != -1:
+        parse_source = source[:marker_idx]
+        parse_mode = "best_effort_marker"
+    else:
+        parse_source = source
+        parse_mode = "best_effort_no_marker"
     fields = {"region": "unknown", "observation": "unknown", "reasoning": "unknown"}
-    upper = source.upper()
+    upper = parse_source.upper()
     markers = [("region", "REGION:"), ("observation", "OBSERVATION:"), ("reasoning", "REASONING:")]
     positions = []
     for key, marker in markers:
@@ -129,11 +138,11 @@ def parse_reasoning_fields(text: str) -> dict:
     positions.sort(key=lambda x: x[0])
     for pos_idx, (start, key, marker) in enumerate(positions):
         content_start = start + len(marker)
-        content_end = positions[pos_idx + 1][0] if pos_idx + 1 < len(positions) else len(source)
-        value = source[content_start:content_end].strip()
+        content_end = positions[pos_idx + 1][0] if pos_idx + 1 < len(positions) else len(parse_source)
+        value = parse_source[content_start:content_end].strip()
         if value:
             fields[key] = re.sub(r"\s+", " ", value)
-    return fields
+    return fields, parse_mode
 
 
 def _model_short_name(model_path: str) -> str:
@@ -303,11 +312,10 @@ def main():
                 reasoning_input_len = reasoning_inputs["input_ids"].shape[1]
                 reasoning_ids = reasoning_output.sequences[0][reasoning_input_len:]
                 reasoning_raw = clean_answer(processor.decode(reasoning_ids, skip_special_tokens=True).strip())
-                parsed_reasoning = parse_reasoning_fields(reasoning_raw)
+                parsed_reasoning, reasoning_parse_mode = parse_reasoning_fields(reasoning_raw)
                 reasoning_region = parsed_reasoning["region"]
                 reasoning_observation = parsed_reasoning["observation"]
                 reasoning_explanation = parsed_reasoning["reasoning"]
-                reasoning_parse_mode = "best_effort"
                 final_user_prompt = build_final_prompt(
                     sample.question,
                     sample.mc_options,
