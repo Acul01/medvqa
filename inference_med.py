@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import math
+import random
 import re
 from collections import Counter
 from pathlib import Path
@@ -72,6 +73,14 @@ def parse_args():
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--agreement_samples", type=int, default=5, help="Number of stochastic generations used to compute agreement")
+    parser.add_argument(
+        "--ablation_mode",
+        type=str,
+        default="none",
+        choices=["none", "black", "shuffle"],
+        help="Image ablation mode: none, black image, or sample-level image assignment shuffle",
+    )
+    parser.add_argument("--ablation_seed", type=int, default=42, help="Seed used for ablation shuffle mode")
     parser.add_argument("--results_dir", type=str, default="results")
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--finetuned", action="store_true", default=False)
@@ -156,6 +165,14 @@ def _nanmean(values: list[float]) -> float:
 
 def _safe_div(a: int, b: int) -> float:
     return (a / b) if b else 0.0
+
+
+def _build_shuffle_assignment(samples, seed: int) -> dict[int, str]:
+    image_paths = [sample.image_path for sample in samples]
+    shuffled = image_paths.copy()
+    rng = random.Random(seed)
+    rng.shuffle(shuffled)
+    return {idx: shuffled[idx] for idx in range(len(samples))}
 
 
 def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
@@ -456,6 +473,7 @@ def main():
     samples = loader.load_dataset(args.dataset, split=args.split)
     if args.n_samples is not None:
         samples = samples[: args.n_samples]
+    shuffle_assignment = _build_shuffle_assignment(samples, args.ablation_seed) if args.ablation_mode == "shuffle" else {}
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
@@ -475,11 +493,15 @@ def main():
 
     results = []
     with torch.no_grad():
-        for sample in tqdm(samples):
+        for sample_idx, sample in enumerate(tqdm(samples)):
             if not sample.mc_options or sample.mc_correct_index is None:
                 continue
 
-            image = Image.open(sample.image_path).convert("RGB")
+            source_image_path = sample.image_path
+            effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+            image = Image.open(effective_image_path).convert("RGB")
+            if args.ablation_mode == "black":
+                image = Image.new("RGB", image.size, color=(0, 0, 0))
             image_tensor = process_images([image], image_processor, model.config).to(device, dtype=torch.float16)
 
             conv = conv_templates[args.conv_template].copy()
@@ -533,7 +555,9 @@ def main():
             qtype = sample.question_type or "unknown"
             results.append(
                 {
-                    "image_path": sample.image_path,
+                    "image_path": effective_image_path,
+                    "source_image_path": source_image_path,
+                    "ablation_mode": args.ablation_mode,
                     "question": sample.question,
                     "options": sample.mc_options,
                     "correct_index": sample.mc_correct_index,

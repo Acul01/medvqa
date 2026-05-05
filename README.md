@@ -313,7 +313,38 @@ python inference.py \
   --results_dir results
 ```
 
-Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--agreement_samples`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
+Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--agreement_samples`, `--ablation_mode`, `--ablation_seed`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
+
+### Counterfactual Ablation-Modi (`inference.py`, `inference_med.py`)
+
+Für kontrollierte Gegenfaktual-Tests kann ein globaler Ablationsmodus gesetzt werden:
+
+- `--ablation_mode none`: Standard, Originalbild pro Sample
+- `--ablation_mode black`: Bild wird vollständig geschwärzt (gleiche Auflösung)
+- `--ablation_mode shuffle`: Bildzuordnung wird pro Run zufällig zwischen Samples permutiert (Frage/GT bleiben beim Originalsample)
+
+Optional steuert `--ablation_seed` die reproduzierbare Permutation im `shuffle`-Modus.
+
+Beispiel (`black`):
+
+```bash
+python inference_med.py \
+  --dataset vqarad \
+  --split test \
+  --ablation_mode black \
+  --results_dir results
+```
+
+Beispiel (`shuffle`):
+
+```bash
+python inference.py \
+  --dataset vqarad \
+  --split test \
+  --ablation_mode shuffle \
+  --ablation_seed 42 \
+  --results_dir results
+```
 
 ### Ausgabe-Dateien
 
@@ -326,7 +357,7 @@ Weitere Flags: `--data_root`, `--max_new_tokens`, `--num_beams`, `--agreement_sa
 
 ### JSON-Felder pro Sample (mindestens)
 
-- `image_path`, `question`, `ground_truth_answer`, `predicted_answer`
+- `image_path`, `source_image_path`, `ablation_mode`, `question`, `ground_truth_answer`, `predicted_answer`
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - nach Inferenz ergänzt: `bleu_1` … `bleu_4`, `rougeL`, `bert_f1` (und weitere ROUGE-Keys je nach Version)
 
