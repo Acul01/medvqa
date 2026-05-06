@@ -1,6 +1,7 @@
 """Inference script for standard LLaVA on MC Medical VQA."""
 
 import argparse
+import gc
 import json
 import math
 import random
@@ -47,6 +48,7 @@ def parse_args():
     parser.add_argument("--use_two_stage_reasoning", action="store_true", default=False, help="Run 2-stage reasoning before final MC answer")
     parser.add_argument("--use_gradcam", action="store_true", default=False, help="Attempt GradCAM in 2-stage reasoning flow (currently unsupported for this backend; safe fallback)")
     parser.add_argument("--gradcam_dir", type=str, default=None, help="Directory for GradCAM artifacts when enabled")
+    parser.add_argument("--gradcam_chunk_size", type=int, default=100, help="Chunk size for automatic gradcam inference splitting to reduce OOM risk")
     parser.add_argument("--reasoning_max_new_tokens", type=int, default=192, help="Maximum new tokens for stage-1 reasoning generation")
     parser.add_argument(
         "--ablation_mode",
@@ -263,6 +265,7 @@ def main():
         warnings.warn("--use_gradcam is ignored unless --use_two_stage_reasoning is set.", UserWarning, stacklevel=1)
     gradcam_effective = bool(args.use_gradcam and args.use_two_stage_reasoning)
     gradcam_dir = args.gradcam_dir or str(Path(args.results_dir) / "gradcam_overlays")
+    gradcam_chunk_size = max(1, int(args.gradcam_chunk_size))
     _ = gradcam_dir
 
     model_short = _model_short_name(args.model_path)
@@ -318,156 +321,174 @@ def main():
         "top_p": args.top_p,
     }
 
+    chunk_ranges: list[tuple[int, int]]
+    if gradcam_effective:
+        chunk_ranges = [(start, min(start + gradcam_chunk_size, len(samples))) for start in range(0, len(samples), gradcam_chunk_size)]
+        print(f"[gradcam-chunk] active: {len(chunk_ranges)} chunks (size={gradcam_chunk_size}, total={len(samples)})")
+    else:
+        chunk_ranges = [(0, len(samples))]
+
     results = []
     with torch.no_grad():
-        for sample_idx, sample in enumerate(tqdm(samples)):
-            if not sample.mc_options or sample.mc_correct_index is None:
-                continue
-            source_image_path = sample.image_path
-            effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
-            image = Image.open(effective_image_path).convert("RGB")
-            if args.ablation_mode == "black":
-                image = Image.new("RGB", image.size, color=(0, 0, 0))
-            reasoning_raw = ""
-            reasoning_region = "unknown"
-            reasoning_observation = "unknown"
-            reasoning_explanation = "unknown"
-            reasoning_parse_mode = "disabled"
-            gradcam_status = "disabled"
-            gradcam_error = ""
-            gradcam_overlay_path = ""
-            gradcam_heatmap_path = ""
+        for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_ranges, start=1):
+            chunk_samples = samples[chunk_start:chunk_end]
+            for local_idx, sample in enumerate(tqdm(chunk_samples, leave=not gradcam_effective)):
+                sample_idx = chunk_start + local_idx
+                if not sample.mc_options or sample.mc_correct_index is None:
+                    continue
+                source_image_path = sample.image_path
+                effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+                image = Image.open(effective_image_path).convert("RGB")
+                if args.ablation_mode == "black":
+                    image = Image.new("RGB", image.size, color=(0, 0, 0))
+                reasoning_raw = ""
+                reasoning_region = "unknown"
+                reasoning_observation = "unknown"
+                reasoning_explanation = "unknown"
+                reasoning_parse_mode = "disabled"
+                gradcam_status = "disabled"
+                gradcam_error = ""
+                gradcam_overlay_path = ""
+                gradcam_heatmap_path = ""
 
-            if args.use_two_stage_reasoning:
-                if gradcam_effective:
-                    gradcam_status = "failed"
-                    gradcam_error = "unsupported_backend"
-                reasoning_prompt = build_reasoning_prompt(sample.question)
-                reasoning_conv = build_text_only_conversation(reasoning_prompt)
-                reasoning_text = processor.apply_chat_template(reasoning_conv, add_generation_prompt=True)
-                reasoning_inputs = processor(images=image, text=reasoning_text, return_tensors="pt").to(device)
-                reasoning_output = model.generate(
-                    **reasoning_inputs,
-                    max_new_tokens=args.reasoning_max_new_tokens,
-                    do_sample=False,
-                    return_dict_in_generate=True,
-                    output_scores=False,
-                )
-                reasoning_input_len = reasoning_inputs["input_ids"].shape[1]
-                reasoning_ids = reasoning_output.sequences[0][reasoning_input_len:]
-                reasoning_raw = clean_answer(processor.decode(reasoning_ids, skip_special_tokens=True).strip())
-                parsed_reasoning, reasoning_parse_mode = parse_reasoning_fields(reasoning_raw)
-                reasoning_region = parsed_reasoning["region"]
-                reasoning_observation = parsed_reasoning["observation"]
-                reasoning_explanation = parsed_reasoning["reasoning"]
-                final_user_prompt = build_final_prompt(
-                    sample.question,
-                    sample.mc_options,
-                    reasoning_region,
-                    reasoning_observation,
-                    reasoning_explanation,
-                )
-                conversation = build_text_only_conversation(final_user_prompt)
-            else:
-                conversation = build_conversation(sample.question, sample.mc_options)
-
-            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-            inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
-            input_length = inputs["input_ids"].shape[1]
-
-            generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True)
-            generated_ids = generation_output.sequences[0][input_length:]
-            generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
-            stage2_option_probs = {}
-            stage2_decoding_mode = "text_parse"
-            if args.use_two_stage_reasoning:
-                stage2_option_probs = _stage2_letter_probs_from_first_step(
-                    generation_output.scores,
-                    tokenizer=processor.tokenizer,
-                    num_options=len(sample.mc_options),
-                )
-                predicted_letter = _pick_letter_from_probs(stage2_option_probs)
-                generated_text = predicted_letter or ""
-                stage2_decoding_mode = "letter_logits_only"
-            else:
-                predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
-            ground_truth_letter = sample.answer
-
-            entropy_tokens, entropy_mean = _compute_token_entropies(
-                generation_output.scores,
-                generated_ids=generated_ids,
-                tokenizer=processor.tokenizer,
-            )
-
-            sampled_predicted_letters = []
-            sampled_entropies = []
-            sampled_confidences = []
-            for _ in range(agreement_samples):
-                sample_output = model.generate(
-                    **inputs,
-                    **agreement_gen_kwargs,
-                    return_dict_in_generate=True,
-                    output_scores=True,
-                )
-                sample_generated_ids = sample_output.sequences[0][input_length:]
                 if args.use_two_stage_reasoning:
-                    sample_probs = _stage2_letter_probs_from_first_step(
-                        sample_output.scores,
+                    if gradcam_effective:
+                        gradcam_status = "failed"
+                        gradcam_error = "unsupported_backend"
+                    reasoning_prompt = build_reasoning_prompt(sample.question)
+                    reasoning_conv = build_text_only_conversation(reasoning_prompt)
+                    reasoning_text = processor.apply_chat_template(reasoning_conv, add_generation_prompt=True)
+                    reasoning_inputs = processor(images=image, text=reasoning_text, return_tensors="pt").to(device)
+                    reasoning_output = model.generate(
+                        **reasoning_inputs,
+                        max_new_tokens=args.reasoning_max_new_tokens,
+                        do_sample=False,
+                        return_dict_in_generate=True,
+                        output_scores=False,
+                    )
+                    reasoning_input_len = reasoning_inputs["input_ids"].shape[1]
+                    reasoning_ids = reasoning_output.sequences[0][reasoning_input_len:]
+                    reasoning_raw = clean_answer(processor.decode(reasoning_ids, skip_special_tokens=True).strip())
+                    parsed_reasoning, reasoning_parse_mode = parse_reasoning_fields(reasoning_raw)
+                    reasoning_region = parsed_reasoning["region"]
+                    reasoning_observation = parsed_reasoning["observation"]
+                    reasoning_explanation = parsed_reasoning["reasoning"]
+                    final_user_prompt = build_final_prompt(
+                        sample.question,
+                        sample.mc_options,
+                        reasoning_region,
+                        reasoning_observation,
+                        reasoning_explanation,
+                    )
+                    conversation = build_text_only_conversation(final_user_prompt)
+                else:
+                    conversation = build_conversation(sample.question, sample.mc_options)
+
+                prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+                inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+                input_length = inputs["input_ids"].shape[1]
+
+                generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True)
+                generated_ids = generation_output.sequences[0][input_length:]
+                generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
+                stage2_option_probs = {}
+                stage2_decoding_mode = "text_parse"
+                if args.use_two_stage_reasoning:
+                    stage2_option_probs = _stage2_letter_probs_from_first_step(
+                        generation_output.scores,
                         tokenizer=processor.tokenizer,
                         num_options=len(sample.mc_options),
                     )
-                    sample_letter = _pick_letter_from_probs(sample_probs)
+                    predicted_letter = _pick_letter_from_probs(stage2_option_probs)
+                    generated_text = predicted_letter or ""
+                    stage2_decoding_mode = "letter_logits_only"
                 else:
-                    sample_text = clean_answer(processor.decode(sample_generated_ids, skip_special_tokens=True).strip())
-                    sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
-                sampled_predicted_letters.append(sample_letter)
-                _, sample_entropy = _compute_token_entropies(
-                    sample_output.scores,
-                    generated_ids=sample_generated_ids,
+                    predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
+                ground_truth_letter = sample.answer
+
+                entropy_tokens, entropy_mean = _compute_token_entropies(
+                    generation_output.scores,
+                    generated_ids=generated_ids,
                     tokenizer=processor.tokenizer,
                 )
-                sampled_entropies.append(sample_entropy)
-                sampled_confidences.append(_compute_generation_confidence(sample_output.scores))
 
-            entropy_mean = _nanmean(sampled_entropies)
-            confidence = _nanmean(sampled_confidences)
-            agreement = _compute_agreement(sampled_predicted_letters)
-            is_correct = predicted_letter == ground_truth_letter
-            qtype = sample.question_type or "unknown"
+                sampled_predicted_letters = []
+                sampled_entropies = []
+                sampled_confidences = []
+                for _ in range(agreement_samples):
+                    sample_output = model.generate(
+                        **inputs,
+                        **agreement_gen_kwargs,
+                        return_dict_in_generate=True,
+                        output_scores=True,
+                    )
+                    sample_generated_ids = sample_output.sequences[0][input_length:]
+                    if args.use_two_stage_reasoning:
+                        sample_probs = _stage2_letter_probs_from_first_step(
+                            sample_output.scores,
+                            tokenizer=processor.tokenizer,
+                            num_options=len(sample.mc_options),
+                        )
+                        sample_letter = _pick_letter_from_probs(sample_probs)
+                    else:
+                        sample_text = clean_answer(processor.decode(sample_generated_ids, skip_special_tokens=True).strip())
+                        sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
+                    sampled_predicted_letters.append(sample_letter)
+                    _, sample_entropy = _compute_token_entropies(
+                        sample_output.scores,
+                        generated_ids=sample_generated_ids,
+                        tokenizer=processor.tokenizer,
+                    )
+                    sampled_entropies.append(sample_entropy)
+                    sampled_confidences.append(_compute_generation_confidence(sample_output.scores))
 
-            results.append(
-                {
-                    "image_path": effective_image_path,
-                    "source_image_path": source_image_path,
-                    "ablation_mode": args.ablation_mode,
-                    "use_gradcam": gradcam_effective,
-                    "gradcam_status": gradcam_status,
-                    "gradcam_error": gradcam_error,
-                    "gradcam_overlay_path": gradcam_overlay_path,
-                    "gradcam_heatmap_path": gradcam_heatmap_path,
-                    "reasoning_raw": reasoning_raw,
-                    "reasoning_region": reasoning_region,
-                    "reasoning_observation": reasoning_observation,
-                    "reasoning_explanation": reasoning_explanation,
-                    "reasoning_parse_mode": reasoning_parse_mode,
-                    "stage2_decoding_mode": stage2_decoding_mode,
-                    "stage2_option_probs": stage2_option_probs,
-                    "question": sample.question,
-                    "options": sample.mc_options,
-                    "correct_index": sample.mc_correct_index,
-                    "question_type": qtype,
-                    "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
-                    "ground_truth_letter": ground_truth_letter,
-                    "predicted_answer": generated_text,
-                    "predicted_letter": predicted_letter,
-                    "is_correct": is_correct,
-                    "entropy_tokens": entropy_tokens,
-                    "entropy": entropy_mean,
-                    "agreement": agreement,
-                    "confidence": confidence,
-                    "agreement_samples": sampled_predicted_letters,
-                }
-            )
+                entropy_mean = _nanmean(sampled_entropies)
+                confidence = _nanmean(sampled_confidences)
+                agreement = _compute_agreement(sampled_predicted_letters)
+                is_correct = predicted_letter == ground_truth_letter
+                qtype = sample.question_type or "unknown"
+
+                results.append(
+                    {
+                        "image_path": effective_image_path,
+                        "source_image_path": source_image_path,
+                        "ablation_mode": args.ablation_mode,
+                        "use_gradcam": gradcam_effective,
+                        "gradcam_status": gradcam_status,
+                        "gradcam_error": gradcam_error,
+                        "gradcam_overlay_path": gradcam_overlay_path,
+                        "gradcam_heatmap_path": gradcam_heatmap_path,
+                        "reasoning_raw": reasoning_raw,
+                        "reasoning_region": reasoning_region,
+                        "reasoning_observation": reasoning_observation,
+                        "reasoning_explanation": reasoning_explanation,
+                        "reasoning_parse_mode": reasoning_parse_mode,
+                        "stage2_decoding_mode": stage2_decoding_mode,
+                        "stage2_option_probs": stage2_option_probs,
+                        "question": sample.question,
+                        "options": sample.mc_options,
+                        "correct_index": sample.mc_correct_index,
+                        "question_type": qtype,
+                        "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
+                        "ground_truth_letter": ground_truth_letter,
+                        "predicted_answer": generated_text,
+                        "predicted_letter": predicted_letter,
+                        "is_correct": is_correct,
+                        "entropy_tokens": entropy_tokens,
+                        "entropy": entropy_mean,
+                        "agreement": agreement,
+                        "confidence": confidence,
+                        "agreement_samples": sampled_predicted_letters,
+                    }
+                )
+
+            if gradcam_effective:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    if hasattr(torch.cuda, "ipc_collect"):
+                        torch.cuda.ipc_collect()
+                print(f"[gradcam-chunk] completed {chunk_idx}/{len(chunk_ranges)} ({chunk_end - chunk_start} samples)")
 
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]

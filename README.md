@@ -313,7 +313,7 @@ python inference.py \
   --results_dir results
 ```
 
-Weitere Flags: `--data_root`, `--max_new_tokens`, `--reasoning_max_new_tokens`, `--num_beams`, `--agreement_samples`, `--use_two_stage_reasoning`, `--use_gradcam`, `--gradcam_dir`, `--ablation_mode`, `--ablation_seed`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
+Weitere Flags: `--data_root`, `--max_new_tokens`, `--reasoning_max_new_tokens`, `--num_beams`, `--agreement_samples`, `--use_two_stage_reasoning`, `--use_gradcam`, `--gradcam_dir`, `--gradcam_chunk_size`, `--ablation_mode`, `--ablation_seed`, `--n_samples` (nur erste \(N\) Datensatzzeilen), W&B (`--wandb_project`, `--wandb_run_name`).
 
 ### Optional: 2-stufiges Reasoning (`inference.py`, `inference_med.py`)
 
@@ -326,6 +326,7 @@ Die Stage-1-Ausgabe wird marker-frei best-effort geparst (fehlende Felder werden
 Im 2-Stage-Modus wird Schritt 2 strikt über die **Option-Logits des ersten Antworttokens** decodiert (`stage2_decoding_mode = letter_logits_only`), um Freitext-Drift wie `\"C, D\"` zu vermeiden.
 
 Optional: Mit `--use_gradcam` (nur zusammen mit `--use_two_stage_reasoning`) wird aus den **Stage-1-Reasoning-Tokens** eine GradCAM-Heatmap berechnet und ein Overlay-Bild für Stage 2 verwendet. Artefakte werden unter `--gradcam_dir` gespeichert (Default: `<results_dir>/gradcam_overlays`). Für `inference.py` wird aktuell ein kontrollierter Fallback dokumentiert (`gradcam_status=failed`, `gradcam_error=unsupported_backend`).
+Wenn `--use_gradcam` aktiv ist, wird die Inferenz automatisch in Chunks verarbeitet (Default `--gradcam_chunk_size 100`, Restchunk inklusive), um OOM-Risiko bei langen Läufen zu reduzieren.
 
 Wichtig: `--reasoning_max_new_tokens` steuert nur Schritt 1 (Reasoning, Default `192`), während `--max_new_tokens` weiterhin für die finale MC-Antwort gilt.
 
