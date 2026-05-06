@@ -360,9 +360,25 @@ def generate_with_token_ids(
             return_dict_in_generate=True,
         )
 
-    full_ids = gen.sequences
+    raw_sequences = gen.sequences
     prompt_len = int(input_ids.shape[1])
-    rationale_text = clean_answer(tokenizer.decode(full_ids[0], skip_special_tokens=True).strip())
+
+    # HF generation outputs can be either:
+    # 1) prompt + generated tokens, or
+    # 2) generated tokens only.
+    # Build a unified "full_ids" (prompt + generated) for GradCAM indexing.
+    has_prompt_prefix = (
+        raw_sequences.shape[1] >= prompt_len
+        and torch.equal(raw_sequences[:, :prompt_len], input_ids)
+    )
+    if has_prompt_prefix:
+        full_ids = raw_sequences
+        generated_ids = raw_sequences[:, prompt_len:]
+    else:
+        full_ids = torch.cat([input_ids, raw_sequences], dim=1)
+        generated_ids = raw_sequences
+
+    rationale_text = clean_answer(tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip())
     output_indices = list(range(prompt_len, int(full_ids.shape[1])))
     attention_mask = torch.ones(full_ids.shape[0], full_ids.shape[1], device=device, dtype=torch.long)
 
