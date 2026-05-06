@@ -42,3 +42,4 @@ data_mc_openai/
 # local external clone
 LLaVA-Med/
 commands.txt
+test.ipynb
