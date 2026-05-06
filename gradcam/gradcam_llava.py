@@ -317,7 +317,9 @@ class LLaVAGradCAM:
                 for li, tid in pairs:
                     loss = loss + logits[li, tid]
 
-                loss.backward(retain_graph=True)
+                # GradCAM is computed per sample; retaining graph across iterations
+                # causes GPU memory growth and eventual OOM in long runs.
+                loss.backward()
 
             cams = []
             for state in self._states:

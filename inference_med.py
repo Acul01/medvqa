@@ -790,6 +790,31 @@ def main():
                 )
 
             if gradcam_effective:
+                # Drop large temporary references early to keep peak VRAM stable.
+                try:
+                    del tok
+                except Exception:
+                    pass
+                try:
+                    del heatmap
+                except Exception:
+                    pass
+                try:
+                    del overlay_pil
+                except Exception:
+                    pass
+                try:
+                    del stage2_image_tensor
+                except Exception:
+                    pass
+                try:
+                    del generation_output
+                except Exception:
+                    pass
+                try:
+                    del sample_output
+                except Exception:
+                    pass
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
