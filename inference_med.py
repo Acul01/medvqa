@@ -568,8 +568,13 @@ def _run_path2_cli(args) -> None:
         base = Path(args.path2_output)
         base.parent.mkdir(parents=True, exist_ok=True)
         if out["heatmap"] is not None:
-            np.save(str(base.with_name(base.stem + "_heatmap.npy")), out["heatmap"].numpy())
-            serial["heatmap_npy"] = str(base.with_name(base.stem + "_heatmap.npy"))
+            heatmap_path = base.with_name(base.stem + "_heatmap.npy")
+            try:
+                with open(heatmap_path, "wb") as f:
+                    np.save(f, out["heatmap"].numpy(), allow_pickle=False)
+                serial["heatmap_npy"] = str(heatmap_path)
+            except OSError as e:
+                logger.warning("Could not save heatmap npy (%s); continuing without npy output.", e)
         out["overlay_image"].save(str(base.with_name(base.stem + "_overlay.png")))
         serial["overlay_png"] = str(base.with_name(base.stem + "_overlay.png"))
         with open(base, "w", encoding="utf-8") as f:
