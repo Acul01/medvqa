@@ -5,6 +5,7 @@ import json
 import math
 import random
 import re
+import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -44,6 +45,8 @@ def parse_args():
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--agreement_samples", type=int, default=5, help="Number of stochastic generations used to compute agreement")
     parser.add_argument("--use_two_stage_reasoning", action="store_true", default=False, help="Run 2-stage reasoning before final MC answer")
+    parser.add_argument("--use_gradcam", action="store_true", default=False, help="Attempt GradCAM in 2-stage reasoning flow (currently unsupported for this backend; safe fallback)")
+    parser.add_argument("--gradcam_dir", type=str, default=None, help="Directory for GradCAM artifacts when enabled")
     parser.add_argument("--reasoning_max_new_tokens", type=int, default=192, help="Maximum new tokens for stage-1 reasoning generation")
     parser.add_argument(
         "--ablation_mode",
@@ -256,6 +259,11 @@ def main():
     args = parse_args()
     if args.max_new_tokens is None:
         args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
+    if args.use_gradcam and not args.use_two_stage_reasoning:
+        warnings.warn("--use_gradcam is ignored unless --use_two_stage_reasoning is set.", UserWarning, stacklevel=1)
+    gradcam_effective = bool(args.use_gradcam and args.use_two_stage_reasoning)
+    gradcam_dir = args.gradcam_dir or str(Path(args.results_dir) / "gradcam_overlays")
+    _ = gradcam_dir
 
     model_short = _model_short_name(args.model_path)
     ft_tag = "finetuned" if args.finetuned else "pretrained"
@@ -325,8 +333,15 @@ def main():
             reasoning_observation = "unknown"
             reasoning_explanation = "unknown"
             reasoning_parse_mode = "disabled"
+            gradcam_status = "disabled"
+            gradcam_error = ""
+            gradcam_overlay_path = ""
+            gradcam_heatmap_path = ""
 
             if args.use_two_stage_reasoning:
+                if gradcam_effective:
+                    gradcam_status = "failed"
+                    gradcam_error = "unsupported_backend"
                 reasoning_prompt = build_reasoning_prompt(sample.question)
                 reasoning_conv = build_text_only_conversation(reasoning_prompt)
                 reasoning_text = processor.apply_chat_template(reasoning_conv, add_generation_prompt=True)
@@ -425,6 +440,11 @@ def main():
                     "image_path": effective_image_path,
                     "source_image_path": source_image_path,
                     "ablation_mode": args.ablation_mode,
+                    "use_gradcam": gradcam_effective,
+                    "gradcam_status": gradcam_status,
+                    "gradcam_error": gradcam_error,
+                    "gradcam_overlay_path": gradcam_overlay_path,
+                    "gradcam_heatmap_path": gradcam_heatmap_path,
                     "reasoning_raw": reasoning_raw,
                     "reasoning_region": reasoning_region,
                     "reasoning_observation": reasoning_observation,

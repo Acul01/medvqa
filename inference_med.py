@@ -12,7 +12,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import torch
 import wandb
 from PIL import Image
@@ -25,11 +24,14 @@ from llava.mm_utils import process_images, tokenizer_image_token
 from llava.model import LlavaMistralForCausalLM
 from llava.model.builder import load_pretrained_model
 
-from gradcam.gradcam_llava import LLaVAGradCAM
-from gradcam.overlay import create_gradcam_overlay
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.save_results import clean_answer, save_results
+from utils.gradcam_inference import (
+    compute_reasoning_gradcam_overlay,
+    normalize_generation_sequences,
+    save_gradcam_artifacts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,8 @@ def parse_args():
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--agreement_samples", type=int, default=5, help="Number of stochastic generations used to compute agreement")
     parser.add_argument("--use_two_stage_reasoning", action="store_true", default=False, help="Run 2-stage reasoning before final MC answer")
+    parser.add_argument("--use_gradcam", action="store_true", default=False, help="Compute GradCAM from stage-1 reasoning tokens and use overlay image for stage-2 (requires --use_two_stage_reasoning)")
+    parser.add_argument("--gradcam_dir", type=str, default=None, help="Directory for GradCAM overlay/heatmap artifacts (default: <results_dir>/gradcam_overlays)")
     parser.add_argument("--reasoning_max_new_tokens", type=int, default=192, help="Maximum new tokens for stage-1 reasoning generation")
     parser.add_argument(
         "--ablation_mode",
@@ -269,7 +273,7 @@ def _build_shuffle_assignment(samples, seed: int) -> dict[int, str]:
 def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
     """Load tokenizer, model, image_processor for inference (same logic as legacy main)."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    path2_mode = getattr(args, "mode", "eval") == "path2"
+    gradcam_mode = getattr(args, "mode", "eval") == "path2" or bool(getattr(args, "use_gradcam", False))
 
     model_path = Path(args.model_path)
     is_lora = model_path.exists() and (model_path / "adapter_config.json").exists()
@@ -279,10 +283,10 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
 
         base_path = args.model_base or DEFAULT_MODEL_PATH
         load_kwargs = {"torch_dtype": torch.float16}
-        if not path2_mode:
+        if not gradcam_mode:
             load_kwargs["device_map"] = "auto"
         base_model = LlavaMistralForCausalLM.from_pretrained(base_path, **load_kwargs)
-        if path2_mode:
+        if gradcam_mode:
             base_model = base_model.to(device)
         vision_tower = base_model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
@@ -291,17 +295,17 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
 
         model = PeftModel.from_pretrained(base_model, str(model_path))
         model = model.merge_and_unload()
-        if path2_mode:
+        if gradcam_mode:
             model = model.to(device)
 
         tokenizer = AutoTokenizer.from_pretrained(base_path)
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
     elif model_path.exists() and (model_path / "config.json").exists():
         load_kwargs = {"torch_dtype": torch.float16}
-        if not path2_mode:
+        if not gradcam_mode:
             load_kwargs["device_map"] = "auto"
         model = LlavaMistralForCausalLM.from_pretrained(str(model_path), **load_kwargs)
-        if path2_mode:
+        if gradcam_mode:
             model = model.to(device)
         vision_tower = model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
@@ -321,11 +325,11 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
             model_name=model_name,
             device=str(device),
         )
-        if path2_mode:
+        if gradcam_mode:
             model = model.to(device)
 
     model.eval()
-    if path2_mode:
+    if gradcam_mode:
         # Path2 needs gradients for GradCAM backward pass.
         for p in model.parameters():
             p.requires_grad_(True)
@@ -380,22 +384,7 @@ def generate_with_token_ids(
         )
 
     raw_sequences = gen.sequences
-    prompt_len = int(input_ids.shape[1])
-
-    # HF generation outputs can be either:
-    # 1) prompt + generated tokens, or
-    # 2) generated tokens only.
-    # Build a unified "full_ids" (prompt + generated) for GradCAM indexing.
-    has_prompt_prefix = (
-        raw_sequences.shape[1] >= prompt_len
-        and torch.equal(raw_sequences[:, :prompt_len], input_ids)
-    )
-    if has_prompt_prefix:
-        full_ids = raw_sequences
-        generated_ids = raw_sequences[:, prompt_len:]
-    else:
-        full_ids = torch.cat([input_ids, raw_sequences], dim=1)
-        generated_ids = raw_sequences
+    full_ids, generated_ids, prompt_len = normalize_generation_sequences(raw_sequences, input_ids)
 
     rationale_text = clean_answer(tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip())
     output_indices = list(range(prompt_len, int(full_ids.shape[1])))
@@ -494,23 +483,16 @@ def run_path2(
     )
     rationale = tok["rationale"]
 
-    heatmap: Optional[torch.Tensor] = None
-    overlay_pil: Image.Image = image.convert("RGB")
-    try:
-        gradcam = LLaVAGradCAM(model, target_layers=[-1, -2, -3, -4])
-        heatmap = gradcam.compute_gradcam(
-            image_tensor=tok["image_tensor"],
-            input_ids=tok["input_ids"],
-            attention_mask=tok["attention_mask"],
-            target_token_indices=tok["output_indices"],
-            image_token_index=IMAGE_TOKEN_INDEX,
-            output_spatial_size=(image.height, image.width),
-        )
-        _, overlay_pil = create_gradcam_overlay(image, heatmap, alpha=0.4)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("GradCAM failed (%s); using original image without overlay.", e)
-        heatmap = None
-        _, overlay_pil = create_gradcam_overlay(image, None, alpha=0.4)
+    heatmap, overlay_pil, status, err = compute_reasoning_gradcam_overlay(
+        model=model,
+        image=image,
+        image_tensor=tok["image_tensor"],
+        full_ids=tok["input_ids"],
+        attention_mask=tok["attention_mask"],
+        output_indices=tok["output_indices"],
+    )
+    if status != "ok":
+        logger.warning("GradCAM failed (%s); using original image without overlay.", err)
 
     mc_block = format_mc_user_text(question, mc_options)
     final_prompt = (
@@ -567,16 +549,10 @@ def _run_path2_cli(args) -> None:
     if args.path2_output:
         base = Path(args.path2_output)
         base.parent.mkdir(parents=True, exist_ok=True)
-        if out["heatmap"] is not None:
-            heatmap_path = base.with_name(base.stem + "_heatmap.npy")
-            try:
-                with open(heatmap_path, "wb") as f:
-                    np.save(f, out["heatmap"].numpy(), allow_pickle=False)
-                serial["heatmap_npy"] = str(heatmap_path)
-            except OSError as e:
-                logger.warning("Could not save heatmap npy (%s); continuing without npy output.", e)
-        out["overlay_image"].save(str(base.with_name(base.stem + "_overlay.png")))
-        serial["overlay_png"] = str(base.with_name(base.stem + "_overlay.png"))
+        saved = save_gradcam_artifacts(base.parent, base.stem, out["heatmap"], out["overlay_image"], logger)
+        if "gradcam_heatmap_path" in saved:
+            serial["heatmap_npy"] = saved["gradcam_heatmap_path"]
+        serial["overlay_png"] = saved["gradcam_overlay_path"]
         with open(base, "w", encoding="utf-8") as f:
             json.dump(serial, f, indent=2, ensure_ascii=False)
         logger.info("Wrote %s", base)
@@ -592,6 +568,10 @@ def main():
 
     if args.max_new_tokens is None:
         args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
+    if args.use_gradcam and not args.use_two_stage_reasoning:
+        logger.warning("--use_gradcam is ignored unless --use_two_stage_reasoning is set.")
+    gradcam_effective = bool(args.use_gradcam and args.use_two_stage_reasoning)
+    gradcam_dir = args.gradcam_dir or str(Path(args.results_dir) / "gradcam_overlays")
 
     model_short = _model_short_name(args.model_path)
     ft_tag = "finetuned" if args.finetuned else "pretrained"
@@ -641,32 +621,49 @@ def main():
             reasoning_observation = "unknown"
             reasoning_explanation = "unknown"
             reasoning_parse_mode = "disabled"
+            gradcam_status = "disabled"
+            gradcam_error = ""
+            gradcam_overlay_path = ""
+            gradcam_heatmap_path = ""
+            stage2_image = image
 
             if args.use_two_stage_reasoning:
                 reasoning_prompt = build_reasoning_prompt(sample.question)
-                reasoning_question = f"{DEFAULT_IMAGE_TOKEN}\n{reasoning_prompt}"
-                reasoning_conv = conv_templates[args.conv_template].copy()
-                reasoning_conv.append_message(reasoning_conv.roles[0], reasoning_question)
-                reasoning_conv.append_message(reasoning_conv.roles[1], None)
-                reasoning_full_prompt = reasoning_conv.get_prompt()
-                reasoning_input_ids = tokenizer_image_token(
-                    reasoning_full_prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
-                ).unsqueeze(0).to(device)
-                reasoning_output = model.generate(
-                    reasoning_input_ids,
-                    images=image_tensor,
-                    attention_mask=torch.ones_like(reasoning_input_ids),
+                tok = generate_with_token_ids(
+                    image=image,
+                    rationale_prompt=reasoning_prompt,
+                    model=model,
+                    tokenizer=tokenizer,
+                    image_processor=image_processor,
+                    device=device,
+                    model_config=model.config,
+                    conv_template=args.conv_template,
                     max_new_tokens=args.reasoning_max_new_tokens,
-                    do_sample=False,
-                    return_dict_in_generate=True,
-                    output_scores=False,
                 )
-                reasoning_generated_ids = reasoning_output.sequences[0]
-                reasoning_raw = clean_answer(tokenizer.decode(reasoning_generated_ids, skip_special_tokens=True).strip())
+                reasoning_raw = tok["rationale"]
                 parsed_reasoning, reasoning_parse_mode = parse_reasoning_fields(reasoning_raw)
                 reasoning_region = parsed_reasoning["region"]
                 reasoning_observation = parsed_reasoning["observation"]
                 reasoning_explanation = parsed_reasoning["reasoning"]
+                if gradcam_effective:
+                    heatmap, overlay_pil, gradcam_status, gradcam_error = compute_reasoning_gradcam_overlay(
+                        model=model,
+                        image=image,
+                        image_tensor=tok["image_tensor"],
+                        full_ids=tok["input_ids"],
+                        attention_mask=tok["attention_mask"],
+                        output_indices=tok["output_indices"],
+                    )
+                    stage2_image = overlay_pil
+                    saved = save_gradcam_artifacts(
+                        base_dir=gradcam_dir,
+                        sample_name=f"{args.dataset}_{args.split}_{sample_idx:06d}",
+                        heatmap=heatmap,
+                        overlay=overlay_pil,
+                        logger=logger,
+                    )
+                    gradcam_overlay_path = saved.get("gradcam_overlay_path", "")
+                    gradcam_heatmap_path = saved.get("gradcam_heatmap_path", "")
                 final_user_text = build_final_prompt(
                     sample.question,
                     sample.mc_options,
@@ -682,10 +679,11 @@ def main():
             conv.append_message(conv.roles[1], None)
             prompt = conv.get_prompt()
 
+            stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(device, dtype=torch.float16)
             input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
             generation_output = model.generate(
                 input_ids,
-                images=image_tensor,
+                images=stage2_image_tensor,
                 attention_mask=torch.ones_like(input_ids),
                 **gen_kwargs,
                 return_dict_in_generate=True,
@@ -716,7 +714,7 @@ def main():
             for _ in range(agreement_samples):
                 sample_output = model.generate(
                     input_ids,
-                    images=image_tensor,
+                    images=stage2_image_tensor,
                     attention_mask=torch.ones_like(input_ids),
                     **agreement_gen_kwargs,
                     return_dict_in_generate=True,
@@ -749,6 +747,11 @@ def main():
                     "image_path": effective_image_path,
                     "source_image_path": source_image_path,
                     "ablation_mode": args.ablation_mode,
+                    "use_gradcam": gradcam_effective,
+                    "gradcam_status": gradcam_status,
+                    "gradcam_error": gradcam_error,
+                    "gradcam_overlay_path": gradcam_overlay_path,
+                    "gradcam_heatmap_path": gradcam_heatmap_path,
                     "reasoning_raw": reasoning_raw,
                     "reasoning_region": reasoning_region,
                     "reasoning_observation": reasoning_observation,
