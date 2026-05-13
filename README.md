@@ -638,7 +638,7 @@ Jedes Element ist ein **`VQASample`:** `dataset`, `split`, `image_path`, `questi
 
 ## Multiple-Choice-Datensätze mit OpenAI
 
-Mit `build_mc_datasets_openai.py` können MC-Varianten für `pathvqa`, `slake`, `vqarad`, `medvqa2019` erzeugt werden:
+Mit `build_mc_datasets_openai.py` können MC-Varianten für `pathvqa`, `slake`, `vqarad`, `medvqa2019` erzeugt werden. Das Skript liest **immer die Freitext-Annotations** unter `--data_root` (`MedicalVQALoader(..., mc_data_root=None)`); es braucht **keine** vorgefertigten Dateien in `data_mc_openai`. Die Ausgabe liegt unter `--output_root` (Standard `data_mc_openai`).
 
 - **Closed/Yes-No** (`answer` = `yes` oder `no`): Optionen strikt `["yes", "no"]`
 - **Open**: 4 via OpenAI generierte falsche Optionen + GT (insgesamt 5)
@@ -674,12 +674,60 @@ python build_mc_datasets_openai.py \
   --resume
 ```
 
+### Pseudo-Reasoning (OpenAI Vision) und Qwen-Gegencheck
+
+Nach dem MC-Build können die gleichen JSON-Dateien um **REGION / OBSERVATION / REASONING** ergänzt werden (Prompt wie in `inference_med.py`, geteilt über `utils/reasoning_mc.py`):
+
+1. **`build_pseudo_reasonings_openai.py`** — OpenAI-Vision; liest immer aus ``--mc_data_root``. Standard: schreibt dorthin zurück. Mit **`--output_dir`** werden JSON/CSV und `pseudo_reasoning_openai_cache.jsonl` nur unter diesem Pfad geschrieben (Spiegel: `output_dir/<slug>/…`), die Originale in `mc_data_root` bleiben unangetastet. **`--split train`** (oder mehrere Splits) begrenzt die bearbeiteten Dateien. **`--n_samples N`** reichert nur die **ersten N Zeilen** pro Split per API/Cache an; **alle** Zeilen bleiben in der Ausgabedatei erhalten. Weitere Flags: `--resume`, `--overwrite`, `--save_every`.
+
+```bash
+export OPENAI_API_KEY="..."
+pip install openai
+# Smoke: erste 5 Zeilen nur anreichern, volle Kopie nach scratch — Original MC unverändert
+python build_pseudo_reasonings_openai.py \
+  --data_root data \
+  --mc_data_root data_mc_openai \
+  --output_dir data_mc_openai_reasoning_scratch \
+  --datasets vqarad \
+  --split train \
+  --n_samples 5 \
+  --save_every 1 \
+  --openai_model gpt-4o-mini
+
+# Produktion: alle Zeilen, nur train, in-place (oder ohne --split für alle Splits)
+python build_pseudo_reasonings_openai.py \
+  --data_root data \
+  --mc_data_root data_mc_openai \
+  --datasets vqarad \
+  --split train \
+  --resume \
+  --save_every 25
+```
+
+2. **`verify_reasonings_qwen_hf.py`** — lokales **HuggingFace**-Modell (Default `Qwen/Qwen2.5-7B-Instruct`), nur Text: Frage + Optionen + Pseudo-Reasoning → vorhergesagter Buchstabe. Es werden `reasoning_verify_model`, `reasoning_verify_pred_letter`, `reasoning_verify_correct` ergänzt. Optional `--output_filtered <dir|datei.json>` schreibt nur Zeilen mit `reasoning_verify_correct == true` (bei Mehrfach-Läufen: je Split `*_verified.json` unter dem Verzeichnis). `--no_write_source` lässt die Quell-JSON unverändert.
+
+```bash
+pip install transformers accelerate
+python verify_reasonings_qwen_hf.py \
+  --mc_data_root data_mc_openai \
+  --datasets vqarad \
+  --verifier_model Qwen/Qwen2.5-7B-Instruct \
+  --output_filtered results/verified_reasoning_json/
+```
+
+3. **`train_med.py`** — `--supervision reasoning_plus_letter` trainiert auf **Reasoning-Block + Optionsbuchstabe** (Trailing-Loss wie bisher, längerer Tail). Zusätzlich `--only_reasoning_verified` (nur Samples mit erfolgreichem Qwen-Check) und `--require_pseudo_reasoning` (abbricht, wenn nach Filter weniger Samples übrig bleiben als vorher — strikt: kein fehlendes Pseudo / kein Verifikations-Dropout). Für längere Sequenzen **`--max_length` erhöhen** (z. B. 768–1024) und ggf. kleinere Batch-Größe.
+
+```bash
+python train_med.py --dataset vqarad \
+  --supervision reasoning_plus_letter \
+  --only_reasoning_verified \
+  --max_length 768
+```
+
 Ausgabe pro Datensatz:
 
 
-**MC als Standardpfad:** `MedicalVQALoader` lädt standardmäßig aus `data_mc_openai`.
-Wenn die MC-Dateien fehlen, wird ein Fehler mit Verweis auf `build_mc_datasets_openai.py` ausgegeben.
-Legacy-Freitext ist optional über `mc_data_root=None` möglich.
+**MC als Standardpfad:** `MedicalVQALoader()` lädt für Training/Inferenz standardmäßig aus `data_mc_openai`. Fehlen die MC-Dateien dort, gibt der Loader einen Fehler mit Verweis auf `build_mc_datasets_openai.py`. **`build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.
 
 - `<output_root>/<dataset>/<dataset>_<split>_mc_openai.json`
 - `<output_root>/<dataset>/<dataset>_<split>_mc_openai.csv`
