@@ -8,7 +8,7 @@ Override on cluster (e.g. in Slurm or ~/.bashrc) with:
     export MEDVQA_OUTPUTS_DIR=/path/to/05_outputs
     export MEDVQA_RESULTS_DIR=/path/to/06_results
 
-If unset, fallbacks match local repo layout (02_data, 06_outputs, 07_results).
+If unset, fallbacks match local repo layout (02_data, 05_outputs, 06_results).
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ _ENV_RESULTS = "MEDVQA_RESULTS_DIR"
 
 _DEFAULT_DATA = "02_data"
 _DEFAULT_MC = "02_data/data_mc_openai"
-_DEFAULT_OUTPUTS = "06_outputs"
-_DEFAULT_RESULTS = "07_results"
+_DEFAULT_OUTPUTS = "05_outputs"
+_DEFAULT_RESULTS = "06_results"
 
 
 def get_data_root() -> str:
