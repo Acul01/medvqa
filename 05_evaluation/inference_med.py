@@ -61,8 +61,8 @@ def parse_args():
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--model_base", type=str, default=None)
     parser.add_argument("--conv_template", type=str, default="mistral_instruct")
-    parser.add_argument("--data_root", type=str, default="data", help="Root directory containing raw image folders")
-    parser.add_argument("--mc_data_root", type=str, default="data_mc_openai", help="Root directory containing MC JSON/CSV exports")
+    parser.add_argument("--data_root", type=str, default="02_data", help="Root directory containing raw image folders")
+    parser.add_argument("--mc_data_root", type=str, default="02_data/data_mc_openai", help="Root directory containing MC JSON/CSV exports")
     parser.add_argument(
         "--dataset",
         type=str,
@@ -90,7 +90,7 @@ def parse_args():
         help="Image ablation mode: none, black image, or sample-level image assignment shuffle",
     )
     parser.add_argument("--ablation_seed", type=int, default=42, help="Seed used for ablation shuffle mode")
-    parser.add_argument("--results_dir", type=str, default="results")
+    parser.add_argument("--results_dir", type=str, default="07_results")
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")

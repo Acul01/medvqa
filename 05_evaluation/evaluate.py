@@ -105,7 +105,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate MC Medical VQA predictions")
     parser.add_argument("--results_file", type=str, required=True)
     parser.add_argument("--output_file", type=str, default=None)
-    parser.add_argument("--eval_runs_file", type=str, default="results/eval_runs.csv")
+    parser.add_argument("--eval_runs_file", type=str, default="07_results/eval_runs.csv")
     return parser.parse_args()
 
 

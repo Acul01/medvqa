@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-RESULTS_DIR = Path("results")
+RESULTS_DIR = Path("07_results")
 HISTORY_FILE = RESULTS_DIR / "results_history.csv"
 
 HISTORY_COLUMNS = [

@@ -217,7 +217,7 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
 def parse_args():
     parser = argparse.ArgumentParser(description="Entropy thresholding baseline for risk/coverage + AURC")
     parser.add_argument("--results_file", type=str, required=True, help="Path to results JSON")
-    parser.add_argument("--output_dir", type=str, default="results", help="Output directory")
+    parser.add_argument("--output_dir", type=str, default="07_results", help="Output directory")
     parser.add_argument("--num_thresholds", type=int, default=200, help="Number of thresholds for sweep")
     parser.add_argument(
         "--max_entropy",

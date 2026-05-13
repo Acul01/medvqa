@@ -330,8 +330,8 @@ def build_mc_for_dataset(args, loader: MedicalVQALoader, dataset_slug: str, clie
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build MC datasets with OpenAI-generated distractors.")
-    parser.add_argument("--data_root", type=str, default="data")
-    parser.add_argument("--output_root", type=str, default="data_mc_openai")
+    parser.add_argument("--data_root", type=str, default="02_data")
+    parser.add_argument("--output_root", type=str, default="02_data/data_mc_openai")
     parser.add_argument("--datasets", nargs="+", default=DATASETS, choices=DATASETS)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--openai_model", type=str, default="gpt-4o-mini")

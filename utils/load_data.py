@@ -2,8 +2,9 @@
 Unified Data Loader for Medical VQA Datasets.
 
 By default this loader reads the multiple-choice exports produced by
-build_mc_datasets_openai.py (data_mc_openai). Set mc_data_root=None to use
-legacy free-text annotations from data_root.
+build_mc_datasets_openai.py (under ``02_data/data_mc_openai`` in the default
+layout). Set mc_data_root=None to use legacy free-text annotations from
+data_root.
 """
 
 import csv
@@ -45,7 +46,11 @@ class VQASample:
 class MedicalVQALoader:
     """Unified loader for Medical VQA datasets."""
 
-    def __init__(self, data_root: str = "data", mc_data_root: Optional[str] = "data_mc_openai"):
+    def __init__(
+        self,
+        data_root: str = "02_data",
+        mc_data_root: Optional[str] = "02_data/data_mc_openai",
+    ):
         self.data_root = Path(data_root)
         self.mc_data_root = Path(mc_data_root) if mc_data_root else None
 
@@ -151,7 +156,7 @@ class MedicalVQALoader:
             raise FileNotFoundError(
                 "Missing MC annotations. Expected one of: "
                 f"{mc_json_path} or {mc_csv_path}. "
-                "Build MC data first with build_mc_datasets_openai.py."
+                "Build MC data first with utils/build_mc_datasets_openai.py."
             )
 
         samples: List[VQASample] = []
@@ -314,21 +319,21 @@ class MedicalVQALoader:
 
 # Convenience functions for quick access
 
-def load_pathvqa(data_root: str = "data", split: str = "train") -> List[VQASample]:
+def load_pathvqa(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
     loader = MedicalVQALoader(data_root)
     return loader.load_dataset("PathVQA", split)
 
 
-def load_slake(data_root: str = "data", split: str = "train") -> List[VQASample]:
+def load_slake(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
     loader = MedicalVQALoader(data_root)
     return loader.load_dataset("SLAKE", split)
 
 
-def load_vqarad(data_root: str = "data", split: str = "train") -> List[VQASample]:
+def load_vqarad(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
     loader = MedicalVQALoader(data_root)
     return loader.load_dataset("VQA-Rad", split)
 
 
-def load_medvqa2019(data_root: str = "data", split: str = "train") -> List[VQASample]:
+def load_medvqa2019(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
     loader = MedicalVQALoader(data_root)
     return loader.load_dataset("Med-VQA-2019", split)

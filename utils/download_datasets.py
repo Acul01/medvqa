@@ -1,5 +1,5 @@
 """
-Download PathVQA, SLAKE, and VQA-Rad from HuggingFace into ./data/
+Download PathVQA, SLAKE, and VQA-Rad from HuggingFace into ./02_data/
 (layout matches utils/load_data.MedicalVQALoader).
 
 Usage on cluster:
@@ -17,7 +17,7 @@ import pandas as pd
 import shutil
 import re
 
-DATA_ROOT = Path("data")
+DATA_ROOT = Path("02_data")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

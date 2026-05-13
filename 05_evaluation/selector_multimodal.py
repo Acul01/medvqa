@@ -28,8 +28,8 @@ from utils.mc_vqa import format_mc_user_text, parse_predicted_letter
 
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
-DEFAULT_FEATURES_DIR = "results/selector_features"
-DEFAULT_SELECTOR_DIR = "results/selector_models"
+DEFAULT_FEATURES_DIR = "07_results/selector_features"
+DEFAULT_SELECTOR_DIR = "07_results/selector_models"
 
 def exact_match_letter(predicted_text: str, gt_letter: str, n_options: int) -> float:
     pred_letter = parse_predicted_letter(predicted_text, num_options=n_options)
@@ -454,8 +454,8 @@ def build_parser():
 
     p_extract = sub.add_parser("extract", help="Extract multimodal features + labels")
     p_extract.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
-    p_extract.add_argument("--data_root", type=str, default="data")
-    p_extract.add_argument("--mc_data_root", type=str, default="data_mc_openai")
+    p_extract.add_argument("--data_root", type=str, default="02_data")
+    p_extract.add_argument("--mc_data_root", type=str, default="02_data/data_mc_openai")
     p_extract.add_argument("--dataset", type=str, required=True, choices=["pathvqa", "slake", "vqarad", "medvqa2019"])
     p_extract.add_argument("--split", type=str, default="validation")
     p_extract.add_argument("--features_dir", type=str, default=DEFAULT_FEATURES_DIR)
@@ -477,7 +477,7 @@ def build_parser():
     p_eval = sub.add_parser("eval", help="Evaluate selector with threshold sweep")
     p_eval.add_argument("--features_file", type=str, required=True)
     p_eval.add_argument("--selector_ckpt", type=str, required=True)
-    p_eval.add_argument("--output_dir", type=str, default="results/selector_eval")
+    p_eval.add_argument("--output_dir", type=str, default="07_results/selector_eval")
     p_eval.add_argument("--num_thresholds", type=int, default=200)
 
     return parser

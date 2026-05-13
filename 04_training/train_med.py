@@ -160,9 +160,9 @@ def parse_args():
                         help="Conversation template name")
 
     # Data
-    parser.add_argument("--data_root", type=str, default="data",
+    parser.add_argument("--data_root", type=str, default="02_data",
                         help="Root directory containing raw image folders")
-    parser.add_argument("--mc_data_root", type=str, default="data_mc_openai",
+    parser.add_argument("--mc_data_root", type=str, default="02_data/data_mc_openai",
                         help="Root directory containing MC JSON/CSV exports")
     parser.add_argument("--dataset", type=str, required=True,
                         choices=["pathvqa", "slake", "vqarad", "medvqa2019", "all"],
@@ -173,7 +173,7 @@ def parse_args():
                         help="Validation split name")
 
     # Training
-    parser.add_argument("--output_dir", type=str, default="./outputs/llava-med",
+    parser.add_argument("--output_dir", type=str, default="./06_outputs/llava-med",
                         help="Output directory for checkpoints")
     parser.add_argument("--num_train_epochs", type=int, default=3)
     parser.add_argument("--per_device_train_batch_size", type=int, default=4)

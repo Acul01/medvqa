@@ -4,7 +4,7 @@ from utils.load_data import MedicalVQALoader
 
 
 def main():
-    loader = MedicalVQALoader(data_root="data", mc_data_root="data_mc_openai")
+    loader = MedicalVQALoader(data_root="02_data", mc_data_root="02_data/data_mc_openai")
 
     print("=" * 60)
     print("MC Loader Example")
