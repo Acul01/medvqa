@@ -1,6 +1,6 @@
 """
-Download PathVQA, SLAKE, and VQA-Rad from HuggingFace into ./02_data/
-(layout matches utils/load_data.MedicalVQALoader).
+Download PathVQA, SLAKE, and VQA-Rad from HuggingFace into the data root
+(``MEDVQA_DATA_ROOT`` or default ``02_data/``; layout matches MedicalVQALoader).
 
 Usage on cluster:
     conda activate llava_env
@@ -17,7 +17,9 @@ import pandas as pd
 import shutil
 import re
 
-DATA_ROOT = Path("02_data")
+from utils.paths import get_data_root
+
+DATA_ROOT = Path(get_data_root())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

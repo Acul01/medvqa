@@ -30,6 +30,7 @@ from collections import Counter
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import format_mc_user_text
+from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_llava
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -171,10 +172,10 @@ def parse_args():
                         help=f"HuggingFace model name or local path (default: {DEFAULT_MODEL_PATH})")
 
     # Data
-    parser.add_argument("--data_root", type=str, default="02_data",
-                        help="Root directory containing raw image folders")
-    parser.add_argument("--mc_data_root", type=str, default="02_data/data_mc_openai",
-                        help="Root directory containing MC JSON/CSV exports")
+    parser.add_argument("--data_root", type=str, default=get_data_root(),
+                        help="Root directory containing raw image folders ($MEDVQA_DATA_ROOT or 02_data)")
+    parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root(),
+                        help="Root directory containing MC JSON/CSV exports ($MEDVQA_MC_ROOT or 02_data/data_mc_openai)")
     parser.add_argument("--dataset", type=str, required=True,
                         choices=["pathvqa", "slake", "vqarad", "medvqa2019", "all"],
                         help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad+Med-VQA-2019 (prompt names from each sample)")
@@ -184,8 +185,8 @@ def parse_args():
                         help="Validation split name")
 
     # Training
-    parser.add_argument("--output_dir", type=str, default="./06_outputs/llava",
-                        help="Output directory for checkpoints")
+    parser.add_argument("--output_dir", type=str, default=get_train_output_dir_llava(),
+                        help="Output directory for checkpoints ($MEDVQA_OUTPUTS_DIR/llava)")
     parser.add_argument("--num_train_epochs", type=int, default=3)
     parser.add_argument("--per_device_train_batch_size", type=int, default=4)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=4)

@@ -27,6 +27,7 @@ from llava.model.builder import load_pretrained_model
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
+from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
 from utils.gradcam_inference import (
     compute_reasoning_gradcam_overlay,
@@ -61,8 +62,8 @@ def parse_args():
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--model_base", type=str, default=None)
     parser.add_argument("--conv_template", type=str, default="mistral_instruct")
-    parser.add_argument("--data_root", type=str, default="02_data", help="Root directory containing raw image folders")
-    parser.add_argument("--mc_data_root", type=str, default="02_data/data_mc_openai", help="Root directory containing MC JSON/CSV exports")
+    parser.add_argument("--data_root", type=str, default=get_data_root(), help="Root directory containing raw image folders")
+    parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root(), help="Root directory containing MC JSON/CSV exports")
     parser.add_argument(
         "--dataset",
         type=str,
@@ -90,7 +91,7 @@ def parse_args():
         help="Image ablation mode: none, black image, or sample-level image assignment shuffle",
     )
     parser.add_argument("--ablation_seed", type=int, default=42, help="Seed used for ablation shuffle mode")
-    parser.add_argument("--results_dir", type=str, default="07_results")
+    parser.add_argument("--results_dir", type=str, default=get_results_dir())
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")

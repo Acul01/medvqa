@@ -9,6 +9,7 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 
 from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
+from utils.paths import get_results_dir
 
 
 def is_valid_number(value) -> bool:
@@ -151,7 +152,7 @@ def main():
     if not rows:
         raise ValueError("No plottable rows found with letter labels and numeric entropy.")
 
-    output_path = Path(args.output_file) if args.output_file else Path("07_results") / f"{results_path.stem}_entropy_vs_mc_accuracy.png"
+    output_path = Path(args.output_file) if args.output_file else Path(get_results_dir()) / f"{results_path.stem}_entropy_vs_mc_accuracy.png"
     plot_entropy_relationship(rows, output_path=output_path, num_bins=max(2, args.num_bins))
 
     print(f"Loaded rows: {len(rows)}")

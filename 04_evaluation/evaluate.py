@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
+from utils.paths import get_eval_runs_csv
 
 EVAL_RUN_COLUMNS = [
     "input_path",
@@ -105,7 +106,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate MC Medical VQA predictions")
     parser.add_argument("--results_file", type=str, required=True)
     parser.add_argument("--output_file", type=str, default=None)
-    parser.add_argument("--eval_runs_file", type=str, default="07_results/eval_runs.csv")
+    parser.add_argument("--eval_runs_file", type=str, default=get_eval_runs_csv())
     return parser.parse_args()
 
 

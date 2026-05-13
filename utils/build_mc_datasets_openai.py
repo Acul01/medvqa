@@ -23,6 +23,7 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 
 from utils.load_data import MedicalVQALoader, VQASample
+from utils.paths import get_data_root, get_mc_data_root
 
 
 DATASETS = ["pathvqa", "slake", "vqarad", "medvqa2019"]
@@ -330,8 +331,18 @@ def build_mc_for_dataset(args, loader: MedicalVQALoader, dataset_slug: str, clie
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build MC datasets with OpenAI-generated distractors.")
-    parser.add_argument("--data_root", type=str, default="02_data")
-    parser.add_argument("--output_root", type=str, default="02_data/data_mc_openai")
+    parser.add_argument(
+        "--data_root",
+        type=str,
+        default=get_data_root(),
+        help="Freetext annotations root (default: $MEDVQA_DATA_ROOT or 02_data)",
+    )
+    parser.add_argument(
+        "--output_root",
+        type=str,
+        default=get_mc_data_root(),
+        help="MC JSON/CSV output root (default: $MEDVQA_MC_ROOT or 02_data/data_mc_openai)",
+    )
     parser.add_argument("--datasets", nargs="+", default=DATASETS, choices=DATASETS)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--openai_model", type=str, default="gpt-4o-mini")

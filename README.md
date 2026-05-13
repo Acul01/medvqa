@@ -46,14 +46,14 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Komponente | Status im Repository |
 |------------|----------------------|
 | Einheitlicher Datenloader (`MedicalVQALoader`, `VQASample`) | **Implementiert** (`utils/load_data.py`) |
-| Training Standard-LLaVA (HF `LlavaForConditionalGeneration` + `Trainer`) | **Implementiert** (`04_training/train.py`) |
-| Training LLaVA-Med (Microsoft-`llava` + `Trainer`) | **Implementiert** (`04_training/train_med.py`, benötigt installiertes LLaVA-Med) |
-| Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`05_evaluation/inference.py`) |
-| Inferenz LLaVA-Med | **Implementiert** (`05_evaluation/inference_med.py`) |
-| Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`05_evaluation/evaluate.py`) |
-| Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`05_evaluation/risk_coverage_entropy.py`) |
-| Selector / MLP-Workflow (LLaVA-Med-Features) | **Implementiert** (`05_evaluation/selector_multimodal.py`) |
-| **5-fach Sampling + Agreement** | **Implementiert** (`05_evaluation/inference.py`, `inference_med.py`) |
+| Training Standard-LLaVA (HF `LlavaForConditionalGeneration` + `Trainer`) | **Implementiert** (`03_training/train.py`) |
+| Training LLaVA-Med (Microsoft-`llava` + `Trainer`) | **Implementiert** (`03_training/train_med.py`, benötigt installiertes LLaVA-Med) |
+| Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`04_evaluation/inference.py`) |
+| Inferenz LLaVA-Med | **Implementiert** (`04_evaluation/inference_med.py`) |
+| Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`04_evaluation/evaluate.py`) |
+| Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`04_evaluation/risk_coverage_entropy.py`) |
+| Selector / MLP-Workflow (LLaVA-Med-Features) | **Implementiert** (`04_evaluation/selector_multimodal.py`) |
+| **5-fach Sampling + Agreement** | **Implementiert** (`04_evaluation/inference.py`, `inference_med.py`) |
 | **Pfad 2: Evidence-JSON, konditionierte finale Antwort** | **Geplant** |
 | **ROI-Pipeline mit Ablations-Toggle** (SAM/Attention, Crop/Overlay) | **Geplant** |
 | **Dual-Path-Konsistenz & Abstain-Regeln** | **Geplant** |
@@ -114,14 +114,14 @@ flowchart LR
 
 | Pfad | Rolle |
 |------|--------|
-| `04_training/train.py` | Fine-Tuning **HuggingFace LLaVA 1.5** |
-| `04_training/train_med.py` | Fine-Tuning **LLaVA-Med** (Microsoft-Codebasis) |
-| `05_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
-| `05_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
-| `05_evaluation/evaluate.py` | Aggregierte Metriken aus JSON |
-| `05_evaluation/risk_coverage_entropy.py` | Entropie-Schwellen, Risk–Coverage, **AURC** |
-| `05_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
-| `05_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
+| `03_training/train.py` | Fine-Tuning **HuggingFace LLaVA 1.5** |
+| `03_training/train_med.py` | Fine-Tuning **LLaVA-Med** (Microsoft-Codebasis) |
+| `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
+| `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
+| `04_evaluation/evaluate.py` | Aggregierte Metriken aus JSON |
+| `04_evaluation/risk_coverage_entropy.py` | Entropie-Schwellen, Risk–Coverage, **AURC** |
+| `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
+| `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
 | `utils/download_datasets.py` | Download PathVQA / SLAKE / VQA-Rad / Med-VQA-2019 nach `02_data/` |
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
@@ -164,7 +164,7 @@ import nltk
 nltk.download("punkt")
 ```
 
-**LLaVA-Med** (`04_training/train_med.py`, `05_evaluation/inference_med.py`): gemäß Kommentar in `train_med.py` das Original-Repository installieren, z. B.:
+**LLaVA-Med** (`03_training/train_med.py`, `04_evaluation/inference_med.py`): gemäß Kommentar in `train_med.py` das Original-Repository installieren, z. B.:
 
 ```bash
 cd LLaVA-Med && pip install -e .
@@ -212,7 +212,7 @@ Voraussetzungen siehe Kopfkommentar in `download_datasets.py` (`datasets`, `hugg
 
 ## Schritt 2: Training (Baseline)
 
-### Prompt- und Loss-Format (Standard-LLaVA, `04_training/train.py`)
+### Prompt- und Loss-Format (Standard-LLaVA, `03_training/train.py`)
 
 Entspricht den Kommentaren im Code:
 
@@ -222,7 +222,7 @@ Entspricht den Kommentaren im Code:
 ### Standard-LLaVA trainieren
 
 ```bash
-python 04_training/train.py \
+python 03_training/train.py \
   --dataset pathvqa \
   --output_dir ./06_outputs/llava_pathvqa
 ```
@@ -230,7 +230,7 @@ python 04_training/train.py \
 Beispiel Med-VQA-2019:
 
 ```bash
-python 04_training/train.py \
+python 03_training/train.py \
   --dataset medvqa2019 \
   --output_dir ./06_outputs/llava_medvqa2019
 ```
@@ -240,7 +240,7 @@ Default `--model_path`: `llava-hf/llava-1.5-7b-hf`.
 Fortsetzung von Checkpoint:
 
 ```bash
-python 04_training/train.py \
+python 03_training/train.py \
   --model_path ./06_outputs/llava_pathvqa \
   --dataset slake \
   --output_dir ./06_outputs/llava_slake
@@ -248,7 +248,7 @@ python 04_training/train.py \
 
 Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei SLAKE Validation z. B. `--val_split validate`), `--num_train_epochs`, `--per_device_train_batch_size`, `--learning_rate`, `--max_length`, `--fp16` / `--bf16`, `--gradient_checkpointing`, LoRA-Flags (`--use_lora`, …), `--wandb_project`.
 
-**Hinweis:** `04_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `04_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`).
+**Hinweis:** `03_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `03_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`).
 
 ### Stufen-Strategie (Thesis / Blueprint)
 
@@ -280,7 +280,7 @@ Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei S
 ### Aufruf (Beispiele)
 
 ```bash
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --dataset pathvqa \
   --split test \
   --results_dir 07_results
@@ -289,7 +289,7 @@ python 05_evaluation/inference.py \
 Mit fine-getunten Gewichten (Weg zum Checkpoint anpassen):
 
 ```bash
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --model_path ./06_outputs/llava_pathvqa \
   --dataset pathvqa \
   --split test \
@@ -300,7 +300,7 @@ python 05_evaluation/inference.py \
 Stichprobige Decodierung (für spätere Sampling-Erweiterungen relevant):
 
 ```bash
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --dataset slake \
   --split test \
   --do_sample \
@@ -312,7 +312,7 @@ python 05_evaluation/inference.py \
 Med-VQA-2019 (Test-Split):
 
 ```bash
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --dataset medvqa2019 \
   --split test \
   --results_dir 07_results
@@ -338,7 +338,7 @@ Wichtig: `--reasoning_max_new_tokens` steuert nur Schritt 1 (Reasoning, Default 
 Beispiel (`inference.py`):
 
 ```bash
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --dataset vqarad \
   --split test \
   --use_two_stage_reasoning \
@@ -349,7 +349,7 @@ python 05_evaluation/inference.py \
 Beispiel (`inference_med.py`):
 
 ```bash
-python 05_evaluation/inference_med.py \
+python 04_evaluation/inference_med.py \
   --dataset vqarad \
   --split test \
   --use_two_stage_reasoning \
@@ -370,7 +370,7 @@ Optional steuert `--ablation_seed` die reproduzierbare Permutation im `shuffle`-
 Beispiel (`black`):
 
 ```bash
-python 05_evaluation/inference_med.py \
+python 04_evaluation/inference_med.py \
   --dataset vqarad \
   --split test \
   --ablation_mode black \
@@ -380,7 +380,7 @@ python 05_evaluation/inference_med.py \
 Beispiel (`shuffle`):
 
 ```bash
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --dataset vqarad \
   --split test \
   --ablation_mode shuffle \
@@ -542,7 +542,7 @@ Kein zusätzlicher harter Trainingsconstraint nötig; Fusion primär **inferenzz
 ### Standard-Metriken (`evaluate.py`)
 
 ```bash
-python 05_evaluation/evaluate.py \
+python 04_evaluation/evaluate.py \
   --results_file 07_results/llava_pathvqa_all.json \
   --output_file metrics_pathvqa.json
 # output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
@@ -559,7 +559,7 @@ Optional: `--eval_runs_file` (Standard `07_results/eval_runs.csv`) – eine Zeil
 Erwartet eine **JSON-Liste** wie von `inference.py`, mit numerischem Score-Feld für Schwellenbildung (`entropy`, `agreement` oder `confidence`) und Ground Truth für die gewählte Risk-Metrik.
 
 ```bash
-python 05_evaluation/risk_coverage_entropy.py \
+python 04_evaluation/risk_coverage_entropy.py \
   --results_file 07_results/llava_pathvqa_all.json \
   --output_dir 07_results \
   --score_field entropy \
@@ -612,7 +612,7 @@ Terminologie (für die Arbeit konsistent halten):
 
 ## Ergebnisse & Artefakte
 
-- **Checkpoints:** `--output_dir` aus `04_training/train.py` / `04_training/train_med.py` (Standard unter `06_outputs/`)
+- **Checkpoints:** `--output_dir` aus `03_training/train.py` / `03_training/train_med.py` (Standard unter `06_outputs/`)
 - **Inferenz:** `07_results/*.json`, `.csv`, optional `.xlsx`, `results_history.csv` (unter `07_results/`)
 - **Eval:** `metrics*.json`, `eval_runs.csv`
 - **Selektive Vorhersage:** `risk_coverage_entropy.py`-Outputs (CSV, PNG, Summary-JSON)
@@ -625,7 +625,8 @@ Terminologie (für die Arbeit konsistent halten):
 ```python
 from utils.load_data import MedicalVQALoader
 
-loader = MedicalVQALoader(data_root="02_data", mc_data_root="02_data/data_mc_openai")
+# Nutzt MEDVQA_* / Fallbacks aus utils.paths
+loader = MedicalVQALoader()
 samples = loader.load_dataset("pathvqa", split="train")
 samples_slake = loader.load_dataset("slake", split="validate")
 samples_rad = loader.load_dataset("vqarad", split="test")
@@ -638,6 +639,19 @@ print(loader.get_available_splits("slake"))  # u. a. validate
 Jedes Element ist ein **`VQASample`:** `dataset`, `split`, `image_path`, `question`, `answer` (bei MC: Zielbuchstabe), `metadata`, `mc_options`, `mc_correct_index`, `question_type`.
 
 `loader.load_combined("train")` kombiniert PathVQA, SLAKE, VQA-Rad und Med-VQA-2019.
+
+### Pfade auf dem Cluster (`MEDVQA_*`)
+
+Ohne gesetzte Variablen nutzen Loader und Skripte die **Fallbacks** aus [`utils/paths.py`](utils/paths.py) (`02_data`, `02_data/data_mc_openai`, `06_outputs`, `07_results`). Auf dem HPC kannst du statt langer `--data_root`-Ketten Folgendes setzen (Beispielpfade anpassen):
+
+```bash
+export MEDVQA_DATA_ROOT=/pfad/zum/repo/02_data
+export MEDVQA_MC_ROOT=/pfad/zum/repo/02_data/data_mc_openai
+export MEDVQA_OUTPUTS_DIR=/pfad/zum/repo/05_outputs
+export MEDVQA_RESULTS_DIR=/pfad/zum/repo/06_results
+```
+
+Danach reicht z. B. `MedicalVQALoader()` ohne Argumente oder `python 03_training/train_med.py ...` mit den neuen Defaults.
 
 ---
 
@@ -679,60 +693,12 @@ python utils/build_mc_datasets_openai.py \
   --resume
 ```
 
-### Pseudo-Reasoning (OpenAI Vision) und Qwen-Gegencheck
+### Pseudo-Reasoning (nicht Bestandteil dieses Repos)
 
-Nach dem MC-Build können die gleichen JSON-Dateien um **REGION / OBSERVATION / REASONING** ergänzt werden (Prompt wie in `inference_med.py`, geteilt über `utils/reasoning_mc.py`):
-
-1. **`build_pseudo_reasonings_openai.py`** — OpenAI-Vision; liest immer aus ``--mc_data_root``. Standard: schreibt dorthin zurück. Mit **`--output_dir`** werden JSON/CSV und `pseudo_reasoning_openai_cache.jsonl` nur unter diesem Pfad geschrieben (Spiegel: `output_dir/<slug>/…`), die Originale in `mc_data_root` bleiben unangetastet. **`--split train`** (oder mehrere Splits) begrenzt die bearbeiteten Dateien. **`--n_samples N`** reichert nur die **ersten N Zeilen** pro Split per API/Cache an; **alle** Zeilen bleiben in der Ausgabedatei erhalten. Weitere Flags: `--resume`, `--overwrite`, `--save_every`.
-
-```bash
-export OPENAI_API_KEY="..."
-pip install openai
-# Smoke: erste 5 Zeilen nur anreichern, volle Kopie nach scratch — Original MC unverändert
-python build_pseudo_reasonings_openai.py \
-  --data_root 02_data \
-  --mc_data_root 02_data/data_mc_openai \
-  --output_dir data_mc_openai_reasoning_scratch \
-  --datasets vqarad \
-  --split train \
-  --n_samples 5 \
-  --save_every 1 \
-  --openai_model gpt-4o-mini
-
-# Produktion: alle Zeilen, nur train, in-place (oder ohne --split für alle Splits)
-python build_pseudo_reasonings_openai.py \
-  --data_root 02_data \
-  --mc_data_root 02_data/data_mc_openai \
-  --datasets vqarad \
-  --split train \
-  --resume \
-  --save_every 25
-```
-
-2. **`verify_reasonings_qwen_hf.py`** — lokales **HuggingFace**-Modell (Default `Qwen/Qwen2.5-7B-Instruct`), nur Text: Frage + Optionen + Pseudo-Reasoning → vorhergesagter Buchstabe. Es werden `reasoning_verify_model`, `reasoning_verify_pred_letter`, `reasoning_verify_correct` ergänzt. Optional `--output_filtered <dir|datei.json>` schreibt nur Zeilen mit `reasoning_verify_correct == true` (bei Mehrfach-Läufen: je Split `*_verified.json` unter dem Verzeichnis). `--no_write_source` lässt die Quell-JSON unverändert.
-
-```bash
-pip install transformers accelerate
-python verify_reasonings_qwen_hf.py \
-  --mc_data_root 02_data/data_mc_openai \
-  --datasets vqarad \
-  --verifier_model Qwen/Qwen2.5-7B-Instruct \
-  --output_filtered 07_results/verified_reasoning_json/
-```
-
-3. **`04_training/train_med.py`** — `--supervision reasoning_plus_letter` trainiert auf **Reasoning-Block + Optionsbuchstabe** (Trailing-Loss wie bisher, längerer Tail). Zusätzlich `--only_reasoning_verified` (nur Samples mit erfolgreichem Qwen-Check) und `--require_pseudo_reasoning` (abbricht, wenn nach Filter weniger Samples übrig bleiben als vorher — strikt: kein fehlendes Pseudo / kein Verifikations-Dropout). Für längere Sequenzen **`--max_length` erhöhen** (z. B. 768–1024) und ggf. kleinere Batch-Größe.
-
-```bash
-python 04_training/train_med.py --dataset vqarad \
-  --supervision reasoning_plus_letter \
-  --only_reasoning_verified \
-  --max_length 768
-```
+Eine frühere Pipeline (OpenAI-Vision + Qwen-Verifikation + optionales Training auf Pseudo-Reasonings) ist **hier nicht enthalten**. Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser.
 
 Ausgabe pro Datensatz:
-
-
-**MC als Standardpfad:** `MedicalVQALoader()` lädt für Training/Inferenz standardmäßig aus `02_data/data_mc_openai` (Rohdaten unter `02_data/`). Fehlen die MC-Dateien dort, gibt der Loader einen Fehler mit Verweis auf `utils/build_mc_datasets_openai.py`. **`utils/build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.
+**MC als Standardpfad:** `MedicalVQALoader()` nutzt `MEDVQA_DATA_ROOT` / `MEDVQA_MC_ROOT` bzw. die Fallbacks `02_data` und `02_data/data_mc_openai` (siehe [`utils/paths.py`](utils/paths.py)). Fehlen die MC-Dateien unter dem MC-Root, gibt der Loader einen Fehler mit Verweis auf `utils/build_mc_datasets_openai.py`. **`utils/build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.
 
 **Legacy-Layout:** Mit `--data_root data --mc_data_root data_mc_openai` (und ggf. `--output_dir` / `--results_dir`) funktioniert weiterhin die klassische Ordnerstruktur neben dem Repo.
 
@@ -781,7 +747,7 @@ Ausgabe pro Datensatz:
 
 ```bash
 # Training
-python 04_training/train.py \
+python 03_training/train.py \
   --dataset pathvqa \
   --data_root 02_data \
   --mc_data_root 02_data/data_mc_openai \
@@ -790,7 +756,7 @@ python 04_training/train.py \
   --learning_rate 2e-5
 
 # Inferenz
-python 05_evaluation/inference.py \
+python 04_evaluation/inference.py \
   --model_path ./06_outputs/llava_pathvqa \
   --data_root 02_data \
   --mc_data_root 02_data/data_mc_openai \
@@ -801,13 +767,13 @@ python 05_evaluation/inference.py \
   --results_dir 07_results
 
 # Metriken
-python 05_evaluation/evaluate.py \
+python 04_evaluation/evaluate.py \
   --results_file 07_results/llava_pathvqa_all.json \
   --output_file metrics_pathvqa.json
 # output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
 
 # Risk–Coverage / AURC
-python 05_evaluation/risk_coverage_entropy.py \
+python 04_evaluation/risk_coverage_entropy.py \
   --results_file 07_results/llava_pathvqa_all.json \
   --output_dir 07_results \
   --score_field entropy \

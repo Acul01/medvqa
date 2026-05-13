@@ -2,9 +2,8 @@
 Unified Data Loader for Medical VQA Datasets.
 
 By default this loader reads the multiple-choice exports produced by
-build_mc_datasets_openai.py (under ``02_data/data_mc_openai`` in the default
-layout). Set mc_data_root=None to use legacy free-text annotations from
-data_root.
+build_mc_datasets_openai.py (see ``utils.paths`` / ``MEDVQA_MC_ROOT``).
+Set mc_data_root=None to use legacy free-text annotations from data_root.
 """
 
 import csv
@@ -12,11 +11,12 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from utils.mc_vqa import correct_index_to_letter
+from utils.paths import MC_DEFAULT, get_data_root, get_mc_data_root
 
 
 def combined_dataset_instruction(dataset_display_name: str) -> str:
@@ -48,11 +48,16 @@ class MedicalVQALoader:
 
     def __init__(
         self,
-        data_root: str = "02_data",
-        mc_data_root: Optional[str] = "02_data/data_mc_openai",
+        data_root: Optional[str] = None,
+        mc_data_root: Optional[Any] = MC_DEFAULT,
     ):
-        self.data_root = Path(data_root)
-        self.mc_data_root = Path(mc_data_root) if mc_data_root else None
+        self.data_root = Path(data_root if data_root is not None else get_data_root())
+        if mc_data_root is MC_DEFAULT:
+            self.mc_data_root = Path(get_mc_data_root())
+        elif mc_data_root is None:
+            self.mc_data_root = None
+        else:
+            self.mc_data_root = Path(mc_data_root)
 
         self.dataset_configs = {
             "PathVQA": {
@@ -319,21 +324,21 @@ class MedicalVQALoader:
 
 # Convenience functions for quick access
 
-def load_pathvqa(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
-    loader = MedicalVQALoader(data_root)
+def load_pathvqa(data_root: Optional[str] = None, split: str = "train") -> List[VQASample]:
+    loader = MedicalVQALoader(data_root if data_root is not None else get_data_root())
     return loader.load_dataset("PathVQA", split)
 
 
-def load_slake(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
-    loader = MedicalVQALoader(data_root)
+def load_slake(data_root: Optional[str] = None, split: str = "train") -> List[VQASample]:
+    loader = MedicalVQALoader(data_root if data_root is not None else get_data_root())
     return loader.load_dataset("SLAKE", split)
 
 
-def load_vqarad(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
-    loader = MedicalVQALoader(data_root)
+def load_vqarad(data_root: Optional[str] = None, split: str = "train") -> List[VQASample]:
+    loader = MedicalVQALoader(data_root if data_root is not None else get_data_root())
     return loader.load_dataset("VQA-Rad", split)
 
 
-def load_medvqa2019(data_root: str = "02_data", split: str = "train") -> List[VQASample]:
-    loader = MedicalVQALoader(data_root)
+def load_medvqa2019(data_root: Optional[str] = None, split: str = "train") -> List[VQASample]:
+    loader = MedicalVQALoader(data_root if data_root is not None else get_data_root())
     return loader.load_dataset("Med-VQA-2019", split)
