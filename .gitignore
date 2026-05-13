@@ -3,7 +3,7 @@
 01_external/
 
 # Trainings-Outputs (können sehr groß sein!)
-06_outputs/
+05_outputs/
 *.pt
 *.pth
 *.ckpt
@@ -31,7 +31,7 @@ setup.txt
 
 # experiment artifacts
 logs/
-07_results/
+06_results/
 results_debug/
 wandb/
 
