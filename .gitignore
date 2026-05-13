@@ -1,9 +1,9 @@
-data/
+02_data/
 
-external/loba/
+01_external/
 
 # Trainings-Outputs (können sehr groß sein!)
-outputs/
+06_outputs/
 *.pt
 *.pth
 *.ckpt
@@ -31,15 +31,15 @@ setup.txt
 
 # experiment artifacts
 logs/
-results/
+07_results/
 results_debug/
 wandb/
-nohup.out
+
 
 # local generated datasets
-data_mc_openai/
+02_data/data_mc_openai/
 
 # local external clone
-LLaVA-Med/
+01_external/LLaVA-Med/
 commands.txt
 test.ipynb
