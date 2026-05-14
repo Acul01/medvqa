@@ -160,16 +160,29 @@ def _model_short_name(model_path: str) -> str:
     return Path(model_path).name
 
 
-def _compute_token_entropies(step_scores, generated_ids, tokenizer) -> tuple[dict, float]:
+def _compute_token_entropies(
+    step_scores,
+    generated_ids,
+    tokenizer,
+    *,
+    prompt_length: int | None = None,
+) -> tuple[dict, float]:
+    """Pair each `step_scores` step with the token actually chosen at that step.
+
+    Pass `prompt_length` when `generated_ids` is the full sequence (prompt + new);
+    omit it when `generated_ids` is already only the generated suffix.
+    """
+    new_ids = generated_ids[prompt_length:] if prompt_length is not None else generated_ids
+    n = min(len(step_scores), int(new_ids.shape[0]))
     entropies = []
-    for step_logits in step_scores[: generated_ids.shape[0]]:
+    for step_logits in step_scores[:n]:
         probs = torch.softmax(step_logits[0], dim=-1)
         entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum().item()
         entropies.append(entropy)
 
     special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
     entropy_tokens = {}
-    for token_id, entropy in zip(generated_ids.tolist(), entropies):
+    for token_id, entropy in zip(new_ids[:n].tolist(), entropies):
         token_id = int(token_id)
         raw_token = tokenizer.convert_ids_to_tokens(token_id)
         if raw_token in special_tokens:
@@ -409,8 +422,9 @@ def main():
 
                 entropy_tokens, entropy_mean = _compute_token_entropies(
                     generation_output.scores,
-                    generated_ids=generated_ids,
-                    tokenizer=processor.tokenizer,
+                    generation_output.sequences[0],
+                    processor.tokenizer,
+                    prompt_length=input_length,
                 )
 
                 sampled_predicted_letters = []
@@ -437,8 +451,9 @@ def main():
                     sampled_predicted_letters.append(sample_letter)
                     _, sample_entropy = _compute_token_entropies(
                         sample_output.scores,
-                        generated_ids=sample_generated_ids,
-                        tokenizer=processor.tokenizer,
+                        sample_output.sequences[0],
+                        processor.tokenizer,
+                        prompt_length=input_length,
                     )
                     sampled_entropies.append(sample_entropy)
                     sampled_confidences.append(_compute_generation_confidence(sample_output.scores))
