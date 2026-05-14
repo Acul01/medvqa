@@ -723,17 +723,6 @@ def main():
 
                 stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(device, dtype=torch.float16)
                 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
-                # Forward pass for raw logits — bypasses all logit processors (temperature,
-                # top_p, image-token suppression) that would corrupt entropy computation.
-                fwd = model(
-                    input_ids,
-                    images=stage2_image_tensor,
-                    attention_mask=torch.ones_like(input_ids),
-                    return_dict=True,
-                )
-                # Shape (1, vocab_size) — distribution over the first generated token.
-                raw_logits = (fwd.logits[0:1, -1, :],)
-
                 generation_output = model.generate(
                     input_ids,
                     images=stage2_image_tensor,
@@ -759,18 +748,30 @@ def main():
                 else:
                     predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
                 ground_truth_letter = sample.answer
-                greedy_gen_ids = _entropy_token_ids(generation_output.sequences[0], input_ids)
-                entropy_tokens, entropy_mean = _compute_token_entropies(
-                    raw_logits,
-                    greedy_gen_ids,
-                    tokenizer,
-                    prompt_length=None,
+
+                # Forward pass AFTER generate — raw logits free of all logit processors.
+                # Must come after generate to avoid interference with LLaVA's image caching.
+                fwd = model(
+                    input_ids,
+                    images=stage2_image_tensor,
+                    attention_mask=torch.ones_like(input_ids),
+                    return_dict=True,
                 )
-                confidence = _compute_generation_confidence(
-                    raw_logits,
-                    greedy_gen_ids,
-                    tokenizer,
-                )
+                first_logits = fwd.logits[0, -1, :].double()
+                log_probs_fwd = torch.log_softmax(first_logits, dim=-1)
+                probs_fwd = torch.exp(log_probs_fwd)
+                entropy_val = -torch.where(
+                    probs_fwd > 0,
+                    probs_fwd * log_probs_fwd,
+                    torch.zeros_like(log_probs_fwd),
+                ).sum().item()
+                confidence = float(probs_fwd.max().item())
+                first_tok_id = int(torch.argmax(first_logits).item())
+                first_tok_text = tokenizer.decode(
+                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+                ).strip() or f"tok_{first_tok_id}"
+                entropy_tokens = {first_tok_text: entropy_val}
+                entropy_mean = entropy_val
 
                 sampled_predicted_letters = []
                 for _ in range(agreement_samples):

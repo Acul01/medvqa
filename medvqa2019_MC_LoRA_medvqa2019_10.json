@@ -30,12 +30,10 @@
     "predicted_answer": "E",
     "predicted_letter": "E",
     "is_correct": true,
-    "entropy_tokens": {
-      "E": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "E",
       "E",
@@ -69,21 +67,19 @@
     "question_type": "closed",
     "ground_truth_answer": "no",
     "ground_truth_letter": "B",
-    "predicted_answer": "B",
-    "predicted_letter": "B",
-    "is_correct": true,
-    "entropy_tokens": {
-      "B": -0.0
-    },
-    "entropy": 0.0,
+    "predicted_answer": "A",
+    "predicted_letter": "A",
+    "is_correct": false,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 0.8,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "A",
       "A",
       "A",
-      "B",
-      "A"
+      "A",
+      "B"
     ]
   },
   {
@@ -117,12 +113,10 @@
     "predicted_answer": "B",
     "predicted_letter": "B",
     "is_correct": true,
-    "entropy_tokens": {
-      "B": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "B",
       "B",
@@ -162,12 +156,10 @@
     "predicted_answer": "B",
     "predicted_letter": "B",
     "is_correct": true,
-    "entropy_tokens": {
-      "B": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "B",
       "B",
@@ -207,12 +199,10 @@
     "predicted_answer": "D",
     "predicted_letter": "D",
     "is_correct": true,
-    "entropy_tokens": {
-      "D": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "D",
       "D",
@@ -249,12 +239,10 @@
     "predicted_answer": "A",
     "predicted_letter": "A",
     "is_correct": true,
-    "entropy_tokens": {
-      "A": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "A",
       "A",
@@ -294,12 +282,10 @@
     "predicted_answer": "E",
     "predicted_letter": "E",
     "is_correct": true,
-    "entropy_tokens": {
-      "E": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "E",
       "E",
@@ -336,12 +322,10 @@
     "predicted_answer": "A",
     "predicted_letter": "A",
     "is_correct": true,
-    "entropy_tokens": {
-      "A": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "A",
       "A",
@@ -378,12 +362,10 @@
     "predicted_answer": "A",
     "predicted_letter": "A",
     "is_correct": true,
-    "entropy_tokens": {
-      "A": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "A",
       "A",
@@ -423,12 +405,10 @@
     "predicted_answer": "B",
     "predicted_letter": "B",
     "is_correct": true,
-    "entropy_tokens": {
-      "B": -0.0
-    },
-    "entropy": 0.0,
+    "entropy_tokens": {},
+    "entropy": NaN,
     "agreement": 1.0,
-    "confidence": 1.0,
+    "confidence": NaN,
     "agreement_samples": [
       "B",
       "B",

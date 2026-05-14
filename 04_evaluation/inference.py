@@ -411,10 +411,6 @@ def main():
                 inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
                 input_length = inputs["input_ids"].shape[1]
 
-                # Forward pass for raw logits — bypasses all logit processors.
-                fwd = model(**inputs, return_dict=True)
-                raw_logits = (fwd.logits[0:1, -1, :],)
-
                 generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True)
                 generated_ids = generation_output.sequences[0][input_length:]
                 generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
@@ -433,18 +429,23 @@ def main():
                     predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
                 ground_truth_letter = sample.answer
 
-                entropy_tokens, entropy_mean = _compute_token_entropies(
-                    raw_logits,
-                    generation_output.sequences[0],
-                    processor.tokenizer,
-                    prompt_length=input_length,
-                )
-                confidence = _compute_generation_confidence(
-                    raw_logits,
-                    generation_output.sequences[0],
-                    processor.tokenizer,
-                    prompt_length=input_length,
-                )
+                # Forward pass AFTER generate — raw logits free of all logit processors.
+                fwd = model(**inputs, return_dict=True)
+                first_logits = fwd.logits[0, -1, :].double()
+                log_probs_fwd = torch.log_softmax(first_logits, dim=-1)
+                probs_fwd = torch.exp(log_probs_fwd)
+                entropy_val = -torch.where(
+                    probs_fwd > 0,
+                    probs_fwd * log_probs_fwd,
+                    torch.zeros_like(log_probs_fwd),
+                ).sum().item()
+                confidence = float(probs_fwd.max().item())
+                first_tok_id = int(torch.argmax(first_logits).item())
+                first_tok_text = processor.tokenizer.decode(
+                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+                ).strip() or f"tok_{first_tok_id}"
+                entropy_tokens = {first_tok_text: entropy_val}
+                entropy_mean = entropy_val
 
                 sampled_predicted_letters = []
                 for _ in range(agreement_samples):
