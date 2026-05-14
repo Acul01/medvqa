@@ -120,21 +120,43 @@ class MedicalVQALoader:
             f"Supported datasets: {list(self.dataset_name_mapping.keys())}"
         )
 
+    @staticmethod
+    def _normalize_mc_image_suffix(image_path_str: str, images_dir: str, dataset_name: str) -> str:
+        """Strip duplicated MC prefixes (e.g. images_dir/data/Dataset/images_dir/file.jpg -> file.jpg)."""
+        s = str(image_path_str).replace("\\", "/").strip()
+        while s.startswith("./"):
+            s = s[2:]
+        ds_data = f"data/{dataset_name}/"
+        ds_root = f"{dataset_name}/"
+        while True:
+            if s.startswith(f"{images_dir}/"):
+                s = s[len(images_dir) + 1 :]
+                continue
+            if s.startswith(ds_data):
+                s = s[len(ds_data) :]
+                continue
+            if s.startswith(ds_root):
+                s = s[len(ds_root) :]
+                continue
+            break
+        return s
+
     def _resolve_image_path(self, dataset_name: str, config: Dict, image_path: str) -> Path:
         dataset_root = self.data_root / dataset_name
+        images_dir = config["images_dir"]
         image_path_str = str(image_path).strip()
         if not image_path_str:
             raise ValueError("empty image_path")
         if os.path.isabs(image_path_str):
             return Path(image_path_str)
         # MC records may store a repo-relative path (e.g. data/VQA-Rad/vqarad_images/train_0.jpg).
-        # Do not prefix dataset_root/images_dir again in that case.
         rel = Path(image_path_str)
         if rel.exists():
             return rel.resolve()
-        if image_path_str.startswith(config["images_dir"]):
-            return dataset_root / image_path_str
-        return dataset_root / config["images_dir"] / image_path_str
+        suffix = self._normalize_mc_image_suffix(image_path_str, images_dir, dataset_name)
+        if not suffix or ".." in Path(suffix).parts:
+            raise ValueError(f"invalid image_path after normalization: {image_path_str!r} -> {suffix!r}")
+        return dataset_root / images_dir / Path(suffix)
 
     def _mc_paths(self, dataset_name: str, split: str) -> tuple[Path, Path]:
         if self.mc_data_root is None:
