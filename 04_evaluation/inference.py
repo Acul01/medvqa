@@ -176,7 +176,7 @@ def _compute_token_entropies(
     n = min(len(step_scores), int(new_ids.shape[0]))
     entropies = []
     for step_logits in step_scores[:n]:
-        probs = torch.softmax(step_logits[0], dim=-1)
+        probs = torch.softmax(step_logits[0].float(), dim=-1)
         entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum().item()
         entropies.append(entropy)
 
@@ -212,7 +212,7 @@ def _compute_token_entropies(
 def _compute_generation_confidence(step_scores) -> float:
     token_confidences = []
     for step_logits in step_scores:
-        probs = torch.softmax(step_logits[0], dim=-1)
+        probs = torch.softmax(step_logits[0].float(), dim=-1)
         token_confidences.append(float(torch.max(probs).item()))
     return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
 
