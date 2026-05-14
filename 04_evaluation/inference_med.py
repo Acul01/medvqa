@@ -224,6 +224,12 @@ def _compute_token_entropies(
     return entropy_tokens, entropy_mean
 
 
+def _entropy_token_ids(sequences_1d: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+    """Generated-token ids aligned with ``output_scores`` (handles full-seq vs new-only ``sequences``)."""
+    _, gen_ids, _ = normalize_generation_sequences(sequences_1d.unsqueeze(0), input_ids)
+    return gen_ids[0]
+
+
 def _compute_generation_confidence(step_scores) -> float:
     token_confidences = []
     for step_logits in step_scores:
@@ -708,7 +714,6 @@ def main():
 
                 stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(device, dtype=torch.float16)
                 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
-                prompt_len = int(input_ids.shape[1])
                 generation_output = model.generate(
                     input_ids,
                     images=stage2_image_tensor,
@@ -736,9 +741,9 @@ def main():
                 ground_truth_letter = sample.answer
                 entropy_tokens, entropy_mean = _compute_token_entropies(
                     generation_output.scores,
-                    generated_ids,
+                    _entropy_token_ids(generation_output.sequences[0], input_ids),
                     tokenizer,
-                    prompt_length=prompt_len,
+                    prompt_length=None,
                 )
 
                 sampled_predicted_letters = []
@@ -767,9 +772,9 @@ def main():
                     sampled_predicted_letters.append(sample_letter)
                     _, sample_entropy = _compute_token_entropies(
                         sample_output.scores,
-                        sample_generated_ids,
+                        _entropy_token_ids(sample_output.sequences[0], input_ids),
                         tokenizer,
-                        prompt_length=prompt_len,
+                        prompt_length=None,
                     )
                     sampled_entropies.append(sample_entropy)
                     sampled_confidences.append(_compute_generation_confidence(sample_output.scores))
