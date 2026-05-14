@@ -196,8 +196,9 @@ def _compute_token_entropies(
     n = min(len(step_scores), int(new_ids.shape[0]))
     entropies = []
     for step_logits in step_scores[:n]:
-        probs = torch.softmax(step_logits[0].float(), dim=-1)
-        entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum().item()
+        logits64 = step_logits[0].double()
+        log_probs = torch.log_softmax(logits64, dim=-1)
+        entropy = -(torch.exp(log_probs) * log_probs).sum().item()
         entropies.append(entropy)
 
     special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
@@ -230,11 +231,17 @@ def _entropy_token_ids(sequences_1d: torch.Tensor, input_ids: torch.Tensor) -> t
     return gen_ids[0]
 
 
-def _compute_generation_confidence(step_scores) -> float:
+def _compute_generation_confidence(step_scores, generated_ids, tokenizer, *, prompt_length: int | None = None) -> float:
+    new_ids = generated_ids[prompt_length:] if prompt_length is not None else generated_ids
+    n = min(len(step_scores), int(new_ids.shape[0]))
+    special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
     token_confidences = []
-    for step_logits in step_scores:
-        probs = torch.softmax(step_logits[0].float(), dim=-1)
-        token_confidences.append(float(torch.max(probs).item()))
+    for step_logits, token_id in zip(step_scores[:n], new_ids[:n].tolist()):
+        if tokenizer.convert_ids_to_tokens(int(token_id)) in special_tokens:
+            continue
+        logits64 = step_logits[0].double()
+        log_probs = torch.log_softmax(logits64, dim=-1)
+        token_confidences.append(float(torch.exp(log_probs).max().item()))
     return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
 
 
@@ -739,16 +746,20 @@ def main():
                 else:
                     predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
                 ground_truth_letter = sample.answer
+                greedy_gen_ids = _entropy_token_ids(generation_output.sequences[0], input_ids)
                 entropy_tokens, entropy_mean = _compute_token_entropies(
                     generation_output.scores,
-                    _entropy_token_ids(generation_output.sequences[0], input_ids),
+                    greedy_gen_ids,
                     tokenizer,
                     prompt_length=None,
                 )
+                confidence = _compute_generation_confidence(
+                    generation_output.scores,
+                    greedy_gen_ids,
+                    tokenizer,
+                )
 
                 sampled_predicted_letters = []
-                sampled_entropies = []
-                sampled_confidences = []
                 for _ in range(agreement_samples):
                     sample_output = model.generate(
                         input_ids,
@@ -756,7 +767,7 @@ def main():
                         attention_mask=torch.ones_like(input_ids),
                         **agreement_gen_kwargs,
                         return_dict_in_generate=True,
-                        output_scores=True,
+                        output_scores=args.use_two_stage_reasoning,
                     )
                     sample_generated_ids = sample_output.sequences[0]
                     if args.use_two_stage_reasoning:
@@ -770,17 +781,7 @@ def main():
                         sample_text = clean_answer(tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip())
                         sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
                     sampled_predicted_letters.append(sample_letter)
-                    _, sample_entropy = _compute_token_entropies(
-                        sample_output.scores,
-                        _entropy_token_ids(sample_output.sequences[0], input_ids),
-                        tokenizer,
-                        prompt_length=None,
-                    )
-                    sampled_entropies.append(sample_entropy)
-                    sampled_confidences.append(_compute_generation_confidence(sample_output.scores))
 
-                entropy_mean = _nanmean(sampled_entropies)
-                confidence = _nanmean(sampled_confidences)
                 agreement = _compute_agreement(sampled_predicted_letters)
 
                 is_correct = predicted_letter == ground_truth_letter
