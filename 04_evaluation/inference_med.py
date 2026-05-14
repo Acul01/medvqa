@@ -37,6 +37,13 @@ from utils.gradcam_inference import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    import inspect
+    from transformers.generation import GenerationMixin as _GM
+    _HF_OUTPUT_LOGITS = "output_logits" in inspect.signature(_GM.generate).parameters
+except Exception:
+    _HF_OUTPUT_LOGITS = False
+
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 DATASET_MAX_NEW_TOKENS = {"pathvqa": 8, "slake": 8, "vqarad": 8, "medvqa2019": 8}
 END_REASONING_TOKEN = "<END_REASONING>"
@@ -198,7 +205,9 @@ def _compute_token_entropies(
     for step_logits in step_scores[:n]:
         logits64 = step_logits[0].double()
         log_probs = torch.log_softmax(logits64, dim=-1)
-        entropy = -(torch.exp(log_probs) * log_probs).sum().item()
+        probs = torch.exp(log_probs)
+        # 0 * (-inf) = NaN in IEEE 754; Shannon convention: 0 * log(0) = 0
+        entropy = -torch.where(probs > 0, probs * log_probs, torch.zeros_like(log_probs)).sum().item()
         entropies.append(entropy)
 
     special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
@@ -240,8 +249,8 @@ def _compute_generation_confidence(step_scores, generated_ids, tokenizer, *, pro
         if tokenizer.convert_ids_to_tokens(int(token_id)) in special_tokens:
             continue
         logits64 = step_logits[0].double()
-        log_probs = torch.log_softmax(logits64, dim=-1)
-        token_confidences.append(float(torch.exp(log_probs).max().item()))
+        probs = torch.exp(torch.log_softmax(logits64, dim=-1))
+        token_confidences.append(float(probs.max().item()))
     return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
 
 
@@ -721,6 +730,7 @@ def main():
 
                 stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(device, dtype=torch.float16)
                 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
+                _extra_gen = {"output_logits": True} if _HF_OUTPUT_LOGITS else {}
                 generation_output = model.generate(
                     input_ids,
                     images=stage2_image_tensor,
@@ -728,7 +738,10 @@ def main():
                     **gen_kwargs,
                     return_dict_in_generate=True,
                     output_scores=True,
+                    **_extra_gen,
                 )
+                # Use pre-logit-processor logits when available (HF >= 4.38); fall back to scores.
+                raw_logits = getattr(generation_output, "logits", None) or generation_output.scores
 
                 generated_ids = generation_output.sequences[0]
                 generated_text = clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())
@@ -748,13 +761,13 @@ def main():
                 ground_truth_letter = sample.answer
                 greedy_gen_ids = _entropy_token_ids(generation_output.sequences[0], input_ids)
                 entropy_tokens, entropy_mean = _compute_token_entropies(
-                    generation_output.scores,
+                    raw_logits,
                     greedy_gen_ids,
                     tokenizer,
                     prompt_length=None,
                 )
                 confidence = _compute_generation_confidence(
-                    generation_output.scores,
+                    raw_logits,
                     greedy_gen_ids,
                     tokenizer,
                 )

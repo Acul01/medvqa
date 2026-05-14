@@ -21,6 +21,13 @@ from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_lette
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
 
+try:
+    import inspect
+    from transformers.generation import GenerationMixin as _GM
+    _HF_OUTPUT_LOGITS = "output_logits" in inspect.signature(_GM.generate).parameters
+except Exception:
+    _HF_OUTPUT_LOGITS = False
+
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 END_REASONING_TOKEN = "<END_REASONING>"
 
@@ -178,7 +185,9 @@ def _compute_token_entropies(
     for step_logits in step_scores[:n]:
         logits64 = step_logits[0].double()
         log_probs = torch.log_softmax(logits64, dim=-1)
-        entropy = -(torch.exp(log_probs) * log_probs).sum().item()
+        probs = torch.exp(log_probs)
+        # 0 * (-inf) = NaN in IEEE 754; Shannon convention: 0 * log(0) = 0
+        entropy = -torch.where(probs > 0, probs * log_probs, torch.zeros_like(log_probs)).sum().item()
         entropies.append(entropy)
 
     special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
@@ -219,8 +228,8 @@ def _compute_generation_confidence(step_scores, generated_ids, tokenizer, *, pro
         if tokenizer.convert_ids_to_tokens(int(token_id)) in special_tokens:
             continue
         logits64 = step_logits[0].double()
-        log_probs = torch.log_softmax(logits64, dim=-1)
-        token_confidences.append(float(torch.exp(log_probs).max().item()))
+        probs = torch.exp(torch.log_softmax(logits64, dim=-1))
+        token_confidences.append(float(probs.max().item()))
     return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
 
 
@@ -409,7 +418,10 @@ def main():
                 inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
                 input_length = inputs["input_ids"].shape[1]
 
-                generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True)
+                _extra_gen = {"output_logits": True} if _HF_OUTPUT_LOGITS else {}
+                generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True, **_extra_gen)
+                # Use pre-logit-processor logits when available (HF >= 4.38); fall back to scores.
+                raw_logits = getattr(generation_output, "logits", None) or generation_output.scores
                 generated_ids = generation_output.sequences[0][input_length:]
                 generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
                 stage2_option_probs = {}
@@ -428,13 +440,13 @@ def main():
                 ground_truth_letter = sample.answer
 
                 entropy_tokens, entropy_mean = _compute_token_entropies(
-                    generation_output.scores,
+                    raw_logits,
                     generation_output.sequences[0],
                     processor.tokenizer,
                     prompt_length=input_length,
                 )
                 confidence = _compute_generation_confidence(
-                    generation_output.scores,
+                    raw_logits,
                     generation_output.sequences[0],
                     processor.tokenizer,
                     prompt_length=input_length,
