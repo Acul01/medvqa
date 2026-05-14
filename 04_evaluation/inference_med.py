@@ -37,13 +37,6 @@ from utils.gradcam_inference import (
 
 logger = logging.getLogger(__name__)
 
-try:
-    import inspect
-    from transformers.generation import GenerationMixin as _GM
-    _HF_OUTPUT_LOGITS = "output_logits" in inspect.signature(_GM.generate).parameters
-except Exception:
-    _HF_OUTPUT_LOGITS = False
-
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 DATASET_MAX_NEW_TOKENS = {"pathvqa": 8, "slake": 8, "vqarad": 8, "medvqa2019": 8}
 END_REASONING_TOKEN = "<END_REASONING>"
@@ -730,7 +723,17 @@ def main():
 
                 stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(device, dtype=torch.float16)
                 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
-                _extra_gen = {"output_logits": True} if _HF_OUTPUT_LOGITS else {}
+                # Forward pass for raw logits — bypasses all logit processors (temperature,
+                # top_p, image-token suppression) that would corrupt entropy computation.
+                fwd = model(
+                    input_ids,
+                    images=stage2_image_tensor,
+                    attention_mask=torch.ones_like(input_ids),
+                    return_dict=True,
+                )
+                # Shape (1, vocab_size) — distribution over the first generated token.
+                raw_logits = (fwd.logits[0:1, -1, :],)
+
                 generation_output = model.generate(
                     input_ids,
                     images=stage2_image_tensor,
@@ -738,10 +741,7 @@ def main():
                     **gen_kwargs,
                     return_dict_in_generate=True,
                     output_scores=True,
-                    **_extra_gen,
                 )
-                # Use pre-logit-processor logits when available (HF >= 4.38); fall back to scores.
-                raw_logits = getattr(generation_output, "logits", None) or generation_output.scores
 
                 generated_ids = generation_output.sequences[0]
                 generated_text = clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())

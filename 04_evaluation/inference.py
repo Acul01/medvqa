@@ -21,13 +21,6 @@ from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_lette
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
 
-try:
-    import inspect
-    from transformers.generation import GenerationMixin as _GM
-    _HF_OUTPUT_LOGITS = "output_logits" in inspect.signature(_GM.generate).parameters
-except Exception:
-    _HF_OUTPUT_LOGITS = False
-
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 END_REASONING_TOKEN = "<END_REASONING>"
 
@@ -418,10 +411,11 @@ def main():
                 inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
                 input_length = inputs["input_ids"].shape[1]
 
-                _extra_gen = {"output_logits": True} if _HF_OUTPUT_LOGITS else {}
-                generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True, **_extra_gen)
-                # Use pre-logit-processor logits when available (HF >= 4.38); fall back to scores.
-                raw_logits = getattr(generation_output, "logits", None) or generation_output.scores
+                # Forward pass for raw logits — bypasses all logit processors.
+                fwd = model(**inputs, return_dict=True)
+                raw_logits = (fwd.logits[0:1, -1, :],)
+
+                generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True, output_scores=True)
                 generated_ids = generation_output.sequences[0][input_length:]
                 generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
                 stage2_option_probs = {}
