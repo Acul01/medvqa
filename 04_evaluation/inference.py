@@ -20,6 +20,7 @@ from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
+from utils.mc_eval import run_mc_evaluation
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 END_REASONING_TOKEN = "<END_REASONING>"
@@ -532,23 +533,14 @@ def main():
     if open_acc is not None:
         print(f"Open accuracy: {open_correct}/{len(open_rows)} = {open_acc:.4f}")
 
-    save_results(
+    results_path = save_results(
         results=results,
         model_path=args.model_path,
         dataset=args.dataset,
         n_samples=args.n_samples,
-        finetuned=args.finetuned,
-        exact_acc=overall_acc,
-        bleu_scores={},
-        rouge_scores={},
-        bert_scores={},
-        yesno_acc=closed_acc,
-        open_acc=open_acc,
         results_dir=args.results_dir,
-        mc_overall_acc=overall_acc,
-        mc_closed_acc=closed_acc,
-        mc_open_acc=open_acc,
     )
+    run_mc_evaluation(results_path)
 
     wandb.summary["mc_overall_accuracy"] = overall_acc
     if closed_acc is not None:

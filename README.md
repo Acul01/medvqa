@@ -126,8 +126,8 @@ flowchart LR
 | `utils/download_datasets.py` | Download PathVQA / SLAKE / VQA-Rad / Med-VQA-2019 nach `02_data/` |
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
-| `utils/save_results.py` | JSON/CSV/XLSX + `results_history.csv` (Default `07_results/`) |
-| `utils/prompt_formatter.py`, `utils/dataset.py` | Hilfsfunktionen |
+| `utils/save_results.py` | JSON/CSV/XLSX unter `--results_dir` (Default `06_results/` / `MEDVQA_RESULTS_DIR`) |
+| `utils/mc_eval.py` | MC-Metriken aus Inferenz-JSON → `{stem}_eval.json` || `utils/prompt_formatter.py`, `utils/dataset.py` | Hilfsfunktionen |
 | `02_data/` | Rohdaten + MC-Exporte (Standard `02_data/data_mc_openai/`) |
 | `06_outputs/` | Checkpoints / Trainings-Artefakte (Default `--output_dir`) |
 | `07_results/` | Inferenz- und Eval-Ergebnisse (Default `--results_dir`) |
@@ -147,7 +147,7 @@ flowchart LR
 ```bash
 pip install torch transformers pillow pandas tqdm nltk wandb matplotlib numpy
 
-# Für evaluate.py / save_results (Textmetriken)
+# Optional: freie Text-Eval (BLEU/ROUGE/BERT) falls ihr ein entsprechendes Pipeline-Skript nutzt
 pip install rouge-score bert-score
 
 # Optional: XLSX-Export der Inferenz (utils/save_results.py)
@@ -157,7 +157,7 @@ pip install openpyxl
 pip install datasets huggingface_hub
 ```
 
-**NLTK** (für BLEU in `evaluate.py`):
+**NLTK** (z. B. für BLEU in freier Text-Evaluation, falls genutzt):
 
 ```python
 import nltk
@@ -394,6 +394,7 @@ python 04_evaluation/inference.py \
 
 - **`{modell_kurz}_{dataset}_{n_tag}.json`** – Liste von Dicts pro Sample
 - Dieselbe Basis für `.csv` und optional `.xlsx`
+- **`{modell_kurz}_{dataset}_{n_tag}_eval.json`** – MC-Kennzahlen (Accuracy, Entropie, Agreement, Confidence nach closed/open/overall), **automatisch** am Ende von `inference.py` und `inference_med.py` nach dem Speichern des Haupt-JSONs
 
 `n_tag` ist `all`, wenn `--n_samples` nicht gesetzt ist.
 
@@ -543,16 +544,12 @@ Kein zusätzlicher harter Trainingsconstraint nötig; Fusion primär **inferenzz
 
 ```bash
 python 04_evaluation/evaluate.py \
-  --results_file 07_results/llava_pathvqa_all.json \
-  --output_file metrics_pathvqa.json
-# output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
+  --results_file 06_results/llava-med_pathvqa_all.json
+# schreibt standardmäßig 06_results/llava-med_pathvqa_all_eval.json
+# optional: --output_file /pfad/zu/metrics.json
 ```
 
-Berichtet u. a. Accuracy (gesamt, Yes/No vs. offen wo anwendbar), **BLEU-1/4**, **ROUGE-L**, **BERTScore-F1**, Mittelwert der **tokenbasierten Entropie**, sowie Mittelwerte für **agreement** und **confidence** aus den Ergebniszeilen. Hängt an `ground_truth_answer` und `predicted_answer`.
-
-Optional: `--eval_runs_file` (Standard `07_results/eval_runs.csv`) – eine Zeile pro Lauf.
-
-**Zusätzliche Pakete:** `rouge-score`, `bert-score` (siehe Installation).
+MC-Kennzahlen: Accuracy (closed/open/overall über Buchstaben), Mittelwerte von **Entropie**, **agreement** und **confidence** aus den Inferenzzeilen. Normalerweise entfällt ein separater Aufruf: `inference.py` / `inference_med.py` erzeugen `{stem}_eval.json` automatisch.
 
 ### Risk–Coverage & AURC (`risk_coverage_entropy.py`)
 
@@ -613,8 +610,8 @@ Terminologie (für die Arbeit konsistent halten):
 ## Ergebnisse & Artefakte
 
 - **Checkpoints:** `--output_dir` aus `03_training/train.py` / `03_training/train_med.py` (Standard unter `06_outputs/`)
-- **Inferenz:** `07_results/*.json`, `.csv`, optional `.xlsx`, `results_history.csv` (unter `07_results/`)
-- **Eval:** `metrics*.json`, `eval_runs.csv`
+- **Inferenz:** unter `--results_dir` (Default `06_results/`): `*.json`, `*_eval.json`, `.csv`, optional `.xlsx`
+- **Eval (manuell):** `evaluate.py` wie oben, falls ihr nur nachträglich metrisieren wollt
 - **Selektive Vorhersage:** `risk_coverage_entropy.py`-Outputs (CSV, PNG, Summary-JSON)
 - **Thesis:** Kurven, Tabellen, ausgewählte Fehlerfälle und Grounding-Visualisierungen
 
@@ -738,7 +735,7 @@ Ausgabe pro Datensatz:
 
 ### Fehlende Metrik-Bibliotheken
 
-- `evaluate.py` / `save_results.py`: `pip install rouge-score bert-score`.
+- Freie Text-Metriken (falls genutzt): `pip install rouge-score bert-score`.
 - XLSX: `pip install openpyxl`.
 
 ---

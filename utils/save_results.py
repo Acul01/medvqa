@@ -1,9 +1,9 @@
-"""Utilities for saving inference outputs and history logs."""
+"""Utilities for saving inference outputs."""
 
-import csv
+from __future__ import annotations
+
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -11,29 +11,6 @@ import pandas as pd
 from utils.paths import get_results_dir
 
 RESULTS_DIR = Path(get_results_dir())
-HISTORY_FILE = RESULTS_DIR / "results_history.csv"
-
-HISTORY_COLUMNS = [
-    "timestamp",
-    "model",
-    "finetuning",
-    "dataset",
-    "n_samples",
-    "exact_match_accuracy",
-    "mc_overall_accuracy",
-    "mc_closed_accuracy",
-    "mc_open_accuracy",
-    "yesno_accuracy",
-    "open_accuracy",
-    "bleu_1",
-    "bleu_2",
-    "bleu_3",
-    "bleu_4",
-    "rouge1",
-    "rouge2",
-    "rougeL",
-    "bert_f1",
-]
 
 
 def clean_answer(text: str) -> str:
@@ -69,18 +46,9 @@ def save_results(
     model_path: str,
     dataset: str,
     n_samples: int | None,
-    finetuned: bool,
-    exact_acc: float,
-    bleu_scores: dict[str, float],
-    rouge_scores: dict[str, float] | None = None,
-    bert_scores: dict[str, float] | None = None,
-    yesno_acc: float | None = None,
-    open_acc: float | None = None,
     results_dir: str | Path = RESULTS_DIR,
-    mc_overall_acc: float | None = None,
-    mc_closed_acc: float | None = None,
-    mc_open_acc: float | None = None,
-) -> None:
+) -> Path:
+    """Write inference JSON/CSV/XLSX under ``results_dir``; return path to the JSON file."""
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -112,69 +80,4 @@ def save_results(
     except ModuleNotFoundError:
         print("  Skipped XLSX (install openpyxl: pip install openpyxl)")
 
-    _append_history(
-        model=model_name,
-        finetuned=finetuned,
-        dataset=dataset,
-        n_samples=n_tag,
-        exact_acc=exact_acc,
-        bleu_scores=bleu_scores,
-        rouge_scores=rouge_scores,
-        bert_scores=bert_scores,
-        yesno_acc=yesno_acc,
-        open_acc=open_acc,
-        results_dir=results_dir,
-        mc_overall_acc=mc_overall_acc,
-        mc_closed_acc=mc_closed_acc,
-        mc_open_acc=mc_open_acc,
-    )
-
-
-def _append_history(
-    model: str,
-    finetuned: bool,
-    dataset: str,
-    n_samples: str,
-    exact_acc: float,
-    bleu_scores: dict[str, float],
-    rouge_scores: dict[str, float] | None = None,
-    bert_scores: dict[str, float] | None = None,
-    yesno_acc: float | None = None,
-    open_acc: float | None = None,
-    results_dir: Path = RESULTS_DIR,
-    mc_overall_acc: float | None = None,
-    mc_closed_acc: float | None = None,
-    mc_open_acc: float | None = None,
-) -> None:
-    history_path = results_dir / "results_history.csv"
-    write_header = not history_path.exists()
-
-    row = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "model": model,
-        "finetuning": "yes" if finetuned else "no",
-        "dataset": dataset,
-        "n_samples": n_samples,
-        "exact_match_accuracy": f"{exact_acc:.4f}",
-        "mc_overall_accuracy": f"{mc_overall_acc:.4f}" if mc_overall_acc is not None else "",
-        "mc_closed_accuracy": f"{mc_closed_acc:.4f}" if mc_closed_acc is not None else "",
-        "mc_open_accuracy": f"{mc_open_acc:.4f}" if mc_open_acc is not None else "",
-        "yesno_accuracy": f"{yesno_acc:.4f}" if yesno_acc is not None else "",
-        "open_accuracy": f"{open_acc:.4f}" if open_acc is not None else "",
-        "bleu_1": f"{bleu_scores.get('bleu_1', 0):.4f}",
-        "bleu_2": f"{bleu_scores.get('bleu_2', 0):.4f}",
-        "bleu_3": f"{bleu_scores.get('bleu_3', 0):.4f}",
-        "bleu_4": f"{bleu_scores.get('bleu_4', 0):.4f}",
-        "rouge1": f"{rouge_scores.get('rouge1', 0):.4f}" if rouge_scores else "0.0000",
-        "rouge2": f"{rouge_scores.get('rouge2', 0):.4f}" if rouge_scores else "0.0000",
-        "rougeL": f"{rouge_scores.get('rougeL', 0):.4f}" if rouge_scores else "0.0000",
-        "bert_f1": f"{bert_scores.get('bert_f1', 0):.4f}" if bert_scores else "0.0000",
-    }
-
-    with open(history_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_COLUMNS)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
-
-    print(f"  History updated: {history_path}")
+    return json_path

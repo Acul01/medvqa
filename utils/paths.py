@@ -53,10 +53,6 @@ def get_train_output_dir_llava_med() -> str:
     return str(Path(get_outputs_root()) / "llava-med")
 
 
-def get_eval_runs_csv() -> str:
-    return str(Path(get_results_dir()) / "eval_runs.csv")
-
-
 def get_selector_features_dir() -> str:
     return str(Path(get_results_dir()) / "selector_features")
 
