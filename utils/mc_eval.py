@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 from datetime import datetime
@@ -9,6 +10,32 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
+
+EVAL_RUN_MC_COLUMNS = [
+    "input_path",
+    "yesno_accuracy",
+    "yesno_entropy",
+    "yesno_confidence",
+    "yesno_agreement",
+    "open_accuracy",
+    "open_entropy",
+    "open_confidence",
+    "open_agreement",
+    "overall_accuracy",
+    "overall_entropy",
+    "overall_confidence",
+    "overall_agreement",
+]
+
+
+def _append_eval_runs_mc_csv(csv_path: Path, row: Dict[str, str]) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not csv_path.exists()
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=EVAL_RUN_MC_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -168,5 +195,24 @@ def run_mc_evaluation(results_path: Path, metrics_output_path: Path | None = Non
     )
     print(f"Metrics saved: {out}")
     print("=" * 72)
+
+    runs_row = {
+        "input_path": str(results_path.resolve()),
+        "yesno_accuracy": f"{closed_acc:.4f}",
+        "yesno_entropy": "" if math.isnan(closed_entropy) else f"{closed_entropy:.6f}",
+        "yesno_confidence": "" if math.isnan(closed_confidence) else f"{closed_confidence:.6f}",
+        "yesno_agreement": "" if math.isnan(closed_agreement) else f"{closed_agreement:.6f}",
+        "open_accuracy": f"{open_acc:.4f}",
+        "open_entropy": "" if math.isnan(open_entropy) else f"{open_entropy:.6f}",
+        "open_confidence": "" if math.isnan(open_confidence) else f"{open_confidence:.6f}",
+        "open_agreement": "" if math.isnan(open_agreement) else f"{open_agreement:.6f}",
+        "overall_accuracy": f"{overall_acc:.4f}",
+        "overall_entropy": "" if math.isnan(overall_entropy) else f"{overall_entropy:.6f}",
+        "overall_confidence": "" if math.isnan(overall_confidence) else f"{overall_confidence:.6f}",
+        "overall_agreement": "" if math.isnan(overall_agreement) else f"{overall_agreement:.6f}",
+    }
+    runs_csv = results_path.parent / "eval_runs_mc.csv"
+    _append_eval_runs_mc_csv(runs_csv, runs_row)
+    print(f"Appended run to {runs_csv}")
 
     return metrics

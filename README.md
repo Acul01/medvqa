@@ -127,7 +127,8 @@ flowchart LR
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
 | `utils/save_results.py` | JSON/CSV/XLSX unter `--results_dir` (Default `06_results/` / `MEDVQA_RESULTS_DIR`) |
-| `utils/mc_eval.py` | MC-Metriken aus Inferenz-JSON → `{stem}_eval.json` || `utils/prompt_formatter.py`, `utils/dataset.py` | Hilfsfunktionen |
+| `utils/mc_eval.py` | MC-Metriken aus Inferenz-JSON → `{stem}_eval.json`; Zeile in `eval_runs_mc.csv` (Ordner des JSON) |
+| `utils/prompt_formatter.py`, `utils/dataset.py` | Hilfsfunktionen |
 | `02_data/` | Rohdaten + MC-Exporte (Standard `02_data/data_mc_openai/`) |
 | `06_outputs/` | Checkpoints / Trainings-Artefakte (Default `--output_dir`) |
 | `07_results/` | Inferenz- und Eval-Ergebnisse (Default `--results_dir`) |
@@ -169,6 +170,15 @@ nltk.download("punkt")
 ```bash
 cd LLaVA-Med && pip install -e .
 ```
+
+Für **`train_med.py`** mit **`model.to(torch.bfloat16)`** (siehe Skript): Vision-Tower liefert Bild-Features oft in Float32. Patchen Sie Microsofts `llava/model/llava_arch.py` in **`encode_images`** (Cast auf `mm_projector`-dtype), z. B.:
+
+```bash
+# Von medvqa/medvqa aus, LLaVA-Med unter 01_external/LLaVA-Med:
+patch -d 01_external/LLaVA-Med -p1 < patches/llava_med_encode_images_projector_dtype.patch
+```
+
+(Patch liegt im Repo unter [`patches/llava_med_encode_images_projector_dtype.patch`](patches/llava_med_encode_images_projector_dtype.patch).)
 
 ---
 
@@ -395,6 +405,7 @@ python 04_evaluation/inference.py \
 - **`{modell_kurz}_{dataset}_{n_tag}.json`** – Liste von Dicts pro Sample
 - Dieselbe Basis für `.csv` und optional `.xlsx`
 - **`{modell_kurz}_{dataset}_{n_tag}_eval.json`** – MC-Kennzahlen (Accuracy, Entropie, Agreement, Confidence nach closed/open/overall), **automatisch** am Ende von `inference.py` und `inference_med.py` nach dem Speichern des Haupt-JSONs
+- **`eval_runs_mc.csv`** – gleicher Ordner wie die Ergebnis-JSONs: eine Zeile pro Eval-Lauf (wie früher `evaluate.py` → `eval_runs.csv`, Spalten `yesno_*` / `open_*` / `overall_*`)
 
 `n_tag` ist `all`, wenn `--n_samples` nicht gesetzt ist.
 
@@ -610,7 +621,7 @@ Terminologie (für die Arbeit konsistent halten):
 ## Ergebnisse & Artefakte
 
 - **Checkpoints:** `--output_dir` aus `03_training/train.py` / `03_training/train_med.py` (Standard unter `06_outputs/`)
-- **Inferenz:** unter `--results_dir` (Default `06_results/`): `*.json`, `*_eval.json`, `.csv`, optional `.xlsx`
+- **Inferenz:** unter `--results_dir` (Default `06_results/`): `*.json`, `*_eval.json`, `eval_runs_mc.csv`, `.csv`, optional `.xlsx`
 - **Eval (manuell):** `evaluate.py` wie oben, falls ihr nur nachträglich metrisieren wollt
 - **Selektive Vorhersage:** `risk_coverage_entropy.py`-Outputs (CSV, PNG, Summary-JSON)
 - **Thesis:** Kurven, Tabellen, ausgewählte Fehlerfälle und Grounding-Visualisierungen
