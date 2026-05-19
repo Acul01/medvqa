@@ -10,7 +10,7 @@ from collections import Counter
 import torch
 import wandb
 from tqdm import tqdm
-from transformers import AutoConfig, AutoProcessor, GenerationConfig, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, GenerationConfig, Qwen2VLForConditionalGeneration
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
@@ -19,8 +19,8 @@ from utils.medvlm_r1 import (
     build_medvlm_conversation,
     build_medvlm_prompt,
     configure_processor_pixels,
-    ensure_medvlm_config_patched,
     extract_answer_letter,
+    load_qwen2vl_config,
     model_short_name,
     prepare_medvlm_inputs,
 )
@@ -145,9 +145,7 @@ def _load_model_and_processor(model_path: str, attn_implementation: str):
                 continue
 
         try:
-            ensure_medvlm_config_patched(model_path, attn_implementation=attn)
-            config = AutoConfig.from_pretrained(model_path)
-            config.attn_implementation = attn
+            config = load_qwen2vl_config(model_path, attn_implementation=attn)
             model = Qwen2VLForConditionalGeneration.from_pretrained(
                 model_path,
                 config=config,

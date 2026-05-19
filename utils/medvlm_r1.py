@@ -42,6 +42,32 @@ def model_short_name(model_path: str) -> str:
     return Path(model_path).name
 
 
+def load_qwen2vl_config(model_path: str, attn_implementation: str = "eager"):
+    """Build Qwen2VLConfig with proper nested sub-config objects (not plain dicts)."""
+    from transformers.models.qwen2_vl.configuration_qwen2_vl import (
+        Qwen2VLConfig,
+        Qwen2VLTextConfig,
+        Qwen2VLVisionConfig,
+    )
+
+    config_path = ensure_medvlm_config_patched(model_path, attn_implementation=attn_implementation)
+    with open(config_path, encoding="utf-8") as f:
+        config_dict = json.load(f)
+
+    text_cfg_dict = config_dict.pop("text_config", None) or {}
+    vision_cfg_dict = config_dict.pop("vision_config", None)
+    if text_cfg_dict.get("use_cache") is None:
+        text_cfg_dict["use_cache"] = True
+
+    config_dict["attn_implementation"] = attn_implementation
+
+    config_kwargs = dict(config_dict)
+    config_kwargs["text_config"] = Qwen2VLTextConfig(**text_cfg_dict)
+    if vision_cfg_dict is not None:
+        config_kwargs["vision_config"] = Qwen2VLVisionConfig(**vision_cfg_dict)
+    return Qwen2VLConfig(**config_kwargs)
+
+
 def ensure_medvlm_config_patched(model_path: str, attn_implementation: str = "eager") -> Path:
     """Patch cached config.json for reliable ``from_pretrained`` on MedVLM-R1.
 
