@@ -10,7 +10,7 @@ from collections import Counter
 import torch
 import wandb
 from tqdm import tqdm
-from transformers import AutoProcessor, GenerationConfig, Qwen2VLForConditionalGeneration
+from transformers import AutoConfig, AutoProcessor, GenerationConfig, Qwen2VLForConditionalGeneration
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
@@ -128,12 +128,6 @@ def _build_generation_configs(
 
 
 def _load_model_and_processor(model_path: str, attn_implementation: str):
-    ensure_medvlm_config_patched(model_path)
-    load_kwargs: dict = {
-        "torch_dtype": torch.bfloat16,
-        "device_map": "auto",
-    }
-
     candidates = [attn_implementation]
     for fallback in ATTN_FALLBACK_ORDER:
         if fallback not in candidates:
@@ -141,10 +135,27 @@ def _load_model_and_processor(model_path: str, attn_implementation: str):
 
     last_exc: Exception | None = None
     model = None
+    chosen_attn: str | None = None
     for attn in candidates:
+        if attn == "flash_attention_2":
+            try:
+                import flash_attn  # noqa: F401
+            except ImportError:
+                print("Skipping flash_attention_2: package flash_attn is not installed.")
+                continue
+
         try:
-            kwargs = {**load_kwargs, "attn_implementation": attn}
-            model = Qwen2VLForConditionalGeneration.from_pretrained(model_path, **kwargs)
+            ensure_medvlm_config_patched(model_path, attn_implementation=attn)
+            config = AutoConfig.from_pretrained(model_path)
+            config.attn_implementation = attn
+            model = Qwen2VLForConditionalGeneration.from_pretrained(
+                model_path,
+                config=config,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+                attn_implementation=attn,
+            )
+            chosen_attn = attn
             if attn != attn_implementation:
                 print(f"Loaded model with attn_implementation={attn!r} (requested {attn_implementation!r}).")
             break
@@ -152,7 +163,7 @@ def _load_model_and_processor(model_path: str, attn_implementation: str):
             last_exc = exc
             print(f"Warning: load failed with attn_implementation={attn!r}: {exc}")
 
-    if model is None:
+    if model is None or chosen_attn is None:
         raise RuntimeError(f"Could not load MedVLM-R1 with any attention backend: {last_exc}") from last_exc
 
     processor = AutoProcessor.from_pretrained(model_path)

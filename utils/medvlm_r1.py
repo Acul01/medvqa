@@ -42,11 +42,13 @@ def model_short_name(model_path: str) -> str:
     return Path(model_path).name
 
 
-def ensure_medvlm_config_patched(model_path: str) -> Path:
-    """Patch cached config.json so ``from_pretrained`` avoids use_cache=null errors.
+def ensure_medvlm_config_patched(model_path: str, attn_implementation: str = "eager") -> Path:
+    """Patch cached config.json for reliable ``from_pretrained`` on MedVLM-R1.
 
-    Writes back to the HF cache file instead of building Qwen2VLConfig via
-    ``from_dict`` (nested ``text_config`` would stay a plain dict in transformers 4.51).
+    - ``text_config.use_cache``: null -> true (strict HF config validation)
+    - ``attn_implementation``: avoid flash_attention_2 when flash_attn is not installed
+
+    Patches the HF cache file instead of ``Qwen2VLConfig.from_dict`` (nested dict bug in 4.51).
     """
     config_path = Path(hf_hub_download(repo_id=model_path, filename="config.json"))
     with open(config_path, encoding="utf-8") as f:
@@ -55,6 +57,12 @@ def ensure_medvlm_config_patched(model_path: str) -> Path:
     changed = False
     if text_cfg.get("use_cache") is None:
         text_cfg["use_cache"] = True
+        changed = True
+    if config_dict.get("attn_implementation") == "flash_attention_2":
+        config_dict["attn_implementation"] = attn_implementation
+        changed = True
+    if config_dict.pop("_attn_implementation", None) == "flash_attention_2":
+        config_dict["attn_implementation"] = attn_implementation
         changed = True
     if changed:
         with open(config_path, "w", encoding="utf-8") as f:
