@@ -48,8 +48,10 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Einheitlicher Datenloader (`MedicalVQALoader`, `VQASample`) | **Implementiert** (`utils/load_data.py`) |
 | Training Standard-LLaVA (HF `LlavaForConditionalGeneration` + `Trainer`) | **Implementiert** (`03_training/train.py`) |
 | Training LLaVA-Med (Microsoft-`llava` + `Trainer`) | **Implementiert** (`03_training/train_med.py`, benötigt installiertes LLaVA-Med) |
+| Training Qwen2.5-VL-7B (HF `Qwen2_5_VLForConditionalGeneration` + `Trainer`) | **Implementiert** (`03_training/train_qwen.py`) |
 | Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`04_evaluation/inference.py`) |
 | Inferenz LLaVA-Med | **Implementiert** (`04_evaluation/inference_med.py`) |
+| Inferenz Qwen2.5-VL + Unsicherheitsmetriken | **Implementiert** (`04_evaluation/inference_qwen.py`) |
 | Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`04_evaluation/evaluate.py`) |
 | Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`04_evaluation/risk_coverage_entropy.py`) |
 | Selector / MLP-Workflow (LLaVA-Med-Features) | **Implementiert** (`04_evaluation/selector_multimodal.py`) |
@@ -116,8 +118,11 @@ flowchart LR
 |------|--------|
 | `03_training/train.py` | Fine-Tuning **HuggingFace LLaVA 1.5** |
 | `03_training/train_med.py` | Fine-Tuning **LLaVA-Med** (Microsoft-Codebasis) |
+| `03_training/train_qwen.py` | Fine-Tuning **Qwen2.5-VL-7B** (HF) |
 | `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
 | `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
+| `04_evaluation/inference_qwen.py` | Inferenz + Entropie (**Qwen2.5-VL**) |
+| `utils/qwen_vl.py` | Qwen-Input-Prep, Label-Masking, gemeinsame Hilfen |
 | `04_evaluation/evaluate.py` | Aggregierte Metriken aus JSON |
 | `04_evaluation/risk_coverage_entropy.py` | Entropie-Schwellen, Risk–Coverage, **AURC** |
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
@@ -156,6 +161,16 @@ pip install openpyxl
 
 # Optional: Datensatz-Download (download_datasets.py)
 pip install datasets huggingface_hub
+
+# Qwen2.5-VL (train_qwen.py, inference_qwen.py)
+pip install "transformers>=4.49" qwen-vl-utils accelerate
+```
+
+Bei `KeyError: 'qwen2_5_vl'` ggf. Transformers aus Source installieren:
+
+```bash
+pip install git+https://github.com/huggingface/transformers accelerate
+pip install qwen-vl-utils
 ```
 
 **NLTK** (z. B. für BLEU in freier Text-Evaluation, falls genutzt):
@@ -258,7 +273,41 @@ python 03_training/train.py \
 
 Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei SLAKE Validation z. B. `--val_split validate`), `--num_train_epochs`, `--per_device_train_batch_size`, `--learning_rate`, `--max_length`, `--fp16` / `--bf16`, `--gradient_checkpointing`, LoRA-Flags (`--use_lora`, …), `--wandb_project`.
 
-**Hinweis:** `03_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `03_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`).
+**Hinweis:** `03_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `03_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`). **Qwen2.5-VL** läuft über `03_training/train_qwen.py` (Default `Qwen/Qwen2.5-VL-7B-Instruct`).
+
+### Qwen2.5-VL trainieren (MC-Baseline)
+
+Gleiches MC-Format und Loss-Masking wie LLaVA-HF; Bildverarbeitung über `qwen-vl-utils` (`utils/qwen_vl.py`).
+
+**SLAKE** (Validation-Split heißt `validate`):
+
+```bash
+python 03_training/train_qwen.py \
+  --dataset slake \
+  --val_split validate \
+  --output_dir ./05_outputs/qwen_slake \
+  --bf16 --gradient_checkpointing
+```
+
+**VQA-Rad** (kein `validation`-Split im Loader; Early-Stopping optional mit `--val_split test`):
+
+```bash
+python 03_training/train_qwen.py \
+  --dataset vqarad \
+  --output_dir ./05_outputs/qwen_vqarad \
+  --bf16 --gradient_checkpointing
+```
+
+**Med-VQA-2019**:
+
+```bash
+python 03_training/train_qwen.py \
+  --dataset medvqa2019 \
+  --output_dir ./05_outputs/qwen_medvqa2019 \
+  --bf16 --gradient_checkpointing
+```
+
+LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
 
 ### Stufen-Strategie (Thesis / Blueprint)
 
@@ -421,6 +470,21 @@ python 04_evaluation/inference.py \
 Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veraltet**; das tatsächliche Format folgt dem Chat-Template des Processors und den Feldern oben.
 
 **LLaVA-Med:** `inference_med.py` (andere Konversationsschablone, siehe Dateikopf).
+
+**Qwen2.5-VL:** `inference_qwen.py` — MC-Inferenz mit Entropie, Agreement, Confidence und Ablationen (`black`/`shuffle`); **ohne** 2-Stage-Reasoning und GradCAM.
+
+Beispiel (fine-getunt, SLAKE Test):
+
+```bash
+python 04_evaluation/inference_qwen.py \
+  --dataset slake \
+  --split test \
+  --model_path ./05_outputs/qwen_slake \
+  --finetuned \
+  --results_dir 06_results
+```
+
+Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` weglassen oder explizit setzen (ohne `--finetuned`).
 
 ### MedSAM-ROI-Varianten (Overlay/Crop) für direkten Vergleich
 
@@ -800,5 +864,6 @@ Vergleich mit **Basis-Modell** (ohne Fine-Tuning): `--model_path` weglassen oder
 |--------|---------------------|
 | LLaVA 1.5 (7B, HF) | `llava-hf/llava-1.5-7b-hf` |
 | LLaVA-Med | `microsoft/llava-med-v1.5-mistral-7b` |
+| Qwen2.5-VL (7B, HF) | `Qwen/Qwen2.5-VL-7B-Instruct` |
 
-Fine-getunte Gewichte liegen unter dem gewählten `--output_dir` und können in `inference.py` / `train.py` via `--model_path` weiterverwendet werden.
+Fine-getunte Gewichte liegen unter dem gewählten `--output_dir` und können in `inference.py` / `train.py`, `inference_med.py` / `train_med.py` bzw. `inference_qwen.py` / `train_qwen.py` via `--model_path` weiterverwendet werden.

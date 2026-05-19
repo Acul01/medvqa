@@ -53,6 +53,11 @@ def get_train_output_dir_llava_med() -> str:
     return str(Path(get_outputs_root()) / "llava-med")
 
 
+def get_train_output_dir_qwen() -> str:
+    """Default Qwen2.5-VL checkpoint directory under outputs root."""
+    return str(Path(get_outputs_root()) / "qwen")
+
+
 def get_selector_features_dir() -> str:
     return str(Path(get_results_dir()) / "selector_features")
 
