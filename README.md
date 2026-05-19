@@ -52,6 +52,7 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`04_evaluation/inference.py`) |
 | Inferenz LLaVA-Med | **Implementiert** (`04_evaluation/inference_med.py`) |
 | Inferenz Qwen2.5-VL + Unsicherheitsmetriken | **Implementiert** (`04_evaluation/inference_qwen.py`) |
+| Inferenz MedVLM-R1 (off-the-shelf, Accuracy + Agreement) | **Implementiert** (`04_evaluation/inference_medvlm_r1.py`) |
 | Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`04_evaluation/evaluate.py`) |
 | Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`04_evaluation/risk_coverage_entropy.py`) |
 | Selector / MLP-Workflow (LLaVA-Med-Features) | **Implementiert** (`04_evaluation/selector_multimodal.py`) |
@@ -122,7 +123,9 @@ flowchart LR
 | `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
 | `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
 | `04_evaluation/inference_qwen.py` | Inferenz + Entropie (**Qwen2.5-VL**) |
+| `04_evaluation/inference_medvlm_r1.py` | Inferenz (**MedVLM-R1**, pretrained) |
 | `utils/qwen_vl.py` | Qwen-Input-Prep, Label-Masking, gemeinsame Hilfen |
+| `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
 | `04_evaluation/evaluate.py` | Aggregierte Metriken aus JSON |
 | `04_evaluation/risk_coverage_entropy.py` | Entropie-Schwellen, Risk–Coverage, **AURC** |
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
@@ -485,6 +488,37 @@ python 04_evaluation/inference_qwen.py \
 ```
 
 Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` weglassen oder explizit setzen (ohne `--finetuned`).
+
+### MedVLM-R1 (off-the-shelf)
+
+**MedVLM-R1** ([`JZPeterPan/MedVLM-R1`](https://huggingface.co/JZPeterPan/MedVLM-R1)) ist ein **Qwen2-VL-2B**-Modell mit GRPO-Reasoning (strukturierte Ausgabe mit Reasoning- und `<answer>`-Tags). Es läuft über `inference_medvlm_r1.py` mit dem **gleichen** `MedicalVQALoader` und MC-Test-Splits wie Qwen/LLaVA.
+
+- **Env:** `medvqa_hf` (nicht `llava_med_env`); `transformers>=4.49`, `qwen-vl-utils`, `accelerate`
+- **Metriken:** MC-Accuracy und **Agreement** (5× Sampling); `entropy` / `confidence` sind `NaN` (nicht mit Qwen-Token-Entropie vergleichbar)
+- **Hinweis:** Checkpoint ist **pretrained** (Huatuo/MRI-RL), nicht auf euren Train-Splits fine-getunt
+
+Smoke-Test (20 Samples):
+
+```bash
+conda activate medvqa_hf
+python 04_evaluation/inference_medvlm_r1.py \
+  --dataset slake --split test \
+  --model_path JZPeterPan/MedVLM-R1 \
+  --max_new_tokens 1024 \
+  --agreement_samples 5 \
+  --n_samples 20 \
+  --disable_wandb
+```
+
+Voller Test-Lauf für alle drei Datensätze:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 ./scripts/run_medvlm_r1_eval.sh full
+```
+
+(Alternativ: `./scripts/run_medvlm_r1_eval.sh smoke` für je 20 Samples.)
+
+Ergebnisse: `06_results/medvlm-r1_{dataset}_all.json` (+ `{stem}_eval.json`). Optional Flash-Attn: `--attn_implementation flash_attention_2` (Fallback: `sdpa`).
 
 ### MedSAM-ROI-Varianten (Overlay/Crop) für direkten Vergleich
 
@@ -865,5 +899,6 @@ Vergleich mit **Basis-Modell** (ohne Fine-Tuning): `--model_path` weglassen oder
 | LLaVA 1.5 (7B, HF) | `llava-hf/llava-1.5-7b-hf` |
 | LLaVA-Med | `microsoft/llava-med-v1.5-mistral-7b` |
 | Qwen2.5-VL (7B, HF) | `Qwen/Qwen2.5-VL-7B-Instruct` |
+| MedVLM-R1 (2B, HF, pretrained) | `JZPeterPan/MedVLM-R1` |
 
-Fine-getunte Gewichte liegen unter dem gewählten `--output_dir` und können in `inference.py` / `train.py`, `inference_med.py` / `train_med.py` bzw. `inference_qwen.py` / `train_qwen.py` via `--model_path` weiterverwendet werden.
+Fine-getunte Gewichte liegen unter dem gewählten `--output_dir` und können in `inference.py` / `train.py`, `inference_med.py` / `train_med.py` bzw. `inference_qwen.py` / `train_qwen.py` via `--model_path` weiterverwendet werden. MedVLM-R1 wird in v1 nur **off-the-shelf** inferiert (`inference_medvlm_r1.py`).

@@ -38,6 +38,8 @@ def _derive_model_short_name(model_path: str) -> str:
         return "llava-med"
     if "llava" in name_lower:
         return "llava"
+    if "medvlm" in name_lower:
+        return "medvlm-r1"
     if "qwen" in name_lower:
         return "qwen2.5-vl"
     return name.replace("/", "_").replace(" ", "_")
