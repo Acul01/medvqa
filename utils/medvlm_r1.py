@@ -43,10 +43,9 @@ def model_short_name(model_path: str) -> str:
 
 
 def load_qwen2vl_config(model_path: str, attn_implementation: str = "eager"):
-    """Build Qwen2VLConfig with proper nested sub-config objects (not plain dicts)."""
+    """Build Qwen2VLConfig for transformers 4.51.x (flat LM fields, no Qwen2VLTextConfig)."""
     from transformers.models.qwen2_vl.configuration_qwen2_vl import (
         Qwen2VLConfig,
-        Qwen2VLTextConfig,
         Qwen2VLVisionConfig,
     )
 
@@ -54,18 +53,25 @@ def load_qwen2vl_config(model_path: str, attn_implementation: str = "eager"):
     with open(config_path, encoding="utf-8") as f:
         config_dict = json.load(f)
 
+    # Newer checkpoints nest LM settings under text_config; 4.51 Qwen2VLConfig is flat.
     text_cfg_dict = config_dict.pop("text_config", None) or {}
-    vision_cfg_dict = config_dict.pop("vision_config", None)
     if text_cfg_dict.get("use_cache") is None:
         text_cfg_dict["use_cache"] = True
 
-    config_dict["attn_implementation"] = attn_implementation
+    vision_cfg_dict = config_dict.pop("vision_config", None)
+    merged = {**config_dict, **text_cfg_dict}
+    merged["attn_implementation"] = attn_implementation
+    if merged.get("use_cache") is None:
+        merged["use_cache"] = True
 
-    config_kwargs = dict(config_dict)
-    config_kwargs["text_config"] = Qwen2VLTextConfig(**text_cfg_dict)
     if vision_cfg_dict is not None:
-        config_kwargs["vision_config"] = Qwen2VLVisionConfig(**vision_cfg_dict)
-    return Qwen2VLConfig(**config_kwargs)
+        merged["vision_config"] = Qwen2VLVisionConfig(**vision_cfg_dict)
+
+    config = Qwen2VLConfig(**merged)
+    # Ensure no leftover dict sub-config breaks GenerationConfig.from_model_config.
+    if isinstance(getattr(config, "text_config", None), dict):
+        delattr(config, "text_config")
+    return config
 
 
 def ensure_medvlm_config_patched(model_path: str, attn_implementation: str = "eager") -> Path:
@@ -79,10 +85,16 @@ def ensure_medvlm_config_patched(model_path: str, attn_implementation: str = "ea
     config_path = Path(hf_hub_download(repo_id=model_path, filename="config.json"))
     with open(config_path, encoding="utf-8") as f:
         config_dict = json.load(f)
-    text_cfg = config_dict.setdefault("text_config", {})
     changed = False
-    if text_cfg.get("use_cache") is None:
-        text_cfg["use_cache"] = True
+    text_cfg = config_dict.pop("text_config", None)
+    if text_cfg:
+        if text_cfg.get("use_cache") is None:
+            text_cfg["use_cache"] = True
+            changed = True
+        config_dict = {**config_dict, **text_cfg}
+        changed = True
+    elif config_dict.get("use_cache") is None:
+        config_dict["use_cache"] = True
         changed = True
     if config_dict.get("attn_implementation") == "flash_attention_2":
         config_dict["attn_implementation"] = attn_implementation
