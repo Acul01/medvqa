@@ -494,20 +494,29 @@ Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` wegl
 **MedVLM-R1** ([`JZPeterPan/MedVLM-R1`](https://huggingface.co/JZPeterPan/MedVLM-R1)) ist ein **Qwen2-VL-2B**-Modell mit GRPO-Reasoning (strukturierte Ausgabe mit Reasoning- und `<answer>`-Tags). Es läuft über `inference_medvlm_r1.py` mit dem **gleichen** `MedicalVQALoader` und MC-Test-Splits wie Qwen/LLaVA.
 
 - **Env:** eigenes Conda-Env `medvlm_r1` empfohlen (nicht `llava_med_env` / nicht `medvqa_hf` für Qwen2.5); z. B. `transformers==4.51.3`, `qwen-vl-utils`, `accelerate`, optional `flash-attn`
-- **Metriken:** MC-Accuracy und **Agreement** (5× Sampling); `entropy` / `confidence` sind `NaN` (nicht mit Qwen-Token-Entropie vergleichbar)
+- **Metriken:** MC-Accuracy (greedy); optional **Agreement** mit `--do_sample --agreement_samples N`; `entropy` / `confidence` sind `NaN`
+- **Default:** nur **greedy** (kein extra Sampling) — deutlich schneller
 - **Hinweis:** Checkpoint ist **pretrained** (Huatuo/MRI-RL), nicht auf euren Train-Splits fine-getunt
 
-Smoke-Test (20 Samples):
+Smoke-Test (20 Samples, greedy + Flash Attention):
 
 ```bash
 conda activate medvlm_r1
 python 04_evaluation/inference_medvlm_r1.py \
   --dataset slake --split test \
   --model_path JZPeterPan/MedVLM-R1 \
-  --max_new_tokens 1024 \
-  --agreement_samples 5 \
+  --attn_implementation flash_attention_2 \
   --n_samples 20 \
   --disable_wandb
+```
+
+Optional Agreement (5× stochastische Läufe zusätzlich):
+
+```bash
+python 04_evaluation/inference_medvlm_r1.py \
+  --dataset slake --split test \
+  --do_sample --agreement_samples 5 \
+  --attn_implementation flash_attention_2
 ```
 
 Voller Test-Lauf für alle drei Datensätze:
@@ -518,7 +527,7 @@ CUDA_VISIBLE_DEVICES=0 ./scripts/run_medvlm_r1_eval.sh full
 
 (Alternativ: `./scripts/run_medvlm_r1_eval.sh smoke` für je 20 Samples.)
 
-Ergebnisse: `06_results/medvlm-r1_{dataset}_all.json` (+ `{stem}_eval.json`). Attention: Default `flash_attention_2` mit Auto-Fallback auf `eager`/`sdpa`. Bei Masken-Längen-Fehlern: `--no_kv_cache` oder `--attn_implementation eager`.
+Ergebnisse: `06_results/medvlm-r1_{dataset}_all.json` (+ `{stem}_eval.json`). Bei Masken-Längen-Fehlern: `--no_kv_cache` oder `--attn_implementation eager`.
 
 ### MedSAM-ROI-Varianten (Overlay/Crop) für direkten Vergleich
 

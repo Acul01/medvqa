@@ -49,10 +49,15 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument(
+        "--do_sample",
+        action="store_true",
+        help="Run extra stochastic generations for agreement (default: greedy only)",
+    )
+    parser.add_argument(
         "--agreement_samples",
         type=int,
         default=5,
-        help="Number of stochastic generations used to compute agreement",
+        help="Stochastic generations for agreement when --do_sample is set",
     )
     parser.add_argument(
         "--attn_implementation",
@@ -194,13 +199,13 @@ def main():
         top_p=args.top_p,
     )
     use_cache = not args.no_kv_cache
+    run_agreement_sampling = bool(args.do_sample)
+    agreement_runs = max(1, int(args.agreement_samples)) if run_agreement_sampling else 0
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
     if args.n_samples is not None:
         samples = samples[: args.n_samples]
-
-    agreement_samples = max(1, int(args.agreement_samples))
 
     results = []
     with torch.no_grad():
@@ -224,18 +229,23 @@ def main():
             ground_truth_letter = sample.answer
 
             sampled_predicted_letters: list[str | None] = []
-            for _ in range(agreement_samples):
-                sample_ids = model.generate(
-                    **inputs,
-                    generation_config=sample_cfg,
-                    use_cache=use_cache,
-                )
-                sample_text = _decode_new_tokens(processor, inputs, sample_ids)
-                sampled_predicted_letters.append(
-                    extract_answer_letter(sample_text, num_options=num_options)
-                )
+            if run_agreement_sampling:
+                for _ in range(agreement_runs):
+                    sample_ids = model.generate(
+                        **inputs,
+                        generation_config=sample_cfg,
+                        use_cache=use_cache,
+                    )
+                    sample_text = _decode_new_tokens(processor, inputs, sample_ids)
+                    sampled_predicted_letters.append(
+                        extract_answer_letter(sample_text, num_options=num_options)
+                    )
 
-            agreement = _compute_agreement(sampled_predicted_letters)
+            agreement = (
+                _compute_agreement(sampled_predicted_letters)
+                if sampled_predicted_letters
+                else float("nan")
+            )
             is_correct = predicted_letter == ground_truth_letter
             qtype = sample.question_type or "unknown"
 
