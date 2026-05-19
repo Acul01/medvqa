@@ -9,7 +9,6 @@ from typing import Any, Iterable, List, Optional
 
 from huggingface_hub import hf_hub_download
 from qwen_vl_utils import process_vision_info
-from transformers import Qwen2VLConfig
 
 from utils.mc_vqa import LETTER_POOL, parse_predicted_letter
 
@@ -43,15 +42,24 @@ def model_short_name(model_path: str) -> str:
     return Path(model_path).name
 
 
-def load_qwen2vl_config(model_path: str) -> Qwen2VLConfig:
-    """Load config and fix null use_cache (strict HF hub validation)."""
-    config_path = hf_hub_download(repo_id=model_path, filename="config.json")
+def ensure_medvlm_config_patched(model_path: str) -> Path:
+    """Patch cached config.json so ``from_pretrained`` avoids use_cache=null errors.
+
+    Writes back to the HF cache file instead of building Qwen2VLConfig via
+    ``from_dict`` (nested ``text_config`` would stay a plain dict in transformers 4.51).
+    """
+    config_path = Path(hf_hub_download(repo_id=model_path, filename="config.json"))
     with open(config_path, encoding="utf-8") as f:
         config_dict = json.load(f)
     text_cfg = config_dict.setdefault("text_config", {})
+    changed = False
     if text_cfg.get("use_cache") is None:
         text_cfg["use_cache"] = True
-    return Qwen2VLConfig.from_dict(config_dict)
+        changed = True
+    if changed:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, indent=2)
+    return config_path
 
 
 def configure_processor_pixels(processor) -> None:

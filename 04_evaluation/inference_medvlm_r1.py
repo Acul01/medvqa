@@ -19,8 +19,8 @@ from utils.medvlm_r1 import (
     build_medvlm_conversation,
     build_medvlm_prompt,
     configure_processor_pixels,
+    ensure_medvlm_config_patched,
     extract_answer_letter,
-    load_qwen2vl_config,
     model_short_name,
     prepare_medvlm_inputs,
 )
@@ -28,7 +28,7 @@ from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import save_results
 
 DEFAULT_MAX_NEW_TOKENS = 1024
-ATTN_FALLBACK_ORDER = ("flash_attention_2", "eager", "sdpa")
+ATTN_FALLBACK_ORDER = ("eager", "sdpa", "flash_attention_2")
 
 
 def parse_args():
@@ -57,8 +57,8 @@ def parse_args():
     parser.add_argument(
         "--attn_implementation",
         type=str,
-        default="flash_attention_2",
-        help='Attention backend: "flash_attention_2", "eager", or "sdpa" (auto-fallback on failure)',
+        default="eager",
+        help='Attention backend: "eager", "sdpa", or "flash_attention_2" (auto-fallback on failure)',
     )
     parser.add_argument(
         "--no_kv_cache",
@@ -128,9 +128,8 @@ def _build_generation_configs(
 
 
 def _load_model_and_processor(model_path: str, attn_implementation: str):
-    config = load_qwen2vl_config(model_path)
+    ensure_medvlm_config_patched(model_path)
     load_kwargs: dict = {
-        "config": config,
         "torch_dtype": torch.bfloat16,
         "device_map": "auto",
     }
