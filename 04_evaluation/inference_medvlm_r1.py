@@ -9,9 +9,8 @@ from collections import Counter
 
 import torch
 import wandb
-from PIL import Image
 from tqdm import tqdm
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, GenerationConfig, Qwen2VLForConditionalGeneration
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
@@ -19,7 +18,9 @@ from utils.medvlm_r1 import (
     DEFAULT_MODEL_PATH,
     build_medvlm_conversation,
     build_medvlm_prompt,
+    configure_processor_pixels,
     extract_answer_letter,
+    load_qwen2vl_config,
     model_short_name,
     prepare_medvlm_inputs,
 )
@@ -27,6 +28,7 @@ from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import save_results
 
 DEFAULT_MAX_NEW_TOKENS = 1024
+ATTN_FALLBACK_ORDER = ("flash_attention_2", "eager", "sdpa")
 
 
 def parse_args():
@@ -55,8 +57,13 @@ def parse_args():
     parser.add_argument(
         "--attn_implementation",
         type=str,
-        default="sdpa",
-        help='Attention backend: "sdpa", "flash_attention_2", or "eager"',
+        default="flash_attention_2",
+        help='Attention backend: "flash_attention_2", "eager", or "sdpa" (auto-fallback on failure)',
+    )
+    parser.add_argument(
+        "--no_kv_cache",
+        action="store_true",
+        help="Disable KV cache during generation (slower; workaround for mask length bugs)",
     )
     parser.add_argument("--results_dir", type=str, default=get_results_dir())
     parser.add_argument("--n_samples", type=int, default=None)
@@ -92,25 +99,65 @@ def _decode_new_tokens(processor, inputs, generated_ids) -> str:
     return processor.decode(new_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False).strip()
 
 
+def _resolve_pad_token_id(processor) -> int:
+    pad_id = getattr(processor.tokenizer, "pad_token_id", None)
+    return int(pad_id) if pad_id is not None else 151643
+
+
+def _build_generation_configs(
+    processor,
+    *,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> tuple[GenerationConfig, GenerationConfig]:
+    pad_token_id = _resolve_pad_token_id(processor)
+    greedy_cfg = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        pad_token_id=pad_token_id,
+    )
+    sample_cfg = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=temperature,
+        top_p=top_p,
+        pad_token_id=pad_token_id,
+    )
+    return greedy_cfg, sample_cfg
+
+
 def _load_model_and_processor(model_path: str, attn_implementation: str):
+    config = load_qwen2vl_config(model_path)
     load_kwargs: dict = {
+        "config": config,
         "torch_dtype": torch.bfloat16,
         "device_map": "auto",
     }
-    if attn_implementation:
-        load_kwargs["attn_implementation"] = attn_implementation
 
-    try:
-        model = Qwen2VLForConditionalGeneration.from_pretrained(model_path, **load_kwargs)
-    except Exception as exc:
-        if attn_implementation != "sdpa":
-            print(f"Warning: failed with attn_implementation={attn_implementation!r} ({exc}); retrying sdpa.")
-            load_kwargs["attn_implementation"] = "sdpa"
-            model = Qwen2VLForConditionalGeneration.from_pretrained(model_path, **load_kwargs)
-        else:
-            raise
+    candidates = [attn_implementation]
+    for fallback in ATTN_FALLBACK_ORDER:
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    last_exc: Exception | None = None
+    model = None
+    for attn in candidates:
+        try:
+            kwargs = {**load_kwargs, "attn_implementation": attn}
+            model = Qwen2VLForConditionalGeneration.from_pretrained(model_path, **kwargs)
+            if attn != attn_implementation:
+                print(f"Loaded model with attn_implementation={attn!r} (requested {attn_implementation!r}).")
+            break
+        except Exception as exc:
+            last_exc = exc
+            print(f"Warning: load failed with attn_implementation={attn!r}: {exc}")
+
+    if model is None:
+        raise RuntimeError(f"Could not load MedVLM-R1 with any attention backend: {last_exc}") from last_exc
 
     processor = AutoProcessor.from_pretrained(model_path)
+    configure_processor_pixels(processor)
     return model, processor
 
 
@@ -132,21 +179,19 @@ def main():
     model, processor = _load_model_and_processor(args.model_path, args.attn_implementation)
     model.eval()
 
+    greedy_cfg, sample_cfg = _build_generation_configs(
+        processor,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+    )
+    use_cache = not args.no_kv_cache
+
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
     if args.n_samples is not None:
         samples = samples[: args.n_samples]
 
-    greedy_gen_kwargs = {
-        "max_new_tokens": args.max_new_tokens,
-        "do_sample": False,
-    }
-    sample_gen_kwargs = {
-        "max_new_tokens": args.max_new_tokens,
-        "do_sample": True,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-    }
     agreement_samples = max(1, int(args.agreement_samples))
 
     results = []
@@ -155,21 +200,28 @@ def main():
             if not sample.mc_options or sample.mc_correct_index is None:
                 continue
 
-            image = Image.open(sample.image_path).convert("RGB")
             num_options = len(sample.mc_options)
             prompt_text = build_medvlm_prompt(sample.question, sample.mc_options)
-            conversation = build_medvlm_conversation(image, prompt_text)
+            conversation = build_medvlm_conversation(sample.image_path, prompt_text)
             inputs = prepare_medvlm_inputs(processor, conversation)
             inputs = _move_inputs_to_device(inputs, device)
 
-            generated_ids = model.generate(**inputs, **greedy_gen_kwargs)
+            generated_ids = model.generate(
+                **inputs,
+                generation_config=greedy_cfg,
+                use_cache=use_cache,
+            )
             generated_text = _decode_new_tokens(processor, inputs, generated_ids)
             predicted_letter = extract_answer_letter(generated_text, num_options=num_options)
             ground_truth_letter = sample.answer
 
             sampled_predicted_letters: list[str | None] = []
             for _ in range(agreement_samples):
-                sample_ids = model.generate(**inputs, **sample_gen_kwargs)
+                sample_ids = model.generate(
+                    **inputs,
+                    generation_config=sample_cfg,
+                    use_cache=use_cache,
+                )
                 sample_text = _decode_new_tokens(processor, inputs, sample_ids)
                 sampled_predicted_letters.append(
                     extract_answer_letter(sample_text, num_options=num_options)

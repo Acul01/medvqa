@@ -29,6 +29,7 @@ for ds in slake vqarad medvqa2019; do
     --model_path JZPeterPan/MedVLM-R1 \
     --max_new_tokens 1024 \
     --agreement_samples 5 \
+    --attn_implementation flash_attention_2 \
     "${EXTRA[@]}"
 done
 

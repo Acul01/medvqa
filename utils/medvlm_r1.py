@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
+from huggingface_hub import hf_hub_download
 from qwen_vl_utils import process_vision_info
+from transformers import Qwen2VLConfig
 
 from utils.mc_vqa import LETTER_POOL, parse_predicted_letter
 
 DEFAULT_MODEL_PATH = "JZPeterPan/MedVLM-R1"
+
+# MedVLM-R1 training (see train_script.sh: --max_pixels 401408)
+MIN_PIXELS = 256 * 28 * 28
+MAX_PIXELS = 512 * 28 * 28  # 401408
+
 
 def _medvlm_task_suffix() -> str:
     think = "redacted_thinking"
@@ -20,6 +28,7 @@ def _medvlm_task_suffix() -> str:
         "2. Then provide the correct single-letter choice (A, B, C, D,...) inside <answer>...</answer> tags.\n"
         "3. No extra information or text outside of these tags."
     )
+
 
 _ANSWER_TAG_PATTERN = re.compile(
     r"<answer>\s*([A-Z])\s*</answer>",
@@ -32,6 +41,26 @@ def model_short_name(model_path: str) -> str:
     if "medvlm" in name_lower:
         return "medvlm-r1"
     return Path(model_path).name
+
+
+def load_qwen2vl_config(model_path: str) -> Qwen2VLConfig:
+    """Load config and fix null use_cache (strict HF hub validation)."""
+    config_path = hf_hub_download(repo_id=model_path, filename="config.json")
+    with open(config_path, encoding="utf-8") as f:
+        config_dict = json.load(f)
+    text_cfg = config_dict.setdefault("text_config", {})
+    if text_cfg.get("use_cache") is None:
+        text_cfg["use_cache"] = True
+    return Qwen2VLConfig.from_dict(config_dict)
+
+
+def configure_processor_pixels(processor) -> None:
+    """Match MedVLM-R1 training resolution limits for stable vision token counts."""
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        return
+    image_processor.min_pixels = MIN_PIXELS
+    image_processor.max_pixels = MAX_PIXELS
 
 
 def format_mc_problem(question: str, options: Iterable[str]) -> str:
@@ -62,13 +91,18 @@ def extract_answer_letter(output: str, num_options: int) -> Optional[str]:
     return parse_predicted_letter(output, num_options=num_options)
 
 
-def build_medvlm_conversation(image: Any, prompt_text: str) -> List[dict]:
-    """Qwen2-VL chat messages with image + MedVLM prompt."""
+def image_path_to_uri(image_path: str) -> str:
+    """Absolute file:// URI for qwen_vl_utils / HF demo compatibility."""
+    return Path(image_path).expanduser().resolve().as_uri()
+
+
+def build_medvlm_conversation(image_path: str, prompt_text: str) -> List[dict]:
+    """Qwen2-VL chat messages with image (file URI) + MedVLM prompt."""
     return [
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image},
+                {"type": "image", "image": image_path_to_uri(image_path)},
                 {"type": "text", "text": prompt_text},
             ],
         }
@@ -89,7 +123,7 @@ def prepare_medvlm_inputs(
     )
     image_inputs, video_inputs = process_vision_info(conversation)
     return processor(
-        text=[text],
+        text=text,
         images=image_inputs,
         videos=video_inputs,
         padding=True,
