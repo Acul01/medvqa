@@ -44,10 +44,7 @@ def model_short_name(model_path: str) -> str:
 
 def load_qwen2vl_config(model_path: str, attn_implementation: str = "eager"):
     """Build Qwen2VLConfig for transformers 4.51.x (flat LM fields, no Qwen2VLTextConfig)."""
-    from transformers.models.qwen2_vl.configuration_qwen2_vl import (
-        Qwen2VLConfig,
-        Qwen2VLVisionConfig,
-    )
+    from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLConfig
 
     config_path = ensure_medvlm_config_patched(model_path, attn_implementation=attn_implementation)
     with open(config_path, encoding="utf-8") as f:
@@ -64,8 +61,9 @@ def load_qwen2vl_config(model_path: str, attn_implementation: str = "eager"):
     if merged.get("use_cache") is None:
         merged["use_cache"] = True
 
+    # Qwen2VLConfig.__init__ only accepts vision_config as dict or None (not a config instance).
     if vision_cfg_dict is not None:
-        merged["vision_config"] = Qwen2VLVisionConfig(**vision_cfg_dict)
+        merged["vision_config"] = vision_cfg_dict
 
     config = Qwen2VLConfig(**merged)
     # Ensure no leftover dict sub-config breaks GenerationConfig.from_model_config.
