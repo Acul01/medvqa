@@ -127,7 +127,7 @@ flowchart LR
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
 | `utils/save_results.py` | JSON/CSV/XLSX unter `--results_dir` (Default `06_results/` / `MEDVQA_RESULTS_DIR`) |
-| `utils/mc_eval.py` | MC-Metriken aus Inferenz-JSON → `{stem}_eval.json`; Zeile in `eval_runs_mc.csv` (Ordner des JSON) |
+| `utils/mc_eval.py` | MC-Metriken aus Inferenz-JSON → `{stem}_eval.json`; Zeile in `eval_runs_mc.csv` (Ordner des JSON; per `evaluate.py --eval_runs_csv` steuerbar) |
 | `utils/prompt_formatter.py`, `utils/dataset.py` | Hilfsfunktionen |
 | `02_data/` | Rohdaten + MC-Exporte (Standard `02_data/data_mc_openai/`) |
 | `06_outputs/` | Checkpoints / Trainings-Artefakte (Default `--output_dir`) |
@@ -405,7 +405,7 @@ python 04_evaluation/inference.py \
 - **`{modell_kurz}_{dataset}_{n_tag}.json`** – Liste von Dicts pro Sample
 - Dieselbe Basis für `.csv` und optional `.xlsx`
 - **`{modell_kurz}_{dataset}_{n_tag}_eval.json`** – MC-Kennzahlen (Accuracy, Entropie, Agreement, Confidence nach closed/open/overall), **automatisch** am Ende von `inference.py` und `inference_med.py` nach dem Speichern des Haupt-JSONs
-- **`eval_runs_mc.csv`** – gleicher Ordner wie die Ergebnis-JSONs: eine Zeile pro Eval-Lauf (wie früher `evaluate.py` → `eval_runs.csv`, Spalten `yesno_*` / `open_*` / `overall_*`)
+- **`eval_runs_mc.csv`** – gleicher Ordner wie die Ergebnis-JSONs: eine Zeile pro Eval-Lauf (wie früher `evaluate.py` → `eval_runs.csv`, Spalten `yesno_*` / `open_*` / `overall_*`). Manuell: `evaluate.py --eval_runs_csv /pfad/zur/zentralen.csv` überschreibt das.
 
 `n_tag` ist `all`, wenn `--n_samples` nicht gesetzt ist.
 
@@ -558,6 +558,7 @@ python 04_evaluation/evaluate.py \
   --results_file 06_results/llava-med_pathvqa_all.json
 # schreibt standardmäßig 06_results/llava-med_pathvqa_all_eval.json
 # optional: --output_file /pfad/zu/metrics.json
+# optional: --eval_runs_csv 06_results/results_mc/eval_runs_mc.csv  (sonst: gleicher Ordner wie die JSON)
 ```
 
 MC-Kennzahlen: Accuracy (closed/open/overall über Buchstaben), Mittelwerte von **Entropie**, **agreement** und **confidence** aus den Inferenzzeilen. Normalerweise entfällt ein separater Aufruf: `inference.py` / `inference_med.py` erzeugen `{stem}_eval.json` automatisch.
@@ -777,7 +778,8 @@ python 04_evaluation/inference.py \
 # Metriken
 python 04_evaluation/evaluate.py \
   --results_file 07_results/llava_pathvqa_all.json \
-  --output_file metrics_pathvqa.json
+  --output_file metrics_pathvqa.json \
+  --eval_runs_csv 07_results/eval_runs_mc.csv
 # output enthält MC-Kennzahlen (closed/open/overall auf Buchstaben)
 
 # Risk–Coverage / AURC

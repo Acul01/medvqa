@@ -17,6 +17,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional metrics JSON path (default: <results_stem>_eval.json next to results)",
     )
+    parser.add_argument(
+        "--eval_runs_csv",
+        type=str,
+        default=None,
+        help=(
+            "Append aggregate metrics row to this CSV (default: eval_runs_mc.csv in the same "
+            "directory as --results_file)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -25,6 +34,7 @@ def main() -> None:
     run_mc_evaluation(
         Path(args.results_file),
         Path(args.output_file) if args.output_file else None,
+        eval_runs_csv=Path(args.eval_runs_csv) if args.eval_runs_csv else None,
     )
 
 

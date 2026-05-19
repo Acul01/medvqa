@@ -102,8 +102,16 @@ def _compute_mean_metric_from_group(samples: List[Dict], field: str) -> float:
     return _safe_div(sum(values), len(values)) if values else float("nan")
 
 
-def run_mc_evaluation(results_path: Path, metrics_output_path: Path | None = None) -> dict[str, Any]:
-    """Load inference JSON, compute MC metrics, write ``{stem}_eval.json`` next to it unless path is given."""
+def run_mc_evaluation(
+    results_path: Path,
+    metrics_output_path: Path | None = None,
+    *,
+    eval_runs_csv: Path | None = None,
+) -> dict[str, Any]:
+    """Load inference JSON, compute MC metrics, write ``{stem}_eval.json`` next to it unless path is given.
+
+    Appends one row to ``eval_runs_csv`` when passed; otherwise to ``eval_runs_mc.csv`` next to the results JSON.
+    """
     results_path = Path(results_path)
     if not results_path.exists():
         raise FileNotFoundError(f"Results file not found: {results_path}")
@@ -211,7 +219,7 @@ def run_mc_evaluation(results_path: Path, metrics_output_path: Path | None = Non
         "overall_confidence": "" if math.isnan(overall_confidence) else f"{overall_confidence:.6f}",
         "overall_agreement": "" if math.isnan(overall_agreement) else f"{overall_agreement:.6f}",
     }
-    runs_csv = results_path.parent / "eval_runs_mc.csv"
+    runs_csv = Path(eval_runs_csv) if eval_runs_csv is not None else results_path.parent / "eval_runs_mc.csv"
     _append_eval_runs_mc_csv(runs_csv, runs_row)
     print(f"Appended run to {runs_csv}")
 
