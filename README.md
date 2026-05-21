@@ -131,6 +131,7 @@ flowchart LR
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
 | `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
+| `utils/build_pseudo_reasonings_openai.py` | MC + GPT-4o-mini Vision → Pseudo-Rationales (`*_mc_openai_pseudo.json`) |
 | `utils/download_datasets.py` | Download PathVQA / SLAKE / VQA-Rad / Med-VQA-2019 nach `02_data/` |
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
@@ -809,9 +810,37 @@ python utils/build_mc_datasets_openai.py \
   --resume
 ```
 
-### Pseudo-Reasoning (nicht Bestandteil dieses Repos)
+### Pseudo-Rationales (GPT-4o-mini, multimodal)
 
-Eine frühere Pipeline (OpenAI-Vision + Qwen-Verifikation + optionales Training auf Pseudo-Reasonings) ist **hier nicht enthalten**. Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser.
+Nach dem MC-Export können mit [`utils/build_pseudo_reasonings_openai.py`](utils/build_pseudo_reasonings_openai.py) **Vision-Rationales** ergänzt werden: Das Modell sieht Bild + Frage + korrekte MC-Option und schreibt ein strukturiertes `REGION:` / `OBSERVATION:` / `REASONING:` (kompatibel mit [`utils/reasoning_mc.py`](utils/reasoning_mc.py)).
+
+- **Input:** `{dataset}_{split}_mc_openai.json` unter `--mc_root` (wie bei `build_mc_datasets_openai.py`).
+- **Output:** `{dataset}_{split}_mc_openai_pseudo.json` (+ CSV) im gleichen Unterordner.
+- **Loader:** Angereicherte Dateien laden mit `MedicalVQALoader(mc_export_suffix="_pseudo")` (gleiches `mc_data_root` / `MEDVQA_MC_ROOT`).
+- Felder u. a.: `pseudo_reasoning_raw`, `pseudo_reasoning_region`, `pseudo_reasoning_observation`, `pseudo_reasoning_explanation`, `pseudo_reasoning_parse_mode`; bei Fehlern `pseudo_reasoning_error`.
+
+```bash
+pip install openai pillow   # pillow nur nötig für --max_image_side
+export OPENAI_API_KEY="..."
+
+python utils/build_pseudo_reasonings_openai.py \
+  --data_root 02_data \
+  --mc_root 02_data/data_mc_openai \
+  --datasets pathvqa \
+  --openai_model gpt-4o-mini \
+  --n_samples 50 \
+  --save_every 10 \
+  --max_image_side 1024
+
+# Fortsetzen (überspringt Zeilen mit gesetztem pseudo_reasoning_raw):
+python utils/build_pseudo_reasonings_openai.py \
+  --data_root 02_data \
+  --mc_root 02_data/data_mc_openai \
+  --datasets pathvqa \
+  --resume
+```
+
+Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser am Modell — die Pseudo-Rationales sind eine **separate Datenanreicherung** für Training/Analyse.
 
 Ausgabe pro Datensatz:
 **MC als Standardpfad:** `MedicalVQALoader()` nutzt `MEDVQA_DATA_ROOT` / `MEDVQA_MC_ROOT` bzw. die Fallbacks `02_data` und `02_data/data_mc_openai` (siehe [`utils/paths.py`](utils/paths.py)). Fehlen die MC-Dateien unter dem MC-Root, gibt der Loader einen Fehler mit Verweis auf `utils/build_mc_datasets_openai.py`. **`utils/build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.
@@ -820,6 +849,7 @@ Ausgabe pro Datensatz:
 
 - `<output_root>/<dataset>/<dataset>_<split>_mc_openai.json` (Standard: unter `02_data/data_mc_openai/`)
 - `<output_root>/<dataset>/<dataset>_<split>_mc_openai.csv`
+- Optional Pseudo-Rationales: `<mc_root>/<dataset>/<dataset>_<split>_mc_openai_pseudo.json` (via `build_pseudo_reasonings_openai.py`)
 - Cache für Distraktoren: `<output_root>/<dataset>/openai_distractor_cache.jsonl`
 
 ---

@@ -50,6 +50,7 @@ class MedicalVQALoader:
         self,
         data_root: Optional[str] = None,
         mc_data_root: Optional[Any] = MC_DEFAULT,
+        mc_export_suffix: str = "",
     ):
         self.data_root = Path(data_root if data_root is not None else get_data_root())
         if mc_data_root is MC_DEFAULT:
@@ -58,6 +59,7 @@ class MedicalVQALoader:
             self.mc_data_root = None
         else:
             self.mc_data_root = Path(mc_data_root)
+        self.mc_export_suffix = mc_export_suffix or ""
 
         self.dataset_configs = {
             "PathVQA": {
@@ -158,11 +160,17 @@ class MedicalVQALoader:
             raise ValueError(f"invalid image_path after normalization: {image_path_str!r} -> {suffix!r}")
         return dataset_root / images_dir / Path(suffix)
 
+    def resolve_mc_image_path(self, dataset_name: str, image_path_str: str) -> Path:
+        """Resolve ``image_path`` from an MC JSON row against ``data_root`` (same rules as MC loading)."""
+        dataset_name = self._normalize_dataset_name(dataset_name)
+        config = self.dataset_configs[dataset_name]
+        return self._resolve_image_path(dataset_name, config, image_path_str)
+
     def _mc_paths(self, dataset_name: str, split: str) -> tuple[Path, Path]:
         if self.mc_data_root is None:
             raise ValueError("mc_data_root is disabled")
         slug = self.canonical_to_slug[dataset_name]
-        base = self.mc_data_root / slug / f"{slug}_{split}_mc_openai"
+        base = self.mc_data_root / slug / f"{slug}_{split}_mc_openai{self.mc_export_suffix}"
         return base.with_suffix(".json"), base.with_suffix(".csv")
 
     def _load_mc_records(self, dataset_name: str, split: str, config: Dict) -> List[VQASample]:
