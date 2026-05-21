@@ -165,17 +165,23 @@ def main() -> None:
         best_l2_score = best_l2.importance if best_l2 else 0.0
         best_l3_score = best_l3.importance if best_l3 else 0.0
 
-        scores_sup = {"baseline": baseline_score, "l1": best_l1_score, "l2": best_l2_score}
+        scores_sup = {"baseline": baseline_score, "l1": best_l1_score}
+        if best_l2:
+            scores_sup["l2"] = best_l2_score
         if best_l3:
             scores_sup["l3"] = best_l3_score
         winner_supervised = max(scores_sup, key=lambda k: scores_sup[k])
 
-        # Unsupervised scores (plurality agreement-based — no GT needed)
+        # Unsupervised scores — delta from baseline (importance_agreement is already
+        # delta-transformed in run_hierarchical_perturbation).
+        # Baseline delta is 0 by definition (it IS the reference point).
         best_l1_score_ag = best_l1.importance_agreement if best_l1 else 0.0
         best_l2_score_ag = best_l2.importance_agreement if best_l2 else 0.0
         best_l3_score_ag = best_l3.importance_agreement if best_l3 else 0.0
 
-        scores_ag = {"baseline": baseline_score_ag, "l1": best_l1_score_ag, "l2": best_l2_score_ag}
+        scores_ag = {"baseline": 0.0, "l1": best_l1_score_ag}
+        if best_l2:
+            scores_ag["l2"] = best_l2_score_ag
         if best_l3:
             scores_ag["l3"] = best_l3_score_ag
         winner_agreement = max(scores_ag, key=lambda k: scores_ag[k])
@@ -193,11 +199,11 @@ def main() -> None:
             "best_l2_score":  round(best_l2_score, 6),
             "best_l3_score":  round(best_l3_score, 6) if best_l3 else None,
             "winner_supervised": winner_supervised,
-            # ── Unsupervised scores (agreement × conf × (1−H)) ───────────────
-            "baseline_score_ag": round(baseline_score_ag, 6),
-            "best_l1_score_ag":  round(best_l1_score_ag, 6),
-            "best_l2_score_ag":  round(best_l2_score_ag, 6),
-            "best_l3_score_ag":  round(best_l3_score_ag, 6) if best_l3 else None,
+            # ── Unsupervised scores — Δ from baseline (> 0 = better than full image) ─
+            "baseline_score_ag":     round(baseline_score_ag, 6),   # absolute ref value
+            "best_l1_score_ag_delta": round(best_l1_score_ag, 6),
+            "best_l2_score_ag_delta": round(best_l2_score_ag, 6),
+            "best_l3_score_ag_delta": round(best_l3_score_ag, 6) if best_l3 else None,
             "winner_agreement":  winner_agreement,
             # ── Concordance ───────────────────────────────────────────────────
             "winners_match": winners_match,
@@ -235,10 +241,14 @@ def main() -> None:
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     total = len(results)
+    has_l2 = any(r.get("best_l2_bbox") is not None for r in results)
     has_l3 = any(r.get("best_l3_bbox") is not None for r in results)
 
-    counts_sup = {"baseline": 0, "l1": 0, "l2": 0}
-    counts_ag  = {"baseline": 0, "l1": 0, "l2": 0}
+    counts_sup = {"baseline": 0, "l1": 0}
+    counts_ag  = {"baseline": 0, "l1": 0}
+    if has_l2:
+        counts_sup["l2"] = 0
+        counts_ag["l2"]  = 0
     if has_l3:
         counts_sup["l3"] = 0
         counts_ag["l3"]  = 0
@@ -253,35 +263,39 @@ def main() -> None:
 
     mean_baseline    = _safe_div(sum(r["baseline_score"] for r in results), total)
     mean_l1          = _safe_div(sum(r["best_l1_score"]  for r in results), total)
-    mean_l2          = _safe_div(sum(r["best_l2_score"]  for r in results), total)
+    mean_l2          = _safe_div(sum(r["best_l2_score"]  for r in results), total) if has_l2 else None
     mean_l3          = _safe_div(
         sum(r.get("best_l3_score") or 0.0 for r in results), total
     ) if has_l3 else None
 
-    mean_baseline_ag = _safe_div(sum(r["baseline_score_ag"] for r in results), total)
-    mean_l1_ag       = _safe_div(sum(r["best_l1_score_ag"]  for r in results), total)
-    mean_l2_ag       = _safe_div(sum(r["best_l2_score_ag"]  for r in results), total)
-    mean_l3_ag       = _safe_div(
-        sum(r.get("best_l3_score_ag") or 0.0 for r in results), total
+    # Absolute baseline agreement score (reference, shown separately below table)
+    mean_baseline_ag_abs = _safe_div(sum(r["baseline_score_ag"] for r in results), total)
+    # Unsupervised deltas: crop_score_ag − baseline_score_ag (baseline delta = 0 by def.)
+    mean_l1_ag_delta = _safe_div(sum(r["best_l1_score_ag_delta"] for r in results), total)
+    mean_l2_ag_delta = _safe_div(
+        sum(r["best_l2_score_ag_delta"] for r in results), total
+    ) if has_l2 else None
+    mean_l3_ag_delta = _safe_div(
+        sum(r.get("best_l3_score_ag_delta") or 0.0 for r in results), total
     ) if has_l3 else None
 
-    level_keys = ["baseline", "l1", "l2"] + (["l3"] if has_l3 else [])
+    level_keys = ["baseline", "l1"] + (["l2"] if has_l2 else []) + (["l3"] if has_l3 else [])
     level_labels = {
         "baseline": "Full image (baseline)",
         "l1":       "Best L1 quadrant",
         "l2":       "Best L2 sub-quadrant",
         "l3":       "Best L3 sub-quadrant",
     }
-    mean_sup = {"baseline": mean_baseline, "l1": mean_l1, "l2": mean_l2, "l3": mean_l3}
-    mean_ag  = {"baseline": mean_baseline_ag, "l1": mean_l1_ag, "l2": mean_l2_ag, "l3": mean_l3_ag}
+    mean_sup    = {"baseline": mean_baseline,   "l1": mean_l1,         "l2": mean_l2,         "l3": mean_l3}
+    mean_ag_d   = {"baseline": 0.0,             "l1": mean_l1_ag_delta,"l2": mean_l2_ag_delta,"l3": mean_l3_ag_delta}
 
-    W = 62
     print("\n── Region Score Comparison ─────────────────────────────────────────────────────────────")
     print(f"  Total samples evaluated : {total}")
+    print(f"  Unsupervised baseline score (absolute reference) : {mean_baseline_ag_abs:.4f}")
     print()
-    print(f"  {'Region':<28}  {'Supervised (GT)':>22}  {'Unsupervised (agr)':>22}")
-    print(f"  {'':28}  {'Wins':>5} {'%':>5} {'Mean':>8}  {'Wins':>5} {'%':>5} {'Mean':>8}")
-    print(f"  {'-'*80}")
+    print(f"  {'Region':<28}  {'Supervised (GT)':>22}  {'Unsupervised (Δ baseline)':>26}")
+    print(f"  {'':28}  {'Wins':>5} {'%':>5} {'Mean':>8}  {'Wins':>5} {'%':>5} {'Mean Δ':>10}")
+    print(f"  {'-'*84}")
     for key in level_keys:
         label = level_labels[key]
         ns = counts_sup.get(key, 0)
@@ -289,11 +303,13 @@ def main() -> None:
         ps = 100 * ns / total if total else 0
         pa = 100 * na / total if total else 0
         ms = mean_sup[key]
-        ma = mean_ag[key]
-        ms_str = f"{ms:.4f}" if ms is not None else "   N/A"
-        ma_str = f"{ma:.4f}" if ma is not None else "   N/A"
-        print(f"  {label:<28}  {ns:>5} {ps:>4.1f}% {ms_str:>8}  {na:>5} {pa:>4.1f}% {ma_str:>8}")
-    print(f"  {'-'*80}")
+        md = mean_ag_d[key]
+        ms_str = f"{ms:.4f}"   if ms is not None else "     N/A"
+        md_str = f"{md:+.4f}"  if md is not None else "       N/A"
+        if key == "baseline":
+            md_str = "  0.0 (ref)"   # baseline is the reference point, delta always 0
+        print(f"  {label:<28}  {ns:>5} {ps:>4.1f}% {ms_str:>8}  {na:>5} {pa:>4.1f}% {md_str:>10}")
+    print(f"  {'-'*84}")
     print(f"\n  Concordance (same winner both methods) : {concordant}/{total}  ({100*concordance_rate:.1f}%)")
     print("────────────────────────────────────────────────────────────────────────────────────────\n")
 
@@ -314,13 +330,13 @@ def main() -> None:
         "mean_best_l1_score":          mean_l1,
         "mean_best_l2_score":          mean_l2,
         "mean_best_l3_score":          mean_l3,
-        # unsupervised (plurality agreement-based)
-        "winner_counts_agreement":     counts_ag,
-        "winner_fractions_agreement":  {k: _safe_div(v, total) for k, v in counts_ag.items()},
-        "mean_baseline_score_ag":      mean_baseline_ag,
-        "mean_best_l1_score_ag":       mean_l1_ag,
-        "mean_best_l2_score_ag":       mean_l2_ag,
-        "mean_best_l3_score_ag":       mean_l3_ag,
+        # unsupervised (delta scoring: crop_score_ag − baseline_score_ag)
+        "winner_counts_agreement":            counts_ag,
+        "winner_fractions_agreement":         {k: _safe_div(v, total) for k, v in counts_ag.items()},
+        "mean_baseline_score_ag_abs":         mean_baseline_ag_abs,   # absolute ref value
+        "mean_best_l1_score_ag_delta":        mean_l1_ag_delta,
+        "mean_best_l2_score_ag_delta":        mean_l2_ag_delta,
+        "mean_best_l3_score_ag_delta":        mean_l3_ag_delta,
     }
 
     json_path = out_dir / f"{out_stem}.json"
@@ -335,32 +351,32 @@ def main() -> None:
 
     # ── W&B ─────────────────────────────────────────────────────────────────
     if not args.disable_wandb:
-        wandb.summary["concordance_rate"] = concordance_rate
-        wandb.summary["concordant_samples"] = concordant
+        wandb.summary["concordance_rate"]    = concordance_rate
+        wandb.summary["concordant_samples"]  = concordant
         for k, v in counts_sup.items():
             wandb.summary[f"winner_sup_count_{k}"] = v
             wandb.summary[f"winner_sup_frac_{k}"]  = _safe_div(v, total)
         for k, v in counts_ag.items():
             wandb.summary[f"winner_ag_count_{k}"] = v
             wandb.summary[f"winner_ag_frac_{k}"]  = _safe_div(v, total)
-        wandb.summary["mean_baseline_score"]    = mean_baseline
-        wandb.summary["mean_best_l1_score"]     = mean_l1
-        wandb.summary["mean_best_l2_score"]     = mean_l2
-        wandb.summary["mean_baseline_score_ag"] = mean_baseline_ag
-        wandb.summary["mean_best_l1_score_ag"]  = mean_l1_ag
-        wandb.summary["mean_best_l2_score_ag"]  = mean_l2_ag
+        wandb.summary["mean_baseline_score"]         = mean_baseline
+        wandb.summary["mean_best_l1_score"]          = mean_l1
+        wandb.summary["mean_best_l2_score"]          = mean_l2
+        wandb.summary["mean_baseline_score_ag_abs"]  = mean_baseline_ag_abs
+        wandb.summary["mean_best_l1_score_ag_delta"] = mean_l1_ag_delta
+        wandb.summary["mean_best_l2_score_ag_delta"] = mean_l2_ag_delta
 
         table = wandb.Table(columns=[
             "image_path", "question", "gt_letter", "question_type",
             "baseline_score", "best_l1_score", "best_l2_score",
-            "baseline_score_ag", "best_l1_score_ag", "best_l2_score_ag",
+            "baseline_score_ag", "best_l1_score_ag_delta", "best_l2_score_ag_delta",
             "winner_supervised", "winner_agreement", "winners_match",
         ])
         for r in results:
             table.add_data(
                 r["image_path"], r["question"], r["gt_letter"], r["question_type"],
                 r["baseline_score"], r["best_l1_score"], r["best_l2_score"],
-                r["baseline_score_ag"], r["best_l1_score_ag"], r["best_l2_score_ag"],
+                r["baseline_score_ag"], r["best_l1_score_ag_delta"], r["best_l2_score_ag_delta"],
                 r["winner_supervised"], r["winner_agreement"], r["winners_match"],
             )
         wandb.log({"region_comparison": table})

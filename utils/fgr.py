@@ -234,11 +234,24 @@ def run_hierarchical_perturbation(
 
     all_patches: list[PerturbPatch] = []
 
+    def _delta_ag(patches: list[PerturbPatch]) -> None:
+        """Subtract baseline agreement score in-place → importance_agreement becomes a delta.
+
+        After this transform importance_agreement > 0 means the crop improves
+        over the full-image unsupervised signal; < 0 means it hurts.  The
+        baseline's implicit delta is therefore always 0 (the reference point),
+        which eliminates the baseline-consistency bias present in the absolute
+        agreement score.
+        """
+        for p in patches:
+            p.importance_agreement = p.importance_agreement - baseline_score_agreement
+
     # ── Level 1: four quadrants of the full image ────────────────────────────
     l1_patches: list[PerturbPatch] = []
     for bbox in _split_2x2(full_bbox):
         ca, ag, mc, me, score, score_ag = _score(image.crop(bbox))
         l1_patches.append(_patch(1, bbox, ca, ag, mc, me, score, score_ag))
+    _delta_ag(l1_patches)
     all_patches.extend(l1_patches)
 
     # ── Global-evidence gate (uses supervised score for ranking) ─────────────
@@ -246,12 +259,16 @@ def run_hierarchical_perturbation(
     if baseline_score > 0 and best_l1_score < global_threshold * baseline_score:
         return all_patches, "global", baseline_score, baseline_score_agreement
 
+    if n_levels < 2:
+        return all_patches, "local", baseline_score, baseline_score_agreement
+
     # ── Level 2: four sub-quadrants of the best L1 patch ────────────────────
     best_l1 = max(l1_patches, key=lambda p: p.importance)
     l2_patches: list[PerturbPatch] = []
     for bbox in _split_2x2(best_l1.bbox):
         ca, ag, mc, me, score, score_ag = _score(image.crop(bbox))
         l2_patches.append(_patch(2, bbox, ca, ag, mc, me, score, score_ag))
+    _delta_ag(l2_patches)
     all_patches.extend(l2_patches)
 
     if n_levels < 3:
@@ -259,9 +276,12 @@ def run_hierarchical_perturbation(
 
     # ── Level 3: four sub-quadrants of the best L2 patch ────────────────────
     best_l2 = max(l2_patches, key=lambda p: p.importance)
+    l3_patches: list[PerturbPatch] = []
     for bbox in _split_2x2(best_l2.bbox):
         ca, ag, mc, me, score, score_ag = _score(image.crop(bbox))
-        all_patches.append(_patch(3, bbox, ca, ag, mc, me, score, score_ag))
+        l3_patches.append(_patch(3, bbox, ca, ag, mc, me, score, score_ag))
+    _delta_ag(l3_patches)
+    all_patches.extend(l3_patches)
 
     return all_patches, "local", baseline_score, baseline_score_agreement
 
