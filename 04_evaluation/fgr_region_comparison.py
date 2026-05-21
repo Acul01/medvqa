@@ -118,11 +118,35 @@ def main() -> None:
             config=vars(args),
         )
 
-    # ── Per-sample loop ──────────────────────────────────────────────────────
-    results: list[dict] = []
+    # ── Checkpoint setup ─────────────────────────────────────────────────────
+    out_dir  = Path(args.results_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_tag      = str(args.n_samples) if args.n_samples is not None else "all"
+    out_stem   = f"fgr_region_comparison_{args.dataset}_{n_tag}"
+    ckpt_path  = out_dir / f"{out_stem}_checkpoint.jsonl"
 
+    # Resume: load already-completed samples so we can skip them
+    completed_paths: set[str] = set()
+    results: list[dict] = []
+    if ckpt_path.exists():
+        with open(ckpt_path, encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line:
+                    _r = json.loads(_line)
+                    results.append(_r)
+                    completed_paths.add(_r["image_path"])
+        tqdm.write(f"  [RESUME] Loaded {len(results)} completed samples from {ckpt_path}")
+
+    _ckpt_fh = open(ckpt_path, "a", encoding="utf-8")
+
+    # ── Per-sample loop ──────────────────────────────────────────────────────
     for sample in tqdm(samples, desc="region comparison"):
         if not sample.mc_options or sample.mc_correct_index is None:
+            continue
+
+        # Skip samples already completed in a previous (interrupted) run
+        if sample.image_path in completed_paths:
             continue
 
         try:
@@ -264,6 +288,11 @@ def main() -> None:
                 for p in patches
             ],
         })
+        # Persist immediately so progress survives a crash or kill
+        _ckpt_fh.write(json.dumps(results[-1], ensure_ascii=False) + "\n")
+        _ckpt_fh.flush()
+
+    _ckpt_fh.close()
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     total = len(results)
@@ -362,11 +391,6 @@ def main() -> None:
     print("────────────────────────────────────────────────────────────────────────────────────────\n")
 
     # ── Save ─────────────────────────────────────────────────────────────────
-    out_dir  = Path(args.results_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    n_tag    = str(args.n_samples) if args.n_samples is not None else "all"
-    out_stem = f"fgr_region_comparison_{args.dataset}_{n_tag}"
-
     agg = {
         "total_samples":            total,
         "concordant_samples":       concordant,
@@ -424,6 +448,11 @@ def main() -> None:
     csv_path = out_dir / f"{out_stem}.csv"
     pd.DataFrame(flat).to_csv(csv_path, index=False, encoding="utf-8")
     print(f"  Saved: {csv_path}")
+
+    # Remove checkpoint now that final outputs are written
+    if ckpt_path.exists():
+        ckpt_path.unlink()
+        print(f"  Removed checkpoint: {ckpt_path}")
 
     # ── W&B ─────────────────────────────────────────────────────────────────
     if not args.disable_wandb:
