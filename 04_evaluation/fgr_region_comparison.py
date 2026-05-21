@@ -293,7 +293,7 @@ def main() -> None:
     print(f"  Total samples evaluated : {total}")
     print(f"  Unsupervised baseline score (absolute reference) : {mean_baseline_ag_abs:.4f}")
     print()
-    print(f"  {'Region':<28}  {'Supervised (GT)':>22}  {'Unsupervised (Δ baseline)':>26}")
+    print(f"  {'Region':<28}  {'Supervised (GT)':>22}  {'Unsupervised conf×(1−H) Δ':>26}")
     print(f"  {'':28}  {'Wins':>5} {'%':>5} {'Mean':>8}  {'Wins':>5} {'%':>5} {'Mean Δ':>10}")
     print(f"  {'-'*84}")
     for key in level_keys:

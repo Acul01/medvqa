@@ -7,7 +7,8 @@ The model is sampled ``n_samples`` times per crop to produce three uncertainty
 signals: agreement, mean confidence, mean entropy.  These are combined into a
 single region score:
 
-    region_score = agreement × mean_confidence × (1 − normalised_entropy)
+    region_score      = correct_agreement × mean_confidence × (1 − normalised_entropy)  [supervised]
+    region_score_ag   = mean_confidence × (1 − normalised_entropy)                       [unsupervised, no GT]
 
 The quadrant with the highest region score advances to the next level.
 After three levels (4 + 4 + 4 = 12 generate-calls per sample) the 80 %-
@@ -38,7 +39,7 @@ class PerturbPatch:
     level: int                           # 1 | 2 | 3
     bbox: tuple[int, int, int, int]      # (x1, y1, x2, y2) in original image pixels
     importance: float                    # correct_agreement × mean_conf × (1−norm_H)  ← ranking key
-    importance_agreement: float          # agreement        × mean_conf × (1−norm_H)  ← unsupervised proxy
+    importance_agreement: float          # mean_conf × (1−norm_H) − baseline  ← unsupervised proxy (no GT, no agreement)
     correct_agreement: float             # P(predicted == gt_letter) across n_samples
     agreement: float                     # plurality agreement (any letter)
     mean_confidence: float               # mean max-softmax confidence across samples
@@ -94,7 +95,10 @@ def _sample_region(
     region_score : float
         correct_agreement × mean_confidence × (1 − normalised_entropy).
     region_score_agreement : float
-        agreement × mean_confidence × (1 − normalised_entropy) — usable without GT.
+        mean_confidence × (1 − normalised_entropy) — uncertainty-only signal usable
+        without GT.  Agreement is intentionally omitted because it rewards
+        consistent-but-wrong outputs; confidence and entropy are better-calibrated
+        proxies for local visual evidence.
     """
     n_options = len(options)
     conv = build_mc_conversation(question, options, image=image_crop)
@@ -145,7 +149,7 @@ def _sample_region(
     norm_entropy = min(mean_ent / log_vocab_size, 1.0) if log_vocab_size > 0 else 0.0
 
     region_score           = correct_agreement * mean_conf * (1.0 - norm_entropy)
-    region_score_agreement = agreement         * mean_conf * (1.0 - norm_entropy)
+    region_score_agreement =                    mean_conf * (1.0 - norm_entropy)
     return correct_agreement, agreement, mean_conf, mean_ent, region_score, region_score_agreement
 
 
