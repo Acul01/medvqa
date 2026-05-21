@@ -293,7 +293,7 @@ def main() -> None:
             continue
 
         # ── Hierarchical perturbation ────────────────────────────────────────
-        patches, evidence_type, baseline_score, baseline_score_agreement = run_hierarchical_perturbation(
+        patches, evidence_type, baseline_score, baseline_score_agreement, _ = run_hierarchical_perturbation(
             model,
             processor,
             image,
