@@ -1,0 +1,424 @@
+[
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_0.jpg",
+    "question": "is there evidence of an aortic aneurysm?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "A",
+    "question_type": "closed",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_1.jpg",
+    "question": "is there airspace consolidation on the left side?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "A",
+    "question_type": "closed",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      240,
+      0,
+      360,
+      125
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      240,
+      0,
+      360,
+      125
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_2.jpg",
+    "question": "is there any intraparenchymal abnormalities in the lung fields?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_3.jpg",
+    "question": "which side of the heart border is obscured?",
+    "mc_options": [
+      "right",
+      "anterior",
+      "inferior",
+      "left",
+      "posterior"
+    ],
+    "gt_letter": "A",
+    "question_type": "open",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      433,
+      0,
+      650,
+      244
+    ],
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_4.jpg",
+    "question": "where are the kidney?",
+    "mc_options": [
+      "adjacent to the spleen",
+      "located in the abdomen",
+      "not seen here",
+      "behind the liver",
+      "in the pelvic cavity"
+    ],
+    "gt_letter": "C",
+    "question_type": "open",
+    "winner_supervised": "l1",
+    "winner_supervised_bbox": [
+      0,
+      0,
+      512,
+      328
+    ],
+    "winner_agreement": "l1",
+    "winner_agreement_bbox": [
+      0,
+      0,
+      512,
+      328
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_5.jpg",
+    "question": "are the kidneys present in this image?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "l1",
+    "winner_supervised_bbox": [
+      0,
+      0,
+      512,
+      328
+    ],
+    "winner_agreement": "l1",
+    "winner_agreement_bbox": [
+      0,
+      0,
+      512,
+      328
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_6.jpg",
+    "question": "is the colon more prominent on the patient's right or left side?",
+    "mc_options": [
+      "left",
+      "anterior",
+      "right",
+      "medial",
+      "posterior"
+    ],
+    "gt_letter": "A",
+    "question_type": "open",
+    "winner_supervised": "l1",
+    "winner_supervised_bbox": [
+      354,
+      0,
+      708,
+      257
+    ],
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_7.jpg",
+    "question": "where is the colon most prominent from this view?",
+    "mc_options": [
+      "inferior",
+      "right",
+      "posterior",
+      "left",
+      "anterior"
+    ],
+    "gt_letter": "D",
+    "question_type": "open",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_8.jpg",
+    "question": "is the heart size in this image smaller or larger than if the image was taken ap?",
+    "mc_options": [
+      "similar",
+      "normal size",
+      "larger",
+      "smaller",
+      "enlarged"
+    ],
+    "gt_letter": "D",
+    "question_type": "open",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      768,
+      0,
+      1024,
+      326
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      768,
+      0,
+      1024,
+      326
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_9.jpg",
+    "question": "is the liver visible in the image?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      574,
+      0,
+      766,
+      227
+    ],
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_10.jpg",
+    "question": "is this an axial image?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "A",
+    "question_type": "closed",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_11.jpg",
+    "question": "what structures are visible in this image?",
+    "mc_options": [
+      "skull \tcartilage and medulla",
+      "ribcage  tendon and cerebellum",
+      "jawbone  muscle and thalamus",
+      "pelvis  fascia and hippocampus",
+      "spine  ligaments and cortex"
+    ],
+    "gt_letter": "A",
+    "question_type": "open",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      111,
+      283,
+      222,
+      424
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      111,
+      283,
+      222,
+      424
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_12.jpg",
+    "question": "what is this lucency amid densities in the right lung?",
+    "mc_options": [
+      "the right hilum",
+      "the right diaphragm",
+      "the right bronchus",
+      "the right upper lobe",
+      "the right pleura"
+    ],
+    "gt_letter": "C",
+    "question_type": "open",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      720,
+      0,
+      960,
+      300
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      720,
+      0,
+      960,
+      300
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_13.jpg",
+    "question": "is there evidence of any abnormalities of the lung parenchyma?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_14.jpg",
+    "question": "are the temporal bones fractured?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      270,
+      0,
+      360,
+      109
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      270,
+      0,
+      360,
+      109
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_15.jpg",
+    "question": "is there consolidation in the lungs?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      0,
+      0,
+      190,
+      157
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      0,
+      0,
+      190,
+      157
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_16.jpg",
+    "question": "what type of image is this?",
+    "mc_options": [
+      "plain film x-ray",
+      "magnetic resonance imaging",
+      "computed tomography scan",
+      "positron emission tomography",
+      "ultrasound examination"
+    ],
+    "gt_letter": "A",
+    "question_type": "open",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_17.jpg",
+    "question": "what are these opacities anterior to the right kidney?",
+    "mc_options": [
+      "the ascending colon",
+      "the right ureter",
+      "the right adrenal gland",
+      "the right lobe of the liver",
+      "the small intestines"
+    ],
+    "gt_letter": "E",
+    "question_type": "open",
+    "winner_supervised": "l1",
+    "winner_supervised_bbox": [
+      0,
+      278,
+      512,
+      557
+    ],
+    "winner_agreement": "l1",
+    "winner_agreement_bbox": [
+      0,
+      278,
+      512,
+      557
+    ]
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_18.jpg",
+    "question": "are the brain gyri atrophied?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "baseline",
+    "winner_supervised_bbox": null,
+    "winner_agreement": "baseline",
+    "winner_agreement_bbox": null
+  },
+  {
+    "image_path": "02_data/VQA-Rad/vqarad_images/test_19.jpg",
+    "question": "is the anatomy of the brain gyri affected?",
+    "mc_options": [
+      "yes",
+      "no"
+    ],
+    "gt_letter": "B",
+    "question_type": "closed",
+    "winner_supervised": "l2",
+    "winner_supervised_bbox": [
+      161,
+      241,
+      242,
+      322
+    ],
+    "winner_agreement": "l2",
+    "winner_agreement_bbox": [
+      161,
+      241,
+      242,
+      322
+    ]
+  }
+]

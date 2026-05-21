@@ -221,7 +221,7 @@ def main() -> None:
         # majority-vote correctness: ≥50% of stochastic samples got the right answer
         winner_sup_is_correct = winner_sup_ca >= 0.5
 
-        # ── BBox of each winner (None = full image) ──────────────────────────
+        # ── BBox + correct_agreement of each winner ──────────────────────────
         _bbox_map = {
             "baseline": None,
             "l1": list(best_l1.bbox) if best_l1 else None,
@@ -231,6 +231,23 @@ def main() -> None:
         winner_sup_bbox = _bbox_map.get(winner_supervised)
         winner_ag_bbox  = _bbox_map.get(winner_agreement)
 
+        winner_ag_ca = _winner_ca_map.get(winner_agreement, 0.0)
+        winner_ag_is_correct = winner_ag_ca >= 0.5
+
+        # ── Save winning crop images ─────────────────────────────────────────
+        crops_dir = out_dir / f"{out_stem}_crops"
+        crops_dir.mkdir(exist_ok=True)
+        img_stem = Path(sample.image_path).stem
+
+        def _save_crop(bbox, suffix: str) -> str:
+            crop_img = image.crop(bbox) if bbox else image
+            fname = f"{img_stem}_{suffix}.jpg"
+            crop_img.convert("RGB").save(crops_dir / fname, quality=95)
+            return str(crops_dir / fname)
+
+        sup_crop_path = _save_crop(winner_sup_bbox, f"sup_{winner_supervised}")
+        ag_crop_path  = _save_crop(winner_ag_bbox,  f"ag_{winner_agreement}")
+
         results.append({
             "image_path":    sample.image_path,
             "question":      sample.question,
@@ -238,23 +255,28 @@ def main() -> None:
             "gt_letter":     gt_letter,
             "question_type": sample.question_type or "unknown",
             # ── Supervised scores (correct_agreement × conf × (1−H)) ──────────
-            "baseline_score": round(baseline_score, 6),
-            "best_l1_score":  round(best_l1_score, 6),
-            "best_l2_score":  round(best_l2_score, 6),
-            "best_l3_score":  round(best_l3_score, 6) if best_l3 else None,
+            "baseline_score":             round(baseline_score, 6),
+            "baseline_ca":                round(baseline_ca, 4),
+            "best_l1_score":              round(best_l1_score, 6),
+            "best_l2_score":              round(best_l2_score, 6),
+            **({"best_l3_score":          round(best_l3_score, 6)} if best_l3 else {}),
             "winner_supervised":          winner_supervised,
             "winner_supervised_bbox":     winner_sup_bbox,
             "winner_supervised_score":    round(scores_sup[winner_supervised], 6),
             "winner_supervised_ca":       round(winner_sup_ca, 4),
             "winner_supervised_correct":  winner_sup_is_correct,
+            "winner_supervised_crop":     sup_crop_path,
             # ── Unsupervised scores — Δ from baseline (> 0 = better than full image) ─
-            "baseline_score_ag":          round(baseline_score_ag, 6),   # absolute ref value
-            "best_l1_score_ag_delta":     round(best_l1_score_ag, 6),
-            "best_l2_score_ag_delta":     round(best_l2_score_ag, 6),
-            "best_l3_score_ag_delta":     round(best_l3_score_ag, 6) if best_l3 else None,
-            "winner_agreement":           winner_agreement,
-            "winner_agreement_bbox":      winner_ag_bbox,
-            "winner_agreement_score_delta": round(scores_ag[winner_agreement], 6),
+            "baseline_score_ag":              round(baseline_score_ag, 6),
+            "best_l1_score_ag_delta":         round(best_l1_score_ag, 6),
+            "best_l2_score_ag_delta":         round(best_l2_score_ag, 6),
+            **({"best_l3_score_ag_delta":     round(best_l3_score_ag, 6)} if best_l3 else {}),
+            "winner_agreement":               winner_agreement,
+            "winner_agreement_bbox":          winner_ag_bbox,
+            "winner_agreement_score_delta":   round(scores_ag[winner_agreement], 6),
+            "winner_agreement_ca":            round(winner_ag_ca, 4),
+            "winner_agreement_correct":       winner_ag_is_correct,
+            "winner_agreement_crop":          ag_crop_path,
             # ── Concordance ───────────────────────────────────────────────────
             "winners_match": winners_match,
             # ── Best-patch details ────────────────────────────────────────────
@@ -263,16 +285,18 @@ def main() -> None:
             "best_l1_agreement":         round(best_l1.agreement, 4) if best_l1 else None,
             "best_l1_mean_confidence":   round(best_l1.mean_confidence, 4) if best_l1 else None,
             "best_l1_mean_entropy":      round(best_l1.mean_entropy, 4) if best_l1 else None,
-            "best_l2_bbox":              list(best_l2.bbox) if best_l2 else None,
-            "best_l2_correct_agreement": round(best_l2.correct_agreement, 4) if best_l2 else None,
-            "best_l2_agreement":         round(best_l2.agreement, 4) if best_l2 else None,
-            "best_l2_mean_confidence":   round(best_l2.mean_confidence, 4) if best_l2 else None,
-            "best_l2_mean_entropy":      round(best_l2.mean_entropy, 4) if best_l2 else None,
-            "best_l3_bbox":              list(best_l3.bbox) if best_l3 else None,
-            "best_l3_correct_agreement": round(best_l3.correct_agreement, 4) if best_l3 else None,
-            "best_l3_agreement":         round(best_l3.agreement, 4) if best_l3 else None,
-            "best_l3_mean_confidence":   round(best_l3.mean_confidence, 4) if best_l3 else None,
-            "best_l3_mean_entropy":      round(best_l3.mean_entropy, 4) if best_l3 else None,
+            **({"best_l2_bbox":              list(best_l2.bbox),
+                "best_l2_correct_agreement": round(best_l2.correct_agreement, 4),
+                "best_l2_agreement":         round(best_l2.agreement, 4),
+                "best_l2_mean_confidence":   round(best_l2.mean_confidence, 4),
+                "best_l2_mean_entropy":      round(best_l2.mean_entropy, 4),
+               } if best_l2 else {}),
+            **({"best_l3_bbox":              list(best_l3.bbox),
+                "best_l3_correct_agreement": round(best_l3.correct_agreement, 4),
+                "best_l3_agreement":         round(best_l3.agreement, 4),
+                "best_l3_mean_confidence":   round(best_l3.mean_confidence, 4),
+                "best_l3_mean_entropy":      round(best_l3.mean_entropy, 4),
+               } if best_l3 else {}),
             # ── All patches ───────────────────────────────────────────────────
             "all_patches": [
                 {
@@ -425,17 +449,25 @@ def main() -> None:
     # ── Winning-crops JSON (for later inference comparison) ───────────────────
     winning_crops = [
         {
-            "image_path":              r["image_path"],
-            "question":                r["question"],
-            "mc_options":              r["mc_options"],
-            "gt_letter":               r["gt_letter"],
-            "question_type":           r["question_type"],
-            # supervised selection (use as inference input)
-            "winner_supervised":       r["winner_supervised"],
-            "winner_supervised_bbox":  r["winner_supervised_bbox"],   # None = full image
-            # unsupervised selection (for comparison)
-            "winner_agreement":        r["winner_agreement"],
-            "winner_agreement_bbox":   r["winner_agreement_bbox"],    # None = full image
+            "image_path":                   r["image_path"],
+            "question":                     r["question"],
+            "mc_options":                   r["mc_options"],
+            "gt_letter":                    r["gt_letter"],
+            "question_type":                r["question_type"],
+            # supervised selection
+            "winner_supervised":            r["winner_supervised"],
+            "winner_supervised_bbox":       r["winner_supervised_bbox"],
+            "winner_supervised_crop":       r["winner_supervised_crop"],
+            "winner_supervised_ca":         r["winner_supervised_ca"],
+            "winner_supervised_correct":    r["winner_supervised_correct"],
+            # unsupervised selection
+            "winner_agreement":             r["winner_agreement"],
+            "winner_agreement_bbox":        r["winner_agreement_bbox"],
+            "winner_agreement_crop":        r["winner_agreement_crop"],
+            "winner_agreement_ca":          r["winner_agreement_ca"],
+            "winner_agreement_correct":     r["winner_agreement_correct"],
+            # concordance
+            "winners_match":                r["winners_match"],
         }
         for r in results
     ]
@@ -444,7 +476,19 @@ def main() -> None:
         json.dump(winning_crops, f, indent=2, ensure_ascii=False)
     print(f"  Saved: {crops_path}")
 
-    flat = [{k: v for k, v in r.items() if not isinstance(v, list)} for r in results]
+    # Drop list columns and any level columns that were never populated
+    # (e.g. no best_l3_* columns when run with n_levels=2)
+    _l2_keys = {k for k in (results[0] if results else {}) if "l2" in k}
+    _l3_keys = {k for k in (results[0] if results else {}) if "l3" in k}
+    _drop = set()
+    if not has_l2:
+        _drop |= _l2_keys
+    if not has_l3:
+        _drop |= _l3_keys
+    flat = [
+        {k: v for k, v in r.items() if not isinstance(v, list) and k not in _drop}
+        for r in results
+    ]
     csv_path = out_dir / f"{out_stem}.csv"
     pd.DataFrame(flat).to_csv(csv_path, index=False, encoding="utf-8")
     print(f"  Saved: {csv_path}")

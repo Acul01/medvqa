@@ -1,0 +1,3665 @@
+{
+  "aggregate": {
+    "total_samples": 20,
+    "concordant_samples": 17,
+    "concordance_rate": 0.85,
+    "winner_counts_supervised": {
+      "baseline": 7,
+      "l1": 4,
+      "l2": 9
+    },
+    "winner_fractions_supervised": {
+      "baseline": 0.35,
+      "l1": 0.2,
+      "l2": 0.45
+    },
+    "mean_winning_score_baseline": 0.7568135714285714,
+    "mean_winning_score_l1": 0.69366325,
+    "mean_winning_score_l2": 0.6389772222222222,
+    "mean_winning_score_l3": null,
+    "winner_correct_majority": 18,
+    "winner_correct_majority_rate": 0.9,
+    "winner_correct_any": 19,
+    "winner_correct_any_rate": 0.95,
+    "winner_counts_agreement": {
+      "baseline": 10,
+      "l1": 3,
+      "l2": 7
+    },
+    "winner_fractions_agreement": {
+      "baseline": 0.5,
+      "l1": 0.15,
+      "l2": 0.35
+    },
+    "mean_baseline_score_ag_abs": 0.71321835,
+    "mean_winning_delta_l1": 0.24640600000000001,
+    "mean_winning_delta_l2": 0.2617578571428571,
+    "mean_winning_delta_l3": null,
+    "mean_all_l1_ag_delta": 0.0008690999999999994,
+    "mean_all_l2_ag_delta": 0.05562484999999999
+  },
+  "samples": [
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_0.jpg",
+      "question": "is there evidence of an aortic aneurysm?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "A",
+      "question_type": "closed",
+      "baseline_score": 0.0,
+      "best_l1_score": 0.0,
+      "best_l2_score": 0.0,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 0.0,
+      "winner_supervised_ca": 0.0,
+      "winner_supervised_correct": false,
+      "baseline_score_ag": 1.0,
+      "best_l1_score_ag_delta": 0.0,
+      "best_l2_score_ag_delta": 0.0,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        0,
+        512,
+        645
+      ],
+      "best_l1_correct_agreement": 0.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 1.0,
+      "best_l1_mean_entropy": 0.0,
+      "best_l2_bbox": [
+        0,
+        0,
+        256,
+        322
+      ],
+      "best_l2_correct_agreement": 0.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            645
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            645
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            645,
+            512,
+            1291
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            645,
+            1024,
+            1291
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.21017,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8221,
+          "mean_entropy": 0.4682
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            0,
+            256,
+            322
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            0,
+            512,
+            322
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.141455,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.885,
+          "mean_entropy": 0.3568
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            322,
+            256,
+            645
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            322,
+            512,
+            645
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_1.jpg",
+      "question": "is there airspace consolidation on the left side?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "A",
+      "question_type": "closed",
+      "baseline_score": 0.306637,
+      "best_l1_score": 0.731917,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        240,
+        0,
+        360,
+        125
+      ],
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.511062,
+      "best_l1_score_ag_delta": 0.220855,
+      "best_l2_score_ag_delta": 0.488938,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        240,
+        0,
+        360,
+        125
+      ],
+      "winner_agreement_score_delta": 0.488938,
+      "winners_match": true,
+      "best_l1_bbox": [
+        240,
+        0,
+        480,
+        251
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 0.7668,
+      "best_l1_mean_entropy": 0.5431,
+      "best_l2_bbox": [
+        240,
+        0,
+        360,
+        125
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            240,
+            251
+          ],
+          "region_score": 0.43915,
+          "region_score_ag": 0.220855,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 1,
+          "bbox": [
+            240,
+            0,
+            480,
+            251
+          ],
+          "region_score": 0.731917,
+          "region_score_ag": 0.220855,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            251,
+            240,
+            503
+          ],
+          "region_score": 0.609667,
+          "region_score_ag": 0.251023,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        },
+        {
+          "level": 1,
+          "bbox": [
+            240,
+            251,
+            480,
+            503
+          ],
+          "region_score": 0.398876,
+          "region_score_ag": 0.153731,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7006,
+          "mean_entropy": 0.6103
+        },
+        {
+          "level": 2,
+          "bbox": [
+            240,
+            0,
+            360,
+            125
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.488938,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            360,
+            0,
+            480,
+            125
+          ],
+          "region_score": 0.306637,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 2,
+          "bbox": [
+            240,
+            125,
+            360,
+            251
+          ],
+          "region_score": 0.304834,
+          "region_score_ag": 0.251023,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        },
+        {
+          "level": 2,
+          "bbox": [
+            360,
+            125,
+            480,
+            251
+          ],
+          "region_score": 0.408849,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_2.jpg",
+      "question": "is there any intraparenchymal abnormalities in the lung fields?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 1.0,
+      "best_l1_score": 1.0,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 1.0,
+      "best_l1_score_ag_delta": 0.0,
+      "best_l2_score_ag_delta": 0.0,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        512,
+        512,
+        1024
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 1.0,
+      "best_l1_mean_entropy": 0.0,
+      "best_l2_bbox": [
+        0,
+        512,
+        256,
+        768
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            512
+          ],
+          "region_score": 0.815126,
+          "region_score_ag": -0.184874,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8456,
+          "mean_entropy": 0.4302
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            512
+          ],
+          "region_score": 0.473898,
+          "region_score_ag": -0.21017,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.8221,
+          "mean_entropy": 0.4682
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            512,
+            512,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            512,
+            1024,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            512,
+            256,
+            768
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            512,
+            512,
+            768
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            768,
+            256,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            768,
+            512,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_3.jpg",
+      "question": "which side of the heart border is obscured?",
+      "mc_options": [
+        "right",
+        "anterior",
+        "inferior",
+        "left",
+        "posterior"
+      ],
+      "gt_letter": "A",
+      "question_type": "open",
+      "baseline_score": 0.11804,
+      "best_l1_score": 0.22039,
+      "best_l2_score": 0.232579,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        433,
+        0,
+        650,
+        244
+      ],
+      "winner_supervised_score": 0.232579,
+      "winner_supervised_ca": 0.6,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.590198,
+      "best_l1_score_ag_delta": -0.039223,
+      "best_l2_score_ag_delta": -0.202566,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": false,
+      "best_l1_bbox": [
+        433,
+        0,
+        867,
+        489
+      ],
+      "best_l1_correct_agreement": 0.4,
+      "best_l1_agreement": 0.6,
+      "best_l1_mean_confidence": 0.5842,
+      "best_l1_mean_entropy": 0.6789,
+      "best_l2_bbox": [
+        433,
+        0,
+        650,
+        244
+      ],
+      "best_l2_correct_agreement": 0.6,
+      "best_l2_agreement": 0.6,
+      "best_l2_mean_confidence": 0.4255,
+      "best_l2_mean_entropy": 1.0621,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            433,
+            489
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.059472,
+          "correct_agreement": 0.0,
+          "agreement": 0.8,
+          "mean_confidence": 0.5776,
+          "mean_entropy": 0.9678
+        },
+        {
+          "level": 1,
+          "bbox": [
+            433,
+            0,
+            867,
+            489
+          ],
+          "region_score": 0.22039,
+          "region_score_ag": -0.039223,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5842,
+          "mean_entropy": 0.6789
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            489,
+            433,
+            979
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.202567,
+          "correct_agreement": 0.0,
+          "agreement": 0.6,
+          "mean_confidence": 0.4255,
+          "mean_entropy": 1.0621
+        },
+        {
+          "level": 1,
+          "bbox": [
+            433,
+            489,
+            867,
+            979
+          ],
+          "region_score": 0.067593,
+          "region_score_ag": -0.252233,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.3721,
+          "mean_entropy": 1.0953
+        },
+        {
+          "level": 2,
+          "bbox": [
+            433,
+            0,
+            650,
+            244
+          ],
+          "region_score": 0.232579,
+          "region_score_ag": -0.202566,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.4255,
+          "mean_entropy": 1.0621
+        },
+        {
+          "level": 2,
+          "bbox": [
+            650,
+            0,
+            867,
+            244
+          ],
+          "region_score": 0.11848,
+          "region_score_ag": 0.002203,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6408,
+          "mean_entropy": 0.9007
+        },
+        {
+          "level": 2,
+          "bbox": [
+            433,
+            244,
+            650,
+            489
+          ],
+          "region_score": 0.097348,
+          "region_score_ag": -0.103459,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.5279,
+          "mean_entropy": 0.9305
+        },
+        {
+          "level": 2,
+          "bbox": [
+            650,
+            244,
+            867,
+            489
+          ],
+          "region_score": 0.176487,
+          "region_score_ag": -0.148981,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.4826,
+          "mean_entropy": 1.0229
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_4.jpg",
+      "question": "where are the kidney?",
+      "mc_options": [
+        "adjacent to the spleen",
+        "located in the abdomen",
+        "not seen here",
+        "behind the liver",
+        "in the pelvic cavity"
+      ],
+      "gt_letter": "C",
+      "question_type": "open",
+      "baseline_score": 0.265917,
+      "best_l1_score": 1.0,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "l1",
+      "winner_supervised_bbox": [
+        0,
+        0,
+        512,
+        328
+      ],
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.664792,
+      "best_l1_score_ag_delta": 0.335208,
+      "best_l2_score_ag_delta": 0.335208,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l1",
+      "winner_agreement_bbox": [
+        0,
+        0,
+        512,
+        328
+      ],
+      "winner_agreement_score_delta": 0.335208,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        0,
+        512,
+        328
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 1.0,
+      "best_l1_mean_entropy": 0.0,
+      "best_l2_bbox": [
+        0,
+        0,
+        256,
+        164
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            328
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.335208,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            328
+          ],
+          "region_score": 0.876868,
+          "region_score_ag": 0.212075,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.9012,
+          "mean_entropy": 0.3224
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            328,
+            512,
+            656
+          ],
+          "region_score": 0.78983,
+          "region_score_ag": 0.125038,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8221,
+          "mean_entropy": 0.4682
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            328,
+            1024,
+            656
+          ],
+          "region_score": 0.585534,
+          "region_score_ag": 0.067125,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            0,
+            256,
+            164
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.335208,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            0,
+            512,
+            164
+          ],
+          "region_score": 0.815127,
+          "region_score_ag": 0.150335,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8456,
+          "mean_entropy": 0.4302
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            164,
+            256,
+            328
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.335208,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            164,
+            512,
+            328
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.335208,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_5.jpg",
+      "question": "are the kidneys present in this image?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 0.27977,
+      "best_l1_score": 1.0,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "l1",
+      "winner_supervised_bbox": [
+        0,
+        0,
+        512,
+        328
+      ],
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.699426,
+      "best_l1_score_ag_delta": 0.300574,
+      "best_l2_score_ag_delta": 0.300574,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l1",
+      "winner_agreement_bbox": [
+        0,
+        0,
+        512,
+        328
+      ],
+      "winner_agreement_score_delta": 0.300574,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        0,
+        512,
+        328
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 1.0,
+      "best_l1_mean_entropy": 0.0,
+      "best_l2_bbox": [
+        0,
+        0,
+        256,
+        164
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            328
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.300574,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            328
+          ],
+          "region_score": 0.204425,
+          "region_score_ag": -0.188365,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            328,
+            512,
+            656
+          ],
+          "region_score": 0.152417,
+          "region_score_ag": 0.062658,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            328,
+            1024,
+            656
+          ],
+          "region_score": 0.188379,
+          "region_score_ag": -0.228478,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5,
+          "mean_entropy": 0.6931
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            0,
+            256,
+            164
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.300574,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            0,
+            512,
+            164
+          ],
+          "region_score": 0.110195,
+          "region_score_ag": -0.14845,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5842,
+          "mean_entropy": 0.6789
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            164,
+            256,
+            328
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.300574,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            164,
+            512,
+            328
+          ],
+          "region_score": 0.531834,
+          "region_score_ag": -0.034633,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.7006,
+          "mean_entropy": 0.6103
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_6.jpg",
+      "question": "is the colon more prominent on the patient's right or left side?",
+      "mc_options": [
+        "left",
+        "anterior",
+        "right",
+        "medial",
+        "posterior"
+      ],
+      "gt_letter": "A",
+      "question_type": "open",
+      "baseline_score": 0.146383,
+      "best_l1_score": 0.502618,
+      "best_l2_score": 0.282569,
+      "best_l3_score": null,
+      "winner_supervised": "l1",
+      "winner_supervised_bbox": [
+        354,
+        0,
+        708,
+        257
+      ],
+      "winner_supervised_score": 0.502618,
+      "winner_supervised_ca": 0.8,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.731917,
+      "best_l1_score_ag_delta": -0.103645,
+      "best_l2_score_ag_delta": -0.260969,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": false,
+      "best_l1_bbox": [
+        354,
+        0,
+        708,
+        257
+      ],
+      "best_l1_correct_agreement": 0.8,
+      "best_l1_agreement": 0.8,
+      "best_l1_mean_confidence": 0.6638,
+      "best_l1_mean_entropy": 0.6385,
+      "best_l2_bbox": [
+        354,
+        0,
+        531,
+        128
+      ],
+      "best_l2_correct_agreement": 0.6,
+      "best_l2_agreement": 0.6,
+      "best_l2_mean_confidence": 0.5,
+      "best_l2_mean_entropy": 0.6931,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            354,
+            257
+          ],
+          "region_score": 0.22039,
+          "region_score_ag": -0.180941,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5842,
+          "mean_entropy": 0.6789
+        },
+        {
+          "level": 1,
+          "bbox": [
+            354,
+            0,
+            708,
+            257
+          ],
+          "region_score": 0.502618,
+          "region_score_ag": -0.103645,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.6638,
+          "mean_entropy": 0.6385
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            257,
+            354,
+            514
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.141719,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 1,
+          "bbox": [
+            354,
+            257,
+            708,
+            514
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.067124,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7006,
+          "mean_entropy": 0.6103
+        },
+        {
+          "level": 2,
+          "bbox": [
+            354,
+            0,
+            531,
+            128
+          ],
+          "region_score": 0.282569,
+          "region_score_ag": -0.260969,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.5,
+          "mean_entropy": 0.6931
+        },
+        {
+          "level": 2,
+          "bbox": [
+            531,
+            0,
+            708,
+            128
+          ],
+          "region_score": 0.22039,
+          "region_score_ag": -0.180941,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5842,
+          "mean_entropy": 0.6789
+        },
+        {
+          "level": 2,
+          "bbox": [
+            354,
+            128,
+            531,
+            257
+          ],
+          "region_score": 0.204425,
+          "region_score_ag": -0.220855,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 2,
+          "bbox": [
+            531,
+            128,
+            708,
+            257
+          ],
+          "region_score": 0.102212,
+          "region_score_ag": -0.220855,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_7.jpg",
+      "question": "where is the colon most prominent from this view?",
+      "mc_options": [
+        "inferior",
+        "right",
+        "posterior",
+        "left",
+        "anterior"
+      ],
+      "gt_letter": "D",
+      "question_type": "open",
+      "baseline_score": 0.43915,
+      "best_l1_score": 0.234921,
+      "best_l2_score": 0.072587,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 0.43915,
+      "winner_supervised_ca": 0.6,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.731916,
+      "best_l1_score_ag_delta": -0.340381,
+      "best_l2_score_ag_delta": -0.368981,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        354,
+        0,
+        708,
+        257
+      ],
+      "best_l1_correct_agreement": 0.6,
+      "best_l1_agreement": 0.6,
+      "best_l1_mean_confidence": 0.4361,
+      "best_l1_mean_entropy": 1.2195,
+      "best_l2_bbox": [
+        354,
+        0,
+        531,
+        128
+      ],
+      "best_l2_correct_agreement": 0.2,
+      "best_l2_agreement": 0.4,
+      "best_l2_mean_confidence": 0.407,
+      "best_l2_mean_entropy": 1.2904,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            354,
+            257
+          ],
+          "region_score": 0.176486,
+          "region_score_ag": -0.2907,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.4826,
+          "mean_entropy": 1.0229
+        },
+        {
+          "level": 1,
+          "bbox": [
+            354,
+            0,
+            708,
+            257
+          ],
+          "region_score": 0.234921,
+          "region_score_ag": -0.340381,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.4361,
+          "mean_entropy": 1.2195
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            257,
+            354,
+            514
+          ],
+          "region_score": 0.176875,
+          "region_score_ag": -0.289729,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.4938,
+          "mean_entropy": 1.2476
+        },
+        {
+          "level": 1,
+          "bbox": [
+            354,
+            257,
+            708,
+            514
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.375583,
+          "correct_agreement": 0.0,
+          "agreement": 0.6,
+          "mean_confidence": 0.3987,
+          "mean_entropy": 1.2677
+        },
+        {
+          "level": 2,
+          "bbox": [
+            354,
+            0,
+            531,
+            128
+          ],
+          "region_score": 0.072587,
+          "region_score_ag": -0.368981,
+          "correct_agreement": 0.2,
+          "agreement": 0.4,
+          "mean_confidence": 0.407,
+          "mean_entropy": 1.2904
+        },
+        {
+          "level": 2,
+          "bbox": [
+            531,
+            0,
+            708,
+            128
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.371323,
+          "correct_agreement": 0.0,
+          "agreement": 0.4,
+          "mean_confidence": 0.4041,
+          "mean_entropy": 1.2842
+        },
+        {
+          "level": 2,
+          "bbox": [
+            354,
+            128,
+            531,
+            257
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.344286,
+          "correct_agreement": 0.0,
+          "agreement": 0.8,
+          "mean_confidence": 0.4255,
+          "mean_entropy": 1.0621
+        },
+        {
+          "level": 2,
+          "bbox": [
+            531,
+            128,
+            708,
+            257
+          ],
+          "region_score": 0.051176,
+          "region_score_ag": -0.476037,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.2934,
+          "mean_entropy": 1.5262
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_8.jpg",
+      "question": "is the heart size in this image smaller or larger than if the image was taken ap?",
+      "mc_options": [
+        "similar",
+        "normal size",
+        "larger",
+        "smaller",
+        "enlarged"
+      ],
+      "gt_letter": "D",
+      "question_type": "open",
+      "baseline_score": 0.229838,
+      "best_l1_score": 0.624644,
+      "best_l2_score": 0.650713,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        768,
+        0,
+        1024,
+        326
+      ],
+      "winner_supervised_score": 0.650713,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.574596,
+      "best_l1_score_ag_delta": 0.050048,
+      "best_l2_score_ag_delta": 0.076116,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        768,
+        0,
+        1024,
+        326
+      ],
+      "winner_agreement_score_delta": 0.076116,
+      "winners_match": true,
+      "best_l1_bbox": [
+        512,
+        0,
+        1024,
+        653
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 0.671,
+      "best_l1_mean_entropy": 0.8237,
+      "best_l2_bbox": [
+        768,
+        0,
+        1024,
+        326
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 0.6974,
+      "best_l2_mean_entropy": 0.7978,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            653
+          ],
+          "region_score": 0.249857,
+          "region_score_ag": 0.050047,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.671,
+          "mean_entropy": 0.8237
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            653
+          ],
+          "region_score": 0.624644,
+          "region_score_ag": 0.050048,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.671,
+          "mean_entropy": 0.8237
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            653,
+            512,
+            1307
+          ],
+          "region_score": 0.18658,
+          "region_score_ag": -0.108146,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5081,
+          "mean_entropy": 0.9774
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            653,
+            1024,
+            1307
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.0,
+          "agreement": 0.8,
+          "mean_confidence": 0.6212,
+          "mean_entropy": 0.8947
+        },
+        {
+          "level": 2,
+          "bbox": [
+            512,
+            0,
+            768,
+            326
+          ],
+          "region_score": 0.249918,
+          "region_score_ag": 0.050199,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.6727,
+          "mean_entropy": 0.8489
+        },
+        {
+          "level": 2,
+          "bbox": [
+            768,
+            0,
+            1024,
+            326
+          ],
+          "region_score": 0.650713,
+          "region_score_ag": 0.076116,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.6974,
+          "mean_entropy": 0.7978
+        },
+        {
+          "level": 2,
+          "bbox": [
+            512,
+            326,
+            768,
+            653
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.097416,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.5187,
+          "mean_entropy": 0.9539
+        },
+        {
+          "level": 2,
+          "bbox": [
+            768,
+            326,
+            1024,
+            653
+          ],
+          "region_score": 0.53377,
+          "region_score_ag": 0.092616,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.7148,
+          "mean_entropy": 0.7944
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_9.jpg",
+      "question": "is the liver visible in the image?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 0.167601,
+      "best_l1_score": 0.354119,
+      "best_l2_score": 0.457251,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        574,
+        0,
+        766,
+        227
+      ],
+      "winner_supervised_score": 0.457251,
+      "winner_supervised_ca": 0.6,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.838004,
+      "best_l1_score_ag_delta": -0.247806,
+      "best_l2_score_ag_delta": -0.07592,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": false,
+      "best_l1_bbox": [
+        383,
+        0,
+        766,
+        455
+      ],
+      "best_l1_correct_agreement": 0.6,
+      "best_l1_agreement": 0.6,
+      "best_l1_mean_confidence": 0.6249,
+      "best_l1_mean_entropy": 0.6616,
+      "best_l2_bbox": [
+        574,
+        0,
+        766,
+        227
+      ],
+      "best_l2_correct_agreement": 0.6,
+      "best_l2_agreement": 0.6,
+      "best_l2_mean_confidence": 0.7958,
+      "best_l2_mean_entropy": 0.5061,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            383,
+            455
+          ],
+          "region_score": 0.163025,
+          "region_score_ag": -0.022878,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.8456,
+          "mean_entropy": 0.4302
+        },
+        {
+          "level": 1,
+          "bbox": [
+            383,
+            0,
+            766,
+            455
+          ],
+          "region_score": 0.354119,
+          "region_score_ag": -0.247806,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            455,
+            383,
+            910
+          ],
+          "region_score": 0.139885,
+          "region_score_ag": -0.138577,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.7351,
+          "mean_entropy": 0.5782
+        },
+        {
+          "level": 1,
+          "bbox": [
+            383,
+            455,
+            766,
+            910
+          ],
+          "region_score": 0.167601,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.8665,
+          "mean_entropy": 0.3929
+        },
+        {
+          "level": 2,
+          "bbox": [
+            383,
+            0,
+            574,
+            227
+          ],
+          "region_score": 0.204425,
+          "region_score_ag": -0.326943,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 2,
+          "bbox": [
+            574,
+            0,
+            766,
+            227
+          ],
+          "region_score": 0.457251,
+          "region_score_ag": -0.07592,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        },
+        {
+          "level": 2,
+          "bbox": [
+            383,
+            227,
+            574,
+            455
+          ],
+          "region_score": 0.376963,
+          "region_score_ag": -0.209733,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.6638,
+          "mean_entropy": 0.6385
+        },
+        {
+          "level": 2,
+          "bbox": [
+            574,
+            227,
+            766,
+            455
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.07592,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_10.jpg",
+      "question": "is this an axial image?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "A",
+      "question_type": "closed",
+      "baseline_score": 1.0,
+      "best_l1_score": 0.559542,
+      "best_l2_score": 0.43915,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 1.0,
+      "best_l1_score_ag_delta": -0.300573,
+      "best_l2_score_ag_delta": -0.268084,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        222,
+        283,
+        444,
+        566
+      ],
+      "best_l1_correct_agreement": 0.8,
+      "best_l1_agreement": 0.8,
+      "best_l1_mean_confidence": 0.7351,
+      "best_l1_mean_entropy": 0.5782,
+      "best_l2_bbox": [
+        333,
+        283,
+        444,
+        424
+      ],
+      "best_l2_correct_agreement": 0.6,
+      "best_l2_agreement": 0.6,
+      "best_l2_mean_confidence": 0.7668,
+      "best_l2_mean_entropy": 0.5431,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            222,
+            283
+          ],
+          "region_score": 0.204425,
+          "region_score_ag": -0.488938,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 1,
+          "bbox": [
+            222,
+            0,
+            444,
+            283
+          ],
+          "region_score": 0.398875,
+          "region_score_ag": -0.335208,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7006,
+          "mean_entropy": 0.6103
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            283,
+            222,
+            566
+          ],
+          "region_score": 0.472158,
+          "region_score_ag": -0.409802,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 1,
+          "bbox": [
+            222,
+            283,
+            444,
+            566
+          ],
+          "region_score": 0.559542,
+          "region_score_ag": -0.300573,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.7351,
+          "mean_entropy": 0.5782
+        },
+        {
+          "level": 2,
+          "bbox": [
+            222,
+            283,
+            333,
+            424
+          ],
+          "region_score": 0.0,
+          "region_score_ag": -0.21017,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8221,
+          "mean_entropy": 0.4682
+        },
+        {
+          "level": 2,
+          "bbox": [
+            333,
+            283,
+            444,
+            424
+          ],
+          "region_score": 0.43915,
+          "region_score_ag": -0.268084,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 2,
+          "bbox": [
+            222,
+            424,
+            333,
+            566
+          ],
+          "region_score": 0.22039,
+          "region_score_ag": -0.449024,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5842,
+          "mean_entropy": 0.6789
+        },
+        {
+          "level": 2,
+          "bbox": [
+            333,
+            424,
+            444,
+            566
+          ],
+          "region_score": 0.306637,
+          "region_score_ag": -0.488938,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_11.jpg",
+      "question": "what structures are visible in this image?",
+      "mc_options": [
+        "skull \tcartilage and medulla",
+        "ribcage  tendon and cerebellum",
+        "jawbone  muscle and thalamus",
+        "pelvis  fascia and hippocampus",
+        "spine  ligaments and cortex"
+      ],
+      "gt_letter": "A",
+      "question_type": "open",
+      "baseline_score": 0.0,
+      "best_l1_score": 0.202706,
+      "best_l2_score": 0.307927,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        111,
+        283,
+        222,
+        424
+      ],
+      "winner_supervised_score": 0.307927,
+      "winner_supervised_ca": 0.6,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.35562,
+      "best_l1_score_ag_delta": 0.151144,
+      "best_l2_score_ag_delta": 0.157591,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        111,
+        283,
+        222,
+        424
+      ],
+      "winner_agreement_score_delta": 0.157591,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        283,
+        222,
+        566
+      ],
+      "best_l1_correct_agreement": 0.4,
+      "best_l1_agreement": 0.4,
+      "best_l1_mean_confidence": 0.5523,
+      "best_l1_mean_entropy": 0.9839,
+      "best_l2_bbox": [
+        111,
+        283,
+        222,
+        424
+      ],
+      "best_l2_correct_agreement": 0.6,
+      "best_l2_agreement": 0.6,
+      "best_l2_mean_confidence": 0.5675,
+      "best_l2_mean_entropy": 1.1409,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            222,
+            283
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.551827,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.9276,
+          "mean_entropy": 0.2597
+        },
+        {
+          "level": 1,
+          "bbox": [
+            222,
+            0,
+            444,
+            283
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.551827,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.9276,
+          "mean_entropy": 0.2597
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            283,
+            222,
+            566
+          ],
+          "region_score": 0.202706,
+          "region_score_ag": 0.151144,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.5523,
+          "mean_entropy": 0.9839
+        },
+        {
+          "level": 1,
+          "bbox": [
+            222,
+            283,
+            444,
+            566
+          ],
+          "region_score": 0.074441,
+          "region_score_ag": 0.016585,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.4092,
+          "mean_entropy": 1.0777
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            283,
+            111,
+            424
+          ],
+          "region_score": 0.116973,
+          "region_score_ag": 0.229246,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6394,
+          "mean_entropy": 1.0177
+        },
+        {
+          "level": 2,
+          "bbox": [
+            111,
+            283,
+            222,
+            424
+          ],
+          "region_score": 0.307927,
+          "region_score_ag": 0.157591,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.5675,
+          "mean_entropy": 1.1409
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            424,
+            111,
+            566
+          ],
+          "region_score": 0.248301,
+          "region_score_ag": 0.265132,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.6643,
+          "mean_entropy": 0.7825
+        },
+        {
+          "level": 2,
+          "bbox": [
+            111,
+            424,
+            222,
+            566
+          ],
+          "region_score": 0.127703,
+          "region_score_ag": 0.282896,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6858,
+          "mean_entropy": 0.823
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_12.jpg",
+      "question": "what is this lucency amid densities in the right lung?",
+      "mc_options": [
+        "the right hilum",
+        "the right diaphragm",
+        "the right bronchus",
+        "the right upper lobe",
+        "the right pleura"
+      ],
+      "gt_letter": "C",
+      "question_type": "open",
+      "baseline_score": 0.209973,
+      "best_l1_score": 0.157412,
+      "best_l2_score": 0.24378,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        720,
+        0,
+        960,
+        300
+      ],
+      "winner_supervised_score": 0.24378,
+      "winner_supervised_ca": 0.4,
+      "winner_supervised_correct": false,
+      "baseline_score_ag": 0.349956,
+      "best_l1_score_ag_delta": 0.043575,
+      "best_l2_score_ag_delta": 0.259494,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        720,
+        0,
+        960,
+        300
+      ],
+      "winner_agreement_score_delta": 0.259494,
+      "winners_match": true,
+      "best_l1_bbox": [
+        480,
+        0,
+        960,
+        600
+      ],
+      "best_l1_correct_agreement": 0.4,
+      "best_l1_agreement": 0.4,
+      "best_l1_mean_confidence": 0.4325,
+      "best_l1_mean_entropy": 1.0753,
+      "best_l2_bbox": [
+        720,
+        0,
+        960,
+        300
+      ],
+      "best_l2_correct_agreement": 0.4,
+      "best_l2_agreement": 0.4,
+      "best_l2_mean_confidence": 0.6577,
+      "best_l2_mean_entropy": 0.875,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            480,
+            600
+          ],
+          "region_score": 0.127703,
+          "region_score_ag": 0.288561,
+          "correct_agreement": 0.2,
+          "agreement": 0.4,
+          "mean_confidence": 0.6858,
+          "mean_entropy": 0.823
+        },
+        {
+          "level": 1,
+          "bbox": [
+            480,
+            0,
+            960,
+            600
+          ],
+          "region_score": 0.157412,
+          "region_score_ag": 0.043575,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.4325,
+          "mean_entropy": 1.0753
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            600,
+            480,
+            1200
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.293416,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.6883,
+          "mean_entropy": 0.7782
+        },
+        {
+          "level": 1,
+          "bbox": [
+            480,
+            600,
+            960,
+            1200
+          ],
+          "region_score": 0.080369,
+          "region_score_ag": 0.051889,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.4404,
+          "mean_entropy": 1.0433
+        },
+        {
+          "level": 2,
+          "bbox": [
+            480,
+            0,
+            720,
+            300
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.2634,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.6603,
+          "mean_entropy": 0.8482
+        },
+        {
+          "level": 2,
+          "bbox": [
+            720,
+            0,
+            960,
+            300
+          ],
+          "region_score": 0.24378,
+          "region_score_ag": 0.259494,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.6577,
+          "mean_entropy": 0.875
+        },
+        {
+          "level": 2,
+          "bbox": [
+            480,
+            300,
+            720,
+            600
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.384451,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7789,
+          "mean_entropy": 0.6808
+        },
+        {
+          "level": 2,
+          "bbox": [
+            720,
+            300,
+            960,
+            600
+          ],
+          "region_score": 0.098299,
+          "region_score_ag": 0.141541,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.5426,
+          "mean_entropy": 1.1231
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_13.jpg",
+      "question": "is there evidence of any abnormalities of the lung parenchyma?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 1.0,
+      "best_l1_score": 1.0,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 1.0,
+      "best_l1_score_ag_delta": 0.0,
+      "best_l2_score_ag_delta": 0.0,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        512,
+        512,
+        1024
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 1.0,
+      "best_l1_mean_entropy": 0.0,
+      "best_l2_bbox": [
+        0,
+        512,
+        256,
+        768
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            512
+          ],
+          "region_score": 0.838005,
+          "region_score_ag": -0.161995,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8665,
+          "mean_entropy": 0.3929
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            512
+          ],
+          "region_score": 0.699427,
+          "region_score_ag": -0.300573,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7351,
+          "mean_entropy": 0.5782
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            512,
+            512,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            512,
+            1024,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            512,
+            256,
+            768
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            512,
+            512,
+            768
+          ],
+          "region_score": 0.686836,
+          "region_score_ag": -0.141455,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.885,
+          "mean_entropy": 0.3568
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            768,
+            256,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            768,
+            512,
+            1024
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_14.jpg",
+      "question": "are the temporal bones fractured?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 0.502803,
+      "best_l1_score": 0.838004,
+      "best_l2_score": 0.858545,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        270,
+        0,
+        360,
+        109
+      ],
+      "winner_supervised_score": 0.858545,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.838005,
+      "best_l1_score_ag_delta": -0.0,
+      "best_l2_score_ag_delta": 0.020541,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        270,
+        0,
+        360,
+        109
+      ],
+      "winner_agreement_score_delta": 0.020541,
+      "winners_match": true,
+      "best_l1_bbox": [
+        180,
+        0,
+        360,
+        218
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 0.8665,
+      "best_l1_mean_entropy": 0.3929,
+      "best_l2_bbox": [
+        270,
+        0,
+        360,
+        109
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 0.885,
+      "best_l2_mean_entropy": 0.3568,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            180,
+            218
+          ],
+          "region_score": 0.457251,
+          "region_score_ag": -0.07592,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        },
+        {
+          "level": 1,
+          "bbox": [
+            180,
+            0,
+            360,
+            218
+          ],
+          "region_score": 0.838004,
+          "region_score_ag": -0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.8665,
+          "mean_entropy": 0.3929
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            218,
+            180,
+            437
+          ],
+          "region_score": 0.09419,
+          "region_score_ag": -0.367057,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5,
+          "mean_entropy": 0.6931
+        },
+        {
+          "level": 1,
+          "bbox": [
+            180,
+            218,
+            360,
+            437
+          ],
+          "region_score": 0.354119,
+          "region_score_ag": -0.247807,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 2,
+          "bbox": [
+            180,
+            0,
+            270,
+            109
+          ],
+          "region_score": 0.652101,
+          "region_score_ag": -0.022878,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.8456,
+          "mean_entropy": 0.4302
+        },
+        {
+          "level": 2,
+          "bbox": [
+            270,
+            0,
+            360,
+            109
+          ],
+          "region_score": 0.858545,
+          "region_score_ag": 0.020541,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.885,
+          "mean_entropy": 0.3568
+        },
+        {
+          "level": 2,
+          "bbox": [
+            180,
+            109,
+            270,
+            218
+          ],
+          "region_score": 0.102212,
+          "region_score_ag": -0.326943,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 2,
+          "bbox": [
+            270,
+            109,
+            360,
+            218
+          ],
+          "region_score": 0.251309,
+          "region_score_ag": -0.209733,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.6638,
+          "mean_entropy": 0.6385
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_15.jpg",
+      "question": "is there consolidation in the lungs?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 0.09419,
+      "best_l1_score": 0.236079,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        0,
+        0,
+        190,
+        157
+      ],
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.470948,
+      "best_l1_score_ag_delta": 0.11925,
+      "best_l2_score_ag_delta": 0.529052,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        0,
+        0,
+        190,
+        157
+      ],
+      "winner_agreement_score_delta": 0.529052,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        0,
+        381,
+        315
+      ],
+      "best_l1_correct_agreement": 0.4,
+      "best_l1_agreement": 0.6,
+      "best_l1_mean_confidence": 0.6249,
+      "best_l1_mean_entropy": 0.6616,
+      "best_l2_bbox": [
+        0,
+        0,
+        190,
+        157
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            381,
+            315
+          ],
+          "region_score": 0.236079,
+          "region_score_ag": 0.11925,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 1,
+          "bbox": [
+            381,
+            0,
+            762,
+            315
+          ],
+          "region_score": 0.102212,
+          "region_score_ag": 0.040114,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            315,
+            381,
+            630
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.529052,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            381,
+            315,
+            762,
+            630
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.529052,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            0,
+            190,
+            157
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.529052,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            190,
+            0,
+            381,
+            157
+          ],
+          "region_score": 0.43915,
+          "region_score_ag": 0.260969,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            157,
+            190,
+            315
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.529052,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            190,
+            157,
+            381,
+            315
+          ],
+          "region_score": 0.11804,
+          "region_score_ag": 0.119251,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_16.jpg",
+      "question": "what type of image is this?",
+      "mc_options": [
+        "plain film x-ray",
+        "magnetic resonance imaging",
+        "computed tomography scan",
+        "positron emission tomography",
+        "ultrasound examination"
+      ],
+      "gt_letter": "A",
+      "question_type": "open",
+      "baseline_score": 1.0,
+      "best_l1_score": 1.0,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 1.0,
+      "best_l1_score_ag_delta": 0.0,
+      "best_l2_score_ag_delta": 0.0,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        0,
+        512,
+        515
+      ],
+      "best_l1_correct_agreement": 1.0,
+      "best_l1_agreement": 1.0,
+      "best_l1_mean_confidence": 1.0,
+      "best_l1_mean_entropy": 0.0,
+      "best_l2_bbox": [
+        0,
+        0,
+        256,
+        257
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            515
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            515
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            515,
+            512,
+            1030
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            515,
+            1024,
+            1030
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            0,
+            256,
+            257
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            0,
+            512,
+            257
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            257,
+            256,
+            515
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            257,
+            512,
+            515
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.0,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_17.jpg",
+      "question": "what are these opacities anterior to the right kidney?",
+      "mc_options": [
+        "the ascending colon",
+        "the right ureter",
+        "the right adrenal gland",
+        "the right lobe of the liver",
+        "the small intestines"
+      ],
+      "gt_letter": "E",
+      "question_type": "open",
+      "baseline_score": 0.139982,
+      "best_l1_score": 0.272035,
+      "best_l2_score": 0.119005,
+      "best_l3_score": null,
+      "winner_supervised": "l1",
+      "winner_supervised_bbox": [
+        0,
+        278,
+        512,
+        557
+      ],
+      "winner_supervised_score": 0.272035,
+      "winner_supervised_ca": 0.6,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.349955,
+      "best_l1_score_ag_delta": 0.103436,
+      "best_l2_score_ag_delta": -0.052442,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l1",
+      "winner_agreement_bbox": [
+        0,
+        278,
+        512,
+        557
+      ],
+      "winner_agreement_score_delta": 0.103436,
+      "winners_match": true,
+      "best_l1_bbox": [
+        0,
+        278,
+        512,
+        557
+      ],
+      "best_l1_correct_agreement": 0.6,
+      "best_l1_agreement": 0.6,
+      "best_l1_mean_confidence": 0.4968,
+      "best_l1_mean_entropy": 1.0419,
+      "best_l2_bbox": [
+        0,
+        417,
+        256,
+        557
+      ],
+      "best_l2_correct_agreement": 0.4,
+      "best_l2_agreement": 0.4,
+      "best_l2_mean_confidence": 0.3353,
+      "best_l2_mean_entropy": 1.3439,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            512,
+            278
+          ],
+          "region_score": 0.087437,
+          "region_score_ag": 0.087228,
+          "correct_agreement": 0.2,
+          "agreement": 0.6,
+          "mean_confidence": 0.4762,
+          "mean_entropy": 0.9765
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            0,
+            1024,
+            278
+          ],
+          "region_score": 0.117279,
+          "region_score_ag": 0.236442,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6342,
+          "mean_entropy": 0.8987
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            278,
+            512,
+            557
+          ],
+          "region_score": 0.272035,
+          "region_score_ag": 0.103436,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.4968,
+          "mean_entropy": 1.0419
+        },
+        {
+          "level": 1,
+          "bbox": [
+            512,
+            278,
+            1024,
+            557
+          ],
+          "region_score": 0.246916,
+          "region_score_ag": 0.061571,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.4584,
+          "mean_entropy": 1.2191
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            278,
+            256,
+            417
+          ],
+          "region_score": 0.067243,
+          "region_score_ag": -0.013741,
+          "correct_agreement": 0.2,
+          "agreement": 0.4,
+          "mean_confidence": 0.3849,
+          "mean_entropy": 1.5082
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            278,
+            512,
+            417
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.064873,
+          "correct_agreement": 0.0,
+          "agreement": 0.8,
+          "mean_confidence": 0.4537,
+          "mean_entropy": 1.0223
+        },
+        {
+          "level": 2,
+          "bbox": [
+            0,
+            417,
+            256,
+            557
+          ],
+          "region_score": 0.119005,
+          "region_score_ag": -0.052442,
+          "correct_agreement": 0.4,
+          "agreement": 0.4,
+          "mean_confidence": 0.3353,
+          "mean_entropy": 1.3439
+        },
+        {
+          "level": 2,
+          "bbox": [
+            256,
+            417,
+            512,
+            557
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.128401,
+          "correct_agreement": 0.0,
+          "agreement": 0.8,
+          "mean_confidence": 0.5317,
+          "mean_entropy": 1.1959
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_18.jpg",
+      "question": "are the brain gyri atrophied?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 0.858545,
+      "best_l1_score": 0.44078,
+      "best_l2_score": 0.731917,
+      "best_l3_score": null,
+      "winner_supervised": "baseline",
+      "winner_supervised_bbox": null,
+      "winner_supervised_score": 0.858545,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.858545,
+      "best_l1_score_ag_delta": -0.30757,
+      "best_l2_score_ag_delta": -0.126628,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "baseline",
+      "winner_agreement_bbox": null,
+      "winner_agreement_score_delta": 0.0,
+      "winners_match": true,
+      "best_l1_bbox": [
+        148,
+        0,
+        296,
+        168
+      ],
+      "best_l1_correct_agreement": 0.8,
+      "best_l1_agreement": 0.8,
+      "best_l1_mean_confidence": 0.5842,
+      "best_l1_mean_entropy": 0.6789,
+      "best_l2_bbox": [
+        222,
+        0,
+        296,
+        84
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 0.7668,
+      "best_l2_mean_entropy": 0.5431,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            148,
+            168
+          ],
+          "region_score": 0.102212,
+          "region_score_ag": -0.347484,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 1,
+          "bbox": [
+            148,
+            0,
+            296,
+            168
+          ],
+          "region_score": 0.44078,
+          "region_score_ag": -0.30757,
+          "correct_agreement": 0.8,
+          "agreement": 0.8,
+          "mean_confidence": 0.5842,
+          "mean_entropy": 0.6789
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            168,
+            148,
+            336
+          ],
+          "region_score": 0.376963,
+          "region_score_ag": -0.230273,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.6638,
+          "mean_entropy": 0.6385
+        },
+        {
+          "level": 1,
+          "bbox": [
+            148,
+            168,
+            296,
+            336
+          ],
+          "region_score": 0.236079,
+          "region_score_ag": -0.268347,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 2,
+          "bbox": [
+            148,
+            0,
+            222,
+            84
+          ],
+          "region_score": 0.204425,
+          "region_score_ag": -0.347484,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        },
+        {
+          "level": 2,
+          "bbox": [
+            222,
+            0,
+            296,
+            84
+          ],
+          "region_score": 0.731917,
+          "region_score_ag": -0.126628,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 2,
+          "bbox": [
+            148,
+            84,
+            222,
+            168
+          ],
+          "region_score": 0.11804,
+          "region_score_ag": -0.268347,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 2,
+          "bbox": [
+            222,
+            84,
+            296,
+            168
+          ],
+          "region_score": 0.102212,
+          "region_score_ag": -0.347483,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.5424,
+          "mean_entropy": 0.6895
+        }
+      ]
+    },
+    {
+      "image_path": "02_data/VQA-Rad/vqarad_images/test_19.jpg",
+      "question": "is the anatomy of the brain gyri affected?",
+      "mc_options": [
+        "yes",
+        "no"
+      ],
+      "gt_letter": "B",
+      "question_type": "closed",
+      "baseline_score": 0.139885,
+      "best_l1_score": 0.146383,
+      "best_l2_score": 1.0,
+      "best_l3_score": null,
+      "winner_supervised": "l2",
+      "winner_supervised_bbox": [
+        161,
+        241,
+        242,
+        322
+      ],
+      "winner_supervised_score": 1.0,
+      "winner_supervised_ca": 1.0,
+      "winner_supervised_correct": true,
+      "baseline_score_ag": 0.699427,
+      "best_l1_score_ag_delta": 0.03249,
+      "best_l2_score_ag_delta": 0.300573,
+      "best_l3_score_ag_delta": null,
+      "winner_agreement": "l2",
+      "winner_agreement_bbox": [
+        161,
+        241,
+        242,
+        322
+      ],
+      "winner_agreement_score_delta": 0.300573,
+      "winners_match": true,
+      "best_l1_bbox": [
+        161,
+        161,
+        323,
+        322
+      ],
+      "best_l1_correct_agreement": 0.2,
+      "best_l1_agreement": 0.8,
+      "best_l1_mean_confidence": 0.7668,
+      "best_l1_mean_entropy": 0.5431,
+      "best_l2_bbox": [
+        161,
+        241,
+        242,
+        322
+      ],
+      "best_l2_correct_agreement": 1.0,
+      "best_l2_agreement": 1.0,
+      "best_l2_mean_confidence": 1.0,
+      "best_l2_mean_entropy": 0.0,
+      "best_l3_bbox": null,
+      "best_l3_correct_agreement": null,
+      "best_l3_agreement": null,
+      "best_l3_mean_confidence": null,
+      "best_l3_mean_entropy": null,
+      "all_patches": [
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            0,
+            161,
+            161
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.062657,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 0.7958,
+          "mean_entropy": 0.5061
+        },
+        {
+          "level": 1,
+          "bbox": [
+            161,
+            0,
+            323,
+            161
+          ],
+          "region_score": 0.0,
+          "region_score_ag": 0.300573,
+          "correct_agreement": 0.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 1,
+          "bbox": [
+            0,
+            161,
+            161,
+            322
+          ],
+          "region_score": 0.11804,
+          "region_score_ag": -0.109229,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.6249,
+          "mean_entropy": 0.6616
+        },
+        {
+          "level": 1,
+          "bbox": [
+            161,
+            161,
+            323,
+            322
+          ],
+          "region_score": 0.146383,
+          "region_score_ag": 0.03249,
+          "correct_agreement": 0.2,
+          "agreement": 0.8,
+          "mean_confidence": 0.7668,
+          "mean_entropy": 0.5431
+        },
+        {
+          "level": 2,
+          "bbox": [
+            161,
+            161,
+            242,
+            241
+          ],
+          "region_score": 0.326051,
+          "region_score_ag": 0.115699,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.8456,
+          "mean_entropy": 0.4302
+        },
+        {
+          "level": 2,
+          "bbox": [
+            242,
+            161,
+            323,
+            241
+          ],
+          "region_score": 0.279771,
+          "region_score_ag": 0.0,
+          "correct_agreement": 0.4,
+          "agreement": 0.6,
+          "mean_confidence": 0.7351,
+          "mean_entropy": 0.5782
+        },
+        {
+          "level": 2,
+          "bbox": [
+            161,
+            241,
+            242,
+            322
+          ],
+          "region_score": 1.0,
+          "region_score_ag": 0.300573,
+          "correct_agreement": 1.0,
+          "agreement": 1.0,
+          "mean_confidence": 1.0,
+          "mean_entropy": 0.0
+        },
+        {
+          "level": 2,
+          "bbox": [
+            242,
+            241,
+            323,
+            322
+          ],
+          "region_score": 0.473898,
+          "region_score_ag": 0.090403,
+          "correct_agreement": 0.6,
+          "agreement": 0.6,
+          "mean_confidence": 0.8221,
+          "mean_entropy": 0.4682
+        }
+      ]
+    }
+  ]
+}
