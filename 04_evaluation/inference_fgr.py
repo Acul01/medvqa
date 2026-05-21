@@ -240,12 +240,12 @@ def main() -> None:
 
         base_path = args.base_model or DEFAULT_MODEL_PATH
         base = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            base_path, torch_dtype=torch.float32, device_map="auto"
+            base_path, torch_dtype=torch.bfloat16, device_map="auto"
         )
         model = PeftModel.from_pretrained(base, args.model_path).merge_and_unload()
     else:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            args.model_path, torch_dtype=torch.float32, device_map="auto"
+            args.model_path, torch_dtype=torch.bfloat16, device_map="auto"
         )
     model.eval()
 
