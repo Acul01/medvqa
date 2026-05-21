@@ -136,7 +136,7 @@ def main() -> None:
         # Run baseline + L1 + L2.
         # global_threshold=0.0 disables the evidence gate so L2 always runs,
         # ensuring every sample contributes to all three score columns.
-        patches, _, baseline_score = run_hierarchical_perturbation(
+        patches, _, baseline_score, baseline_score_ag = run_hierarchical_perturbation(
             model,
             processor,
             image,
@@ -160,27 +160,48 @@ def main() -> None:
         best_l2 = max(l2_patches, key=lambda p: p.importance) if l2_patches else None
         best_l3 = max(l3_patches, key=lambda p: p.importance) if l3_patches else None
 
+        # Supervised scores (correct_agreement-based)
         best_l1_score = best_l1.importance if best_l1 else 0.0
         best_l2_score = best_l2.importance if best_l2 else 0.0
         best_l3_score = best_l3.importance if best_l3 else 0.0
 
-        scores = {"baseline": baseline_score, "l1": best_l1_score, "l2": best_l2_score}
-        if best_l3 is not None:
-            scores["l3"] = best_l3_score
-        winner = max(scores, key=lambda k: scores[k])
+        scores_sup = {"baseline": baseline_score, "l1": best_l1_score, "l2": best_l2_score}
+        if best_l3:
+            scores_sup["l3"] = best_l3_score
+        winner_supervised = max(scores_sup, key=lambda k: scores_sup[k])
+
+        # Unsupervised scores (plurality agreement-based — no GT needed)
+        best_l1_score_ag = best_l1.importance_agreement if best_l1 else 0.0
+        best_l2_score_ag = best_l2.importance_agreement if best_l2 else 0.0
+        best_l3_score_ag = best_l3.importance_agreement if best_l3 else 0.0
+
+        scores_ag = {"baseline": baseline_score_ag, "l1": best_l1_score_ag, "l2": best_l2_score_ag}
+        if best_l3:
+            scores_ag["l3"] = best_l3_score_ag
+        winner_agreement = max(scores_ag, key=lambda k: scores_ag[k])
+
+        winners_match = winner_supervised == winner_agreement
 
         results.append({
             "image_path":    sample.image_path,
             "question":      sample.question,
             "gt_letter":     gt_letter,
             "question_type": sample.question_type or "unknown",
-            # Scores
+            # ── Supervised scores (correct_agreement × conf × (1−H)) ──────────
             "baseline_score": round(baseline_score, 6),
             "best_l1_score":  round(best_l1_score, 6),
             "best_l2_score":  round(best_l2_score, 6),
             "best_l3_score":  round(best_l3_score, 6) if best_l3 else None,
-            "winner":         winner,
-            # Best-patch details
+            "winner_supervised": winner_supervised,
+            # ── Unsupervised scores (agreement × conf × (1−H)) ───────────────
+            "baseline_score_ag": round(baseline_score_ag, 6),
+            "best_l1_score_ag":  round(best_l1_score_ag, 6),
+            "best_l2_score_ag":  round(best_l2_score_ag, 6),
+            "best_l3_score_ag":  round(best_l3_score_ag, 6) if best_l3 else None,
+            "winner_agreement":  winner_agreement,
+            # ── Concordance ───────────────────────────────────────────────────
+            "winners_match": winners_match,
+            # ── Best-patch details ────────────────────────────────────────────
             "best_l1_bbox":              list(best_l1.bbox) if best_l1 else None,
             "best_l1_correct_agreement": round(best_l1.correct_agreement, 4) if best_l1 else None,
             "best_l1_agreement":         round(best_l1.agreement, 4) if best_l1 else None,
@@ -196,16 +217,17 @@ def main() -> None:
             "best_l3_agreement":         round(best_l3.agreement, 4) if best_l3 else None,
             "best_l3_mean_confidence":   round(best_l3.mean_confidence, 4) if best_l3 else None,
             "best_l3_mean_entropy":      round(best_l3.mean_entropy, 4) if best_l3 else None,
-            # All patches (for deeper inspection)
+            # ── All patches ───────────────────────────────────────────────────
             "all_patches": [
                 {
-                    "level":             p.level,
-                    "bbox":              list(p.bbox),
-                    "region_score":      round(p.importance, 6),
-                    "correct_agreement": round(p.correct_agreement, 4),
-                    "agreement":         round(p.agreement, 4),
-                    "mean_confidence":   round(p.mean_confidence, 4),
-                    "mean_entropy":      round(p.mean_entropy, 4),
+                    "level":                p.level,
+                    "bbox":                 list(p.bbox),
+                    "region_score":         round(p.importance, 6),
+                    "region_score_ag":      round(p.importance_agreement, 6),
+                    "correct_agreement":    round(p.correct_agreement, 4),
+                    "agreement":            round(p.agreement, 4),
+                    "mean_confidence":      round(p.mean_confidence, 4),
+                    "mean_entropy":         round(p.mean_entropy, 4),
                 }
                 for p in patches
             ],
@@ -215,44 +237,65 @@ def main() -> None:
     total = len(results)
     has_l3 = any(r.get("best_l3_bbox") is not None for r in results)
 
-    counts = {"baseline": 0, "l1": 0, "l2": 0}
+    counts_sup = {"baseline": 0, "l1": 0, "l2": 0}
+    counts_ag  = {"baseline": 0, "l1": 0, "l2": 0}
     if has_l3:
-        counts["l3"] = 0
+        counts_sup["l3"] = 0
+        counts_ag["l3"]  = 0
+    concordant = 0
     for r in results:
-        w = r["winner"]
-        counts[w] = counts.get(w, 0) + 1
+        counts_sup[r["winner_supervised"]] = counts_sup.get(r["winner_supervised"], 0) + 1
+        counts_ag[r["winner_agreement"]]   = counts_ag.get(r["winner_agreement"],   0) + 1
+        if r["winners_match"]:
+            concordant += 1
 
-    mean_baseline = _safe_div(sum(r["baseline_score"] for r in results), total)
-    mean_l1       = _safe_div(sum(r["best_l1_score"]  for r in results), total)
-    mean_l2       = _safe_div(sum(r["best_l2_score"]  for r in results), total)
-    mean_l3       = _safe_div(
+    concordance_rate = _safe_div(concordant, total)
+
+    mean_baseline    = _safe_div(sum(r["baseline_score"] for r in results), total)
+    mean_l1          = _safe_div(sum(r["best_l1_score"]  for r in results), total)
+    mean_l2          = _safe_div(sum(r["best_l2_score"]  for r in results), total)
+    mean_l3          = _safe_div(
         sum(r.get("best_l3_score") or 0.0 for r in results), total
     ) if has_l3 else None
 
-    rows = [
-        ("baseline", "Full image (baseline)",    mean_baseline),
-        ("l1",       "Best L1 quadrant",         mean_l1),
-        ("l2",       "Best L2 sub-quadrant",     mean_l2),
-    ]
-    if has_l3:
-        rows.append(("l3", "Best L3 sub-quadrant", mean_l3))
+    mean_baseline_ag = _safe_div(sum(r["baseline_score_ag"] for r in results), total)
+    mean_l1_ag       = _safe_div(sum(r["best_l1_score_ag"]  for r in results), total)
+    mean_l2_ag       = _safe_div(sum(r["best_l2_score_ag"]  for r in results), total)
+    mean_l3_ag       = _safe_div(
+        sum(r.get("best_l3_score_ag") or 0.0 for r in results), total
+    ) if has_l3 else None
 
-    print("\n── Region Score Comparison ────────────────────────────────────────")
+    level_keys = ["baseline", "l1", "l2"] + (["l3"] if has_l3 else [])
+    level_labels = {
+        "baseline": "Full image (baseline)",
+        "l1":       "Best L1 quadrant",
+        "l2":       "Best L2 sub-quadrant",
+        "l3":       "Best L3 sub-quadrant",
+    }
+    mean_sup = {"baseline": mean_baseline, "l1": mean_l1, "l2": mean_l2, "l3": mean_l3}
+    mean_ag  = {"baseline": mean_baseline_ag, "l1": mean_l1_ag, "l2": mean_l2_ag, "l3": mean_l3_ag}
+
+    W = 62
+    print("\n── Region Score Comparison ─────────────────────────────────────────────────────────────")
     print(f"  Total samples evaluated : {total}")
     print()
-    print(f"  {'Region':<30} {'Wins':>6}  {'%':>6}  {'Mean score':>10}")
-    print(f"  {'-'*56}")
-    for key, label, mean in rows:
-        n   = counts.get(key, 0)
-        pct = 100 * n / total if total else 0
-        print(f"  {label:<30} {n:>6}  {pct:>5.1f}%  {mean:>10.4f}")
-    print(f"  {'-'*56}")
-    print(f"\n  Mean baseline score : {mean_baseline:.4f}")
-    print(f"  Mean best-L1 score  : {mean_l1:.4f}")
-    print(f"  Mean best-L2 score  : {mean_l2:.4f}")
-    if has_l3:
-        print(f"  Mean best-L3 score  : {mean_l3:.4f}")
-    print("───────────────────────────────────────────────────────────────────\n")
+    print(f"  {'Region':<28}  {'Supervised (GT)':>22}  {'Unsupervised (agr)':>22}")
+    print(f"  {'':28}  {'Wins':>5} {'%':>5} {'Mean':>8}  {'Wins':>5} {'%':>5} {'Mean':>8}")
+    print(f"  {'-'*80}")
+    for key in level_keys:
+        label = level_labels[key]
+        ns = counts_sup.get(key, 0)
+        na = counts_ag.get(key, 0)
+        ps = 100 * ns / total if total else 0
+        pa = 100 * na / total if total else 0
+        ms = mean_sup[key]
+        ma = mean_ag[key]
+        ms_str = f"{ms:.4f}" if ms is not None else "   N/A"
+        ma_str = f"{ma:.4f}" if ma is not None else "   N/A"
+        print(f"  {label:<28}  {ns:>5} {ps:>4.1f}% {ms_str:>8}  {na:>5} {pa:>4.1f}% {ma_str:>8}")
+    print(f"  {'-'*80}")
+    print(f"\n  Concordance (same winner both methods) : {concordant}/{total}  ({100*concordance_rate:.1f}%)")
+    print("────────────────────────────────────────────────────────────────────────────────────────\n")
 
     # ── Save ─────────────────────────────────────────────────────────────────
     out_dir  = Path(args.results_dir)
@@ -261,13 +304,23 @@ def main() -> None:
     out_stem = f"fgr_region_comparison_{args.dataset}_{n_tag}"
 
     agg = {
-        "total_samples":       total,
-        "winner_counts":       counts,
-        "winner_fractions":    {k: _safe_div(v, total) for k, v in counts.items()},
-        "mean_baseline_score": mean_baseline,
-        "mean_best_l1_score":  mean_l1,
-        "mean_best_l2_score":  mean_l2,
-        "mean_best_l3_score":  mean_l3,
+        "total_samples":            total,
+        "concordant_samples":       concordant,
+        "concordance_rate":         concordance_rate,
+        # supervised (correct_agreement-based)
+        "winner_counts_supervised":    counts_sup,
+        "winner_fractions_supervised": {k: _safe_div(v, total) for k, v in counts_sup.items()},
+        "mean_baseline_score":         mean_baseline,
+        "mean_best_l1_score":          mean_l1,
+        "mean_best_l2_score":          mean_l2,
+        "mean_best_l3_score":          mean_l3,
+        # unsupervised (plurality agreement-based)
+        "winner_counts_agreement":     counts_ag,
+        "winner_fractions_agreement":  {k: _safe_div(v, total) for k, v in counts_ag.items()},
+        "mean_baseline_score_ag":      mean_baseline_ag,
+        "mean_best_l1_score_ag":       mean_l1_ag,
+        "mean_best_l2_score_ag":       mean_l2_ag,
+        "mean_best_l3_score_ag":       mean_l3_ag,
     }
 
     json_path = out_dir / f"{out_stem}.json"
@@ -282,22 +335,33 @@ def main() -> None:
 
     # ── W&B ─────────────────────────────────────────────────────────────────
     if not args.disable_wandb:
-        for k, v in agg["winner_counts"].items():
-            wandb.summary[f"winner_count_{k}"] = v
-        for k, v in agg["winner_fractions"].items():
-            wandb.summary[f"winner_frac_{k}"] = v
-        wandb.summary["mean_baseline_score"] = mean_baseline
-        wandb.summary["mean_best_l1_score"]  = mean_l1
-        wandb.summary["mean_best_l2_score"]  = mean_l2
+        wandb.summary["concordance_rate"] = concordance_rate
+        wandb.summary["concordant_samples"] = concordant
+        for k, v in counts_sup.items():
+            wandb.summary[f"winner_sup_count_{k}"] = v
+            wandb.summary[f"winner_sup_frac_{k}"]  = _safe_div(v, total)
+        for k, v in counts_ag.items():
+            wandb.summary[f"winner_ag_count_{k}"] = v
+            wandb.summary[f"winner_ag_frac_{k}"]  = _safe_div(v, total)
+        wandb.summary["mean_baseline_score"]    = mean_baseline
+        wandb.summary["mean_best_l1_score"]     = mean_l1
+        wandb.summary["mean_best_l2_score"]     = mean_l2
+        wandb.summary["mean_baseline_score_ag"] = mean_baseline_ag
+        wandb.summary["mean_best_l1_score_ag"]  = mean_l1_ag
+        wandb.summary["mean_best_l2_score_ag"]  = mean_l2_ag
 
         table = wandb.Table(columns=[
             "image_path", "question", "gt_letter", "question_type",
-            "baseline_score", "best_l1_score", "best_l2_score", "winner",
+            "baseline_score", "best_l1_score", "best_l2_score",
+            "baseline_score_ag", "best_l1_score_ag", "best_l2_score_ag",
+            "winner_supervised", "winner_agreement", "winners_match",
         ])
         for r in results:
             table.add_data(
                 r["image_path"], r["question"], r["gt_letter"], r["question_type"],
-                r["baseline_score"], r["best_l1_score"], r["best_l2_score"], r["winner"],
+                r["baseline_score"], r["best_l1_score"], r["best_l2_score"],
+                r["baseline_score_ag"], r["best_l1_score_ag"], r["best_l2_score_ag"],
+                r["winner_supervised"], r["winner_agreement"], r["winners_match"],
             )
         wandb.log({"region_comparison": table})
         wandb.finish()

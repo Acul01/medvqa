@@ -37,9 +37,10 @@ class PerturbPatch:
 
     level: int                           # 1 | 2 | 3
     bbox: tuple[int, int, int, int]      # (x1, y1, x2, y2) in original image pixels
-    importance: float                    # region_score = correct_agreement × mean_conf × (1−norm_H)
-    correct_agreement: float             # P(predicted == gt_letter) across n_samples  ← ranking key
-    agreement: float                     # plurality agreement (any letter); stored for diagnostics
+    importance: float                    # correct_agreement × mean_conf × (1−norm_H)  ← ranking key
+    importance_agreement: float          # agreement        × mean_conf × (1−norm_H)  ← unsupervised proxy
+    correct_agreement: float             # P(predicted == gt_letter) across n_samples
+    agreement: float                     # plurality agreement (any letter)
     mean_confidence: float               # mean max-softmax confidence across samples
     mean_entropy: float                  # mean first-token entropy across samples (nats)
 
@@ -92,6 +93,8 @@ def _sample_region(
         Mean first-token entropy in nats.
     region_score : float
         correct_agreement × mean_confidence × (1 − normalised_entropy).
+    region_score_agreement : float
+        agreement × mean_confidence × (1 − normalised_entropy) — usable without GT.
     """
     n_options = len(options)
     conv = build_mc_conversation(question, options, image=image_crop)
@@ -141,9 +144,9 @@ def _sample_region(
 
     norm_entropy = min(mean_ent / log_vocab_size, 1.0) if log_vocab_size > 0 else 0.0
 
-    # Score uses correct_agreement so consistently-wrong crops rank low
-    region_score = correct_agreement * mean_conf * (1.0 - norm_entropy)
-    return correct_agreement, agreement, mean_conf, mean_ent, region_score
+    region_score           = correct_agreement * mean_conf * (1.0 - norm_entropy)
+    region_score_agreement = agreement         * mean_conf * (1.0 - norm_entropy)
+    return correct_agreement, agreement, mean_conf, mean_ent, region_score, region_score_agreement
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +196,9 @@ def run_hierarchical_perturbation(
     evidence_type:
         ``"local"`` or ``"global"``.
     baseline_score:
-        Full-image region score (reference).
+        Full-image score using correct_agreement (supervised).
+    baseline_score_agreement:
+        Full-image score using plurality agreement (unsupervised proxy).
     """
     w, h = image.size
     full_bbox = (0, 0, w, h)
@@ -210,57 +215,55 @@ def run_hierarchical_perturbation(
         log_vocab_size=log_vocab_size,
     )
 
-    def _score(crop: Image.Image) -> PerturbPatch:
-        """Helper: score one crop and return a partially-filled PerturbPatch."""
-        ca, ag, mc, me, score = _sample_region(
+    def _score(crop: Image.Image):
+        ca, ag, mc, me, score, score_ag = _sample_region(
             model, processor, crop, question, options, gt_letter, device, **sample_kw
         )
-        return ca, ag, mc, me, score
+        return ca, ag, mc, me, score, score_ag
+
+    def _patch(level, bbox, ca, ag, mc, me, score, score_ag) -> PerturbPatch:
+        return PerturbPatch(
+            level=level, bbox=bbox,
+            importance=score, importance_agreement=score_ag,
+            correct_agreement=ca, agreement=ag,
+            mean_confidence=mc, mean_entropy=me,
+        )
 
     # ── Baseline: full image ─────────────────────────────────────────────────
-    _, _, _, _, baseline_score = _score(image)
+    _, _, _, _, baseline_score, baseline_score_agreement = _score(image)
 
     all_patches: list[PerturbPatch] = []
 
     # ── Level 1: four quadrants of the full image ────────────────────────────
     l1_patches: list[PerturbPatch] = []
     for bbox in _split_2x2(full_bbox):
-        ca, ag, mc, me, score = _score(image.crop(bbox))
-        l1_patches.append(PerturbPatch(
-            level=1, bbox=bbox, importance=score,
-            correct_agreement=ca, agreement=ag, mean_confidence=mc, mean_entropy=me,
-        ))
+        ca, ag, mc, me, score, score_ag = _score(image.crop(bbox))
+        l1_patches.append(_patch(1, bbox, ca, ag, mc, me, score, score_ag))
     all_patches.extend(l1_patches)
 
-    # ── Global-evidence gate ─────────────────────────────────────────────────
+    # ── Global-evidence gate (uses supervised score for ranking) ─────────────
     best_l1_score = max(p.importance for p in l1_patches)
     if baseline_score > 0 and best_l1_score < global_threshold * baseline_score:
-        return all_patches, "global", baseline_score
+        return all_patches, "global", baseline_score, baseline_score_agreement
 
     # ── Level 2: four sub-quadrants of the best L1 patch ────────────────────
     best_l1 = max(l1_patches, key=lambda p: p.importance)
     l2_patches: list[PerturbPatch] = []
     for bbox in _split_2x2(best_l1.bbox):
-        ca, ag, mc, me, score = _score(image.crop(bbox))
-        l2_patches.append(PerturbPatch(
-            level=2, bbox=bbox, importance=score,
-            correct_agreement=ca, agreement=ag, mean_confidence=mc, mean_entropy=me,
-        ))
+        ca, ag, mc, me, score, score_ag = _score(image.crop(bbox))
+        l2_patches.append(_patch(2, bbox, ca, ag, mc, me, score, score_ag))
     all_patches.extend(l2_patches)
 
     if n_levels < 3:
-        return all_patches, "local", baseline_score
+        return all_patches, "local", baseline_score, baseline_score_agreement
 
     # ── Level 3: four sub-quadrants of the best L2 patch ────────────────────
     best_l2 = max(l2_patches, key=lambda p: p.importance)
     for bbox in _split_2x2(best_l2.bbox):
-        ca, ag, mc, me, score = _score(image.crop(bbox))
-        all_patches.append(PerturbPatch(
-            level=3, bbox=bbox, importance=score,
-            correct_agreement=ca, agreement=ag, mean_confidence=mc, mean_entropy=me,
-        ))
+        ca, ag, mc, me, score, score_ag = _score(image.crop(bbox))
+        all_patches.append(_patch(3, bbox, ca, ag, mc, me, score, score_ag))
 
-    return all_patches, "local", baseline_score
+    return all_patches, "local", baseline_score, baseline_score_agreement
 
 
 # ---------------------------------------------------------------------------

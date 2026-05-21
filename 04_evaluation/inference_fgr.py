@@ -293,7 +293,7 @@ def main() -> None:
             continue
 
         # ── Hierarchical perturbation ────────────────────────────────────────
-        patches, evidence_type, baseline_score = run_hierarchical_perturbation(
+        patches, evidence_type, baseline_score, baseline_score_agreement = run_hierarchical_perturbation(
             model,
             processor,
             image,
@@ -378,6 +378,7 @@ def main() -> None:
                 "reasoning": reasoning,
                 # ── Perturbation output ───────────────────────────────────────
                 "baseline_score": round(baseline_score, 6),
+                "baseline_score_agreement": round(baseline_score_agreement, 6),
                 "evidence_type": evidence_type,
                 "relevant_bbox": list(rel_bbox),
                 "relevant_region_fraction": round(
@@ -391,6 +392,7 @@ def main() -> None:
                         "level": p.level,
                         "bbox": list(p.bbox),
                         "importance": round(p.importance, 6),
+                        "importance_agreement": round(p.importance_agreement, 6),
                         "correct_agreement": round(p.correct_agreement, 4),
                         "agreement": round(p.agreement, 4),
                         "mean_confidence": round(p.mean_confidence, 4),
