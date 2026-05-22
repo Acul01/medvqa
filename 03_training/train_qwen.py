@@ -21,26 +21,52 @@ from transformers import (
 )
 from transformers.trainer_utils import set_seed
 
-from utils.load_data import MedicalVQALoader
+from utils.load_data import MedicalVQALoader, VQASample
 from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen
 from utils.qwen_vl import (
+    DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
     DEFAULT_MODEL_PATH,
     build_mc_conversation,
+    build_mc_reasoning_conversation,
+    configure_qwen_processor_pixels,
+    is_pseudo_reasoning_verified,
     mask_labels_assistant_only,
     model_short_name,
     prepare_qwen_inputs,
+    pseudo_reasoning_raw_from_metadata,
     resolve_processor_path,
     squeeze_batch_dim,
 )
 
 
+def filter_verified_reasoning_samples(samples: list[VQASample]) -> list[VQASample]:
+    """Keep only rows with pseudo_reasoning_test=True and non-empty pseudo_reasoning_raw."""
+    filtered: list[VQASample] = []
+    for sample in samples:
+        if not is_pseudo_reasoning_verified(sample.metadata):
+            continue
+        if not pseudo_reasoning_raw_from_metadata(sample.metadata):
+            continue
+        filtered.append(sample)
+    return filtered
+
+
+def resolve_train_mc_export_suffix(use_reasoning: bool, mc_export_suffix: str) -> str:
+    if mc_export_suffix:
+        return mc_export_suffix
+    if use_reasoning:
+        return DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY
+    return ""
+
+
 class QwenMCTrainDataset(Dataset):
     """MC training dataset for Qwen2.5-VL; loss only on assistant answer tokens."""
 
-    def __init__(self, samples, processor, max_length=512):
+    def __init__(self, samples, processor, max_length=512, *, use_reasoning: bool = False):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
+        self.use_reasoning = use_reasoning
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
@@ -54,18 +80,31 @@ class QwenMCTrainDataset(Dataset):
         if not sample.mc_options:
             raise ValueError("MC options missing in sample; ensure mc_data_root points to MC exports.")
 
-        conversation = build_mc_conversation(
-            sample.question,
-            sample.mc_options,
-            answer=sample.answer,
-            image=image,
-        )
+        if self.use_reasoning:
+            reasoning_raw = pseudo_reasoning_raw_from_metadata(sample.metadata)
+            if not reasoning_raw:
+                raise ValueError("pseudo_reasoning_raw missing for reasoning training sample.")
+            conversation = build_mc_reasoning_conversation(
+                sample.question,
+                sample.mc_options,
+                reasoning_raw=reasoning_raw,
+                answer=sample.answer,
+                image=image,
+            )
+        else:
+            conversation = build_mc_conversation(
+                sample.question,
+                sample.mc_options,
+                answer=sample.answer,
+                image=image,
+            )
         batch = prepare_qwen_inputs(
             self.processor,
             conversation,
             add_generation_prompt=False,
             max_length=self.max_length,
             padding="max_length",
+            truncation=False,
         )
         item = squeeze_batch_dim(batch)
         input_ids = item["input_ids"]
@@ -85,6 +124,23 @@ def parse_args():
     )
     parser.add_argument("--data_root", type=str, default=get_data_root())
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
+    parser.add_argument(
+        "--mc_export_suffix",
+        type=str,
+        default="",
+        help=(
+            "MC JSON suffix after _mc_openai (e.g. _pseudo_pr_qwen_verify). "
+            f"With --use_reasoning and unset, defaults to {DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY!r}."
+        ),
+    )
+    parser.add_argument(
+        "--use_reasoning",
+        action="store_true",
+        help=(
+            "Train on verified pseudo reasoning (pseudo_reasoning_test=True) with JSON "
+            "assistant targets {reasoning, answer}; val stays answer-only on standard MC."
+        ),
+    )
     parser.add_argument(
         "--dataset",
         type=str,
@@ -134,6 +190,8 @@ def main():
     set_seed(args.seed)
 
     ft_tag = "lora" if args.use_lora else "full-ft"
+    if args.use_reasoning:
+        ft_tag = f"reasoning-{ft_tag}"
     model_short = model_short_name(args.model_path)
     run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_train"
     wandb.init(
@@ -185,19 +243,50 @@ def main():
     if processor_path != args.model_path:
         print(f"Processor not in checkpoint, loading from: {processor_path}")
     processor = AutoProcessor.from_pretrained(processor_path)
+    configure_qwen_processor_pixels(processor)
 
-    loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
+    train_suffix = resolve_train_mc_export_suffix(args.use_reasoning, args.mc_export_suffix)
+    train_loader = MedicalVQALoader(
+        data_root=args.data_root,
+        mc_data_root=args.mc_data_root,
+        mc_export_suffix=train_suffix,
+    )
+    val_loader = MedicalVQALoader(
+        data_root=args.data_root,
+        mc_data_root=args.mc_data_root,
+        mc_export_suffix="",
+    )
+
     use_all = args.dataset == "all"
     if use_all:
-        print(f"Loading combined datasets {args.train_split} split...")
-        train_samples = loader.load_combined(args.train_split)
+        print(f"Loading combined datasets {args.train_split} split (mc suffix={train_suffix!r})...")
+        train_samples = train_loader.load_combined(args.train_split)
     else:
-        print(f"Loading {args.dataset} {args.train_split} split...")
-        train_samples = loader.load_dataset(args.dataset, split=args.train_split)
+        print(f"Loading {args.dataset} {args.train_split} split (mc suffix={train_suffix!r})...")
+        train_samples = train_loader.load_dataset(args.dataset, split=args.train_split)
 
-    train_dataset = QwenMCTrainDataset(train_samples, processor, args.max_length)
-    print(f"Train: {len(train_dataset)} samples")
-    if use_all:
+    train_total = len(train_samples)
+    if args.use_reasoning:
+        train_samples = filter_verified_reasoning_samples(train_samples)
+        print(
+            f"Train: {len(train_samples)} / {train_total} samples "
+            f"(use_reasoning, pseudo_reasoning_test=True)"
+        )
+        if not train_samples:
+            raise ValueError(
+                "No verified reasoning samples after filtering. "
+                "Ensure verify JSON exists and pseudo_reasoning_test=True rows are present."
+            )
+    else:
+        print(f"Train: {len(train_samples)} samples")
+
+    train_dataset = QwenMCTrainDataset(
+        train_samples,
+        processor,
+        args.max_length,
+        use_reasoning=args.use_reasoning,
+    )
+    if use_all and not args.use_reasoning:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
 
     val_dataset = None
@@ -207,10 +296,10 @@ def main():
                 f"Loading validation: PathVQA/SLAKE/Med-VQA split={args.val_split!r}, "
                 "VQA-Rad split='test'."
             )
-            val_samples = loader.load_combined(args.val_split, vqarad_split="test")
+            val_samples = val_loader.load_combined(args.val_split, vqarad_split="test")
         else:
-            val_samples = loader.load_dataset(args.dataset, split=args.val_split)
-        val_dataset = QwenMCTrainDataset(val_samples, processor, args.max_length)
+            val_samples = val_loader.load_dataset(args.dataset, split=args.val_split)
+        val_dataset = QwenMCTrainDataset(val_samples, processor, args.max_length, use_reasoning=False)
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
         print(f"No validation split available: {e}")
@@ -248,7 +337,12 @@ def main():
         processing_class=processor.tokenizer,
     )
 
-    print("Starting Qwen2.5-VL training (loss on assistant answer tokens only)...")
+    loss_desc = (
+        "assistant JSON (reasoning + answer)"
+        if args.use_reasoning
+        else "assistant answer tokens only"
+    )
+    print(f"Starting Qwen2.5-VL training (loss on {loss_desc})...")
     result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     print(f"Saving model to {args.output_dir}")
@@ -263,6 +357,8 @@ def main():
         {
             "final_train_loss": result.training_loss,
             "train_samples": len(train_dataset),
+            "train_samples_total_before_filter": train_total if args.use_reasoning else len(train_dataset),
+            "train_samples_filtered": len(train_dataset) if args.use_reasoning else None,
             "val_samples": len(val_dataset) if val_dataset else 0,
         }
     )

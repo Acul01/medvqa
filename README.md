@@ -314,6 +314,34 @@ python 03_training/train_qwen.py \
 
 LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
 
+### Qwen2.5-VL mit Pseudo-Reasoning trainieren (`--use_reasoning`)
+
+Trainiert auf verifizierten Pseudo-Rationales aus `*_mc_openai_pseudo_pr_qwen_verify.json` (Output von `verify_pseudo_reasoning_qwen.py`). Es werden nur Zeilen mit `pseudo_reasoning_test=True` und gesetztem `pseudo_reasoning_raw` verwendet. Assistant-Target: kompaktes JSON `{"reasoning":"<REGION:...>","answer":"B"}`. Validation bleibt **answer-only** auf Standard-`*_mc_openai.json`.
+
+Voraussetzung: Verify-JSON pro Datensatz/Split, z. B.:
+
+```bash
+python 04_evaluation/verify_pseudo_reasoning_qwen.py \
+  --input_json 02_data/data_mc_openai/vqarad/vqarad_train_mc_openai_pseudo.json
+```
+
+Beispiel Training (LoRA, VQA-Rad):
+
+```bash
+PYTHONPATH=. python 03_training/train_qwen.py \
+  --dataset vqarad \
+  --val_split test \
+  --use_reasoning \
+  --mc_export_suffix _pseudo_pr_qwen_verify \
+  --use_lora \
+  --bf16 \
+  --gradient_checkpointing \
+  --max_length 4096 \
+  --output_dir ./05_outputs/mc/qwen/vqarad_MC_reasoning_LoRA
+```
+
+Ohne `--mc_export_suffix` setzt `--use_reasoning` automatisch `_pseudo_pr_qwen_verify`. Vision-Auflösung wird über `max_pixels` begrenzt; Truncation ist für VL-Training deaktiviert (lange Reasoning-Sequenzen).
+
 ### Stufen-Strategie (Thesis / Blueprint)
 
 1. **Grounding-Pretraining (optional, extern):** Stage auf **S-Chain**-artigem SV-CoT-Material als Grounding-Vortraining (Domain-Shift beachten).
