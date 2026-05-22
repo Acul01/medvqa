@@ -419,20 +419,27 @@ python 04_evaluation/inference_med.py \
   --results_dir 07_results
 ```
 
-### Counterfactual Ablation-Modi (`inference.py`, `inference_med.py`)
+### Counterfactual Ablation-Modi (`inference_qwen.py`, `inference_llava.py`, `inference_llava-med.py`)
 
 Für kontrollierte Gegenfaktual-Tests kann ein globaler Ablationsmodus gesetzt werden:
 
 - `--ablation_mode none`: Standard, Originalbild pro Sample
 - `--ablation_mode black`: Bild wird vollständig geschwärzt (gleiche Auflösung)
 - `--ablation_mode shuffle`: Bildzuordnung wird pro Run zufällig zwischen Samples permutiert (Frage/GT bleiben beim Originalsample)
+- `--ablation_mode fgr_crop`: Statt Original wird das **FGR Winning Crop** aus einer Region-Comparison-JSON verwendet (Feld `overall_winner_unsupervised_crop` by default)
 
 Optional steuert `--ablation_seed` die reproduzierbare Permutation im `shuffle`-Modus.
+
+Für `fgr_crop` zusätzlich:
+
+- `--fgr_region_comparison_json` (Pfad zur JSON von `fgr_region_comparison.py`, z. B. `fgr_region_comparison_vqarad_10.json`)
+- optional `--fgr_crop_field` (Default: `overall_winner_unsupervised_crop`)
+- Samples **ohne** Mapping in der JSON werden **übersprungen** (Log: `Skipped N samples ...`)
 
 Beispiel (`black`):
 
 ```bash
-python 04_evaluation/inference_med.py \
+python 04_evaluation/inference_llava-med.py \
   --dataset vqarad \
   --split test \
   --ablation_mode black \
@@ -442,12 +449,24 @@ python 04_evaluation/inference_med.py \
 Beispiel (`shuffle`):
 
 ```bash
-python 04_evaluation/inference.py \
+python 04_evaluation/inference_llava.py \
   --dataset vqarad \
   --split test \
   --ablation_mode shuffle \
   --ablation_seed 42 \
   --results_dir 07_results
+```
+
+Beispiel (`fgr_crop` mit Qwen):
+
+```bash
+PYTHONPATH=. python 04_evaluation/inference_qwen.py \
+  --dataset vqarad \
+  --split test \
+  --n_samples 10 \
+  --ablation_mode fgr_crop \
+  --fgr_region_comparison_json fgr_region_comparison_vqarad_10.json \
+  --disable_wandb
 ```
 
 ### Ausgabe-Dateien
@@ -464,6 +483,7 @@ python 04_evaluation/inference.py \
 ### JSON-Felder pro Sample (mindestens)
 
 - `image_path`, `source_image_path`, `ablation_mode`, `question`, `ground_truth_answer`, `predicted_answer`
+- bei `fgr_crop`: zusätzlich `fgr_crop_path` (effektives Crop-Bild; `image_path` ist gleich gesetzt)
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - optional 2-stage Felder: `reasoning_raw`, `reasoning_region`, `reasoning_observation`, `reasoning_explanation`, `reasoning_parse_mode` (`best_effort`)
 - optionale Strict-Decoding-Felder: `stage2_decoding_mode`, `stage2_option_probs`
