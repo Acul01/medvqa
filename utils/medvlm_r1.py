@@ -134,13 +134,14 @@ def build_medvlm_prompt(question: str, options: Iterable[str]) -> str:
 
 
 def extract_answer_letter(output: str, num_options: int) -> Optional[str]:
-    """Parse single-letter MC answer from MedVLM output (<answer> tag preferred)."""
-    match = _ANSWER_TAG_PATTERN.search(output or "")
-    if match:
-        letter = match.group(1).upper()
-        if letter in LETTER_POOL[:num_options]:
-            return letter
-    return parse_predicted_letter(output, num_options=num_options)
+    """Parse single-letter MC answer from MedVLM output (last valid <answer> tag)."""
+    text = output or ""
+    valid_letters = LETTER_POOL[:num_options]
+    for letter in reversed(_ANSWER_TAG_PATTERN.findall(text)):
+        letter_upper = letter.upper()
+        if letter_upper in valid_letters:
+            return letter_upper
+    return parse_predicted_letter(text, num_options=num_options)
 
 
 def image_path_to_uri(image_path: str) -> str:
