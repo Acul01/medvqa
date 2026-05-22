@@ -123,7 +123,6 @@ flowchart LR
 | `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
 | `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
 | `04_evaluation/inference_qwen.py` | Inferenz + Entropie (**Qwen2.5-VL**) |
-| `04_evaluation/verify_pseudo_reasoning_qwen.py` | Qwen-Verifikation: MC-Buchstabe nur aus Pseudo-Rationale + Options (Platzhalterbild) |
 | `04_evaluation/inference_medvlm_r1.py` | Inferenz (**MedVLM-R1**, pretrained) |
 | `utils/qwen_vl.py` | Qwen-Input-Prep, Label-Masking, gemeinsame Hilfen |
 | `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
@@ -132,7 +131,6 @@ flowchart LR
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
 | `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
-| `utils/build_pseudo_reasonings_openai.py` | MC + GPT-4o-mini Vision → Pseudo-Rationales (`*_mc_openai_pseudo.json`) |
 | `utils/download_datasets.py` | Download PathVQA / SLAKE / VQA-Rad / Med-VQA-2019 nach `02_data/` |
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
@@ -314,34 +312,6 @@ python 03_training/train_qwen.py \
 
 LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
 
-### Qwen2.5-VL mit Pseudo-Reasoning trainieren (`--use_reasoning`)
-
-Trainiert auf verifizierten Pseudo-Rationales aus `*_mc_openai_pseudo_pr_qwen_verify.json` (Output von `verify_pseudo_reasoning_qwen.py`). Es werden nur Zeilen mit `pseudo_reasoning_test=True` und gesetztem `pseudo_reasoning_raw` verwendet. Assistant-Target: kompaktes JSON `{"reasoning":"<REGION:...>","answer":"B"}`. Validation bleibt **answer-only** auf Standard-`*_mc_openai.json`.
-
-Voraussetzung: Verify-JSON pro Datensatz/Split, z. B.:
-
-```bash
-python 04_evaluation/verify_pseudo_reasoning_qwen.py \
-  --input_json 02_data/data_mc_openai/vqarad/vqarad_train_mc_openai_pseudo.json
-```
-
-Beispiel Training (LoRA, VQA-Rad):
-
-```bash
-PYTHONPATH=. python 03_training/train_qwen.py \
-  --dataset vqarad \
-  --val_split test \
-  --use_reasoning \
-  --mc_export_suffix _pseudo_pr_qwen_verify \
-  --use_lora \
-  --bf16 \
-  --gradient_checkpointing \
-  --max_length 4096 \
-  --output_dir ./05_outputs/mc/qwen/vqarad_MC_reasoning_LoRA
-```
-
-Ohne `--mc_export_suffix` setzt `--use_reasoning` automatisch `_pseudo_pr_qwen_verify`. Vision-Auflösung wird über `max_pixels` begrenzt; Truncation ist für VL-Training deaktiviert (lange Reasoning-Sequenzen).
-
 ### Stufen-Strategie (Thesis / Blueprint)
 
 1. **Grounding-Pretraining (optional, extern):** Stage auf **S-Chain**-artigem SV-CoT-Material als Grounding-Vortraining (Domain-Shift beachten).
@@ -449,20 +419,27 @@ python 04_evaluation/inference_med.py \
   --results_dir 07_results
 ```
 
-### Counterfactual Ablation-Modi (`inference.py`, `inference_med.py`)
+### Counterfactual Ablation-Modi (`inference_qwen.py`, `inference_llava.py`, `inference_llava-med.py`)
 
 Für kontrollierte Gegenfaktual-Tests kann ein globaler Ablationsmodus gesetzt werden:
 
 - `--ablation_mode none`: Standard, Originalbild pro Sample
 - `--ablation_mode black`: Bild wird vollständig geschwärzt (gleiche Auflösung)
 - `--ablation_mode shuffle`: Bildzuordnung wird pro Run zufällig zwischen Samples permutiert (Frage/GT bleiben beim Originalsample)
+- `--ablation_mode crop_unsupervised`: FGR Winning Crop aus `overall_winner_unsupervised_crop`
+- `--ablation_mode crop_supervised`: FGR Winning Crop aus `overall_winner_supervised_crop`
 
 Optional steuert `--ablation_seed` die reproduzierbare Permutation im `shuffle`-Modus.
+
+Für `crop_unsupervised` / `crop_supervised` zusätzlich:
+
+- `--fgr_region_comparison_json` (Pfad zur JSON von `fgr_region_comparison.py`, z. B. `fgr_region_comparison_vqarad_10.json`)
+- Samples **ohne** Mapping in der JSON werden **übersprungen** (Log: `Skipped N samples ...`)
 
 Beispiel (`black`):
 
 ```bash
-python 04_evaluation/inference_med.py \
+python 04_evaluation/inference_llava-med.py \
   --dataset vqarad \
   --split test \
   --ablation_mode black \
@@ -472,12 +449,36 @@ python 04_evaluation/inference_med.py \
 Beispiel (`shuffle`):
 
 ```bash
-python 04_evaluation/inference.py \
+python 04_evaluation/inference_llava.py \
   --dataset vqarad \
   --split test \
   --ablation_mode shuffle \
   --ablation_seed 42 \
   --results_dir 07_results
+```
+
+Beispiel (`crop_unsupervised` mit Qwen):
+
+```bash
+PYTHONPATH=. python 04_evaluation/inference_qwen.py \
+  --dataset vqarad \
+  --split test \
+  --n_samples 10 \
+  --ablation_mode crop_unsupervised \
+  --fgr_region_comparison_json fgr_region_comparison_vqarad_10.json \
+  --disable_wandb
+```
+
+Beispiel (`crop_supervised`):
+
+```bash
+PYTHONPATH=. python 04_evaluation/inference_qwen.py \
+  --dataset vqarad \
+  --split test \
+  --n_samples 10 \
+  --ablation_mode crop_supervised \
+  --fgr_region_comparison_json fgr_region_comparison_vqarad_10.json \
+  --disable_wandb
 ```
 
 ### Ausgabe-Dateien
@@ -494,7 +495,9 @@ python 04_evaluation/inference.py \
 ### JSON-Felder pro Sample (mindestens)
 
 - `image_path`, `source_image_path`, `ablation_mode`, `question`, `ground_truth_answer`, `predicted_answer`
+- bei `crop_unsupervised` / `crop_supervised`: zusätzlich `fgr_crop_path` (effektives Crop-Bild; `image_path` ist gleich gesetzt)
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
+- **Qwen** mit `--use_reasoning_json`: `use_reasoning_json`, `predicted_reasoning_text`, `predicted_json_parse_ok` zusätzlich zu `predicted_answer` / `predicted_letter`
 - optional 2-stage Felder: `reasoning_raw`, `reasoning_region`, `reasoning_observation`, `reasoning_explanation`, `reasoning_parse_mode` (`best_effort`)
 - optionale Strict-Decoding-Felder: `stage2_decoding_mode`, `stage2_option_probs`
 - optionale GradCAM-Felder: `use_gradcam`, `gradcam_status`, `gradcam_error`, `gradcam_overlay_path`, `gradcam_heatmap_path`
@@ -505,6 +508,8 @@ Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veral
 **LLaVA-Med:** `inference_med.py` (andere Konversationsschablone, siehe Dateikopf).
 
 **Qwen2.5-VL:** `inference_qwen.py` — MC-Inferenz mit Entropie, Agreement, Confidence und Ablationen (`black`/`shuffle`); **ohne** 2-Stage-Reasoning und GradCAM.
+
+Mit **`--use_reasoning_json`** erfolgt denselben **JSON-Assistenz-Contract** wie bei `train_qwen.py --use_reasoning`: Antwort nur als `{\"reasoning\":\"...\",\"answer\":\"<Buchstabe>\"}` (siehe `utils/qwen_vl.py` → `MC_JSON_RESPONSE_INSTRUCTION`). **`--max_new_tokens`** sollte erhöht bleiben (Default bei gesetztem Flag: 320); manuell setzbar wenn längere Reasonings erwartet werden. Pro Zeile zusätzliche Felder: `predicted_reasoning_text`, `predicted_json_parse_ok`, sowie `predicted_answer` (Rohtext).
 
 Beispiel (fine-getunt, SLAKE Test):
 
@@ -517,20 +522,19 @@ python 04_evaluation/inference_qwen.py \
   --results_dir 06_results
 ```
 
-Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` weglassen oder explizit setzen (ohne `--finetuned`).
-
-**Pseudo-Rationale prüfen:** [`04_evaluation/verify_pseudo_reasoning_qwen.py`](04_evaluation/verify_pseudo_reasoning_qwen.py) lädt z. B. `*_mc_openai_pseudo.json`, gibt Qwen einen **neutralen Grauton** als Bild-Placeholder (kein Medizinisches Signal) und im Text **Rationale + Frage + Optionen**. Ausgabe: Kopie als `*_pr_qwen_verify.json` (+ optional CSV) mit:
-
-- `pseudo_reasoning_test`: `true` wenn extrahierte Modellbuchstaben-Antwort dem goldenen Label (`correct_index`) entspricht, sonst `false`; `null` bei ungültiger MC-Zeile oder fehlender Rationale
-- `pseudo_reasoning_verify_pred_letter`, `pseudo_reasoning_verify_raw` zur Fehleranalyse
+Reasoning‑JSON‑Checkpoint wie bei Training mit Pseudorationalen (`train_qwen.py --use_reasoning`):
 
 ```bash
-python 04_evaluation/verify_pseudo_reasoning_qwen.py \
-  --input_json 02_data/data_mc_openai/vqarad/vqarad_test_mc_openai_pseudo.json \
-  --model_path Qwen/Qwen2.5-VL-7B-Instruct \
-  --n_samples 50
-# Standard-Ausgabe: ..._pr_qwen_verify.json (gleiches Verzeichnis); mit --no_csv nur JSON
+python 04_evaluation/inference_qwen.py \
+  --dataset slake \
+  --split test \
+  --model_path ./05_outputs/qwen_slake_reasoning \
+  --finetuned \
+  --use_reasoning_json \
+  --results_dir 06_results
 ```
+
+Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` weglassen oder explizit setzen (ohne `--finetuned`).
 
 ### MedVLM-R1 (off-the-shelf)
 
@@ -852,39 +856,9 @@ python utils/build_mc_datasets_openai.py \
   --resume
 ```
 
-### Pseudo-Rationales (GPT-4o-mini, multimodal)
+### Pseudo-Reasoning (nicht Bestandteil dieses Repos)
 
-Nach dem MC-Export können mit [`utils/build_pseudo_reasonings_openai.py`](utils/build_pseudo_reasonings_openai.py) **Vision-Rationales** ergänzt werden: Das Modell sieht Bild + Frage + korrekte MC-Option und schreibt ein strukturiertes `REGION:` / `OBSERVATION:` / `REASONING:` (kompatibel mit [`utils/reasoning_mc.py`](utils/reasoning_mc.py)).
-
-- **Input:** `{dataset}_{split}_mc_openai.json` unter `--mc_root` (wie bei `build_mc_datasets_openai.py`).
-- **Output:** `{dataset}_{split}_mc_openai_pseudo.json` (+ CSV) im gleichen Unterordner.
-- **Loader:** Angereicherte Dateien laden mit `MedicalVQALoader(mc_export_suffix="_pseudo")` (gleiches `mc_data_root` / `MEDVQA_MC_ROOT`).
-- Felder u. a.: `pseudo_reasoning_raw`, `pseudo_reasoning_region`, `pseudo_reasoning_observation`, `pseudo_reasoning_explanation`, `pseudo_reasoning_parse_mode`; bei Fehlern `pseudo_reasoning_error`.
-
-```bash
-pip install openai pillow   # pillow nur nötig für --max_image_side
-export OPENAI_API_KEY="..."
-
-python utils/build_pseudo_reasonings_openai.py \
-  --data_root 02_data \
-  --mc_root 02_data/data_mc_openai \
-  --datasets pathvqa \
-  --openai_model gpt-4o-mini \
-  --n_samples 50 \
-  --save_every 10 \
-  --max_image_side 1024
-
-# Fortsetzen (überspringt Zeilen mit gesetztem pseudo_reasoning_raw):
-python utils/build_pseudo_reasonings_openai.py \
-  --data_root 02_data \
-  --mc_root 02_data/data_mc_openai \
-  --datasets pathvqa \
-  --resume
-```
-
-Optional: **„kann man das Rationale konsistent mit dem Gold-Label begründen?“** prüfen mit Qwen (nur Text + MC-Optionen, graues Platzhalterbild) → `verify_pseudo_reasoning_qwen.py` (Details im Abschnitt Inferenz Qwen2.5-VL oben).
-
-Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser am Modell — die Pseudo-Rationales sind eine **separate Datenanreicherung** für Training/Analyse.
+Eine frühere Pipeline (OpenAI-Vision + Qwen-Verifikation + optionales Training auf Pseudo-Reasonings) ist **hier nicht enthalten**. Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser.
 
 Ausgabe pro Datensatz:
 **MC als Standardpfad:** `MedicalVQALoader()` nutzt `MEDVQA_DATA_ROOT` / `MEDVQA_MC_ROOT` bzw. die Fallbacks `02_data` und `02_data/data_mc_openai` (siehe [`utils/paths.py`](utils/paths.py)). Fehlen die MC-Dateien unter dem MC-Root, gibt der Loader einen Fehler mit Verweis auf `utils/build_mc_datasets_openai.py`. **`utils/build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.
@@ -893,7 +867,6 @@ Ausgabe pro Datensatz:
 
 - `<output_root>/<dataset>/<dataset>_<split>_mc_openai.json` (Standard: unter `02_data/data_mc_openai/`)
 - `<output_root>/<dataset>/<dataset>_<split>_mc_openai.csv`
-- Optional Pseudo-Rationales: `<mc_root>/<dataset>/<dataset>_<split>_mc_openai_pseudo.json` (via `build_pseudo_reasonings_openai.py`)
 - Cache für Distraktoren: `<output_root>/<dataset>/openai_distractor_cache.jsonl`
 
 ---

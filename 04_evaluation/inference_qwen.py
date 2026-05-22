@@ -20,7 +20,10 @@ from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.qwen_vl import (
     DEFAULT_MODEL_PATH,
     build_mc_conversation,
+    build_mc_reasoning_inference_conversation,
+    configure_qwen_processor_pixels,
     model_short_name,
+    parse_mc_reasoning_json_output,
     prepare_qwen_inputs,
     resolve_processor_path,
 )
@@ -32,6 +35,17 @@ DATASET_MAX_NEW_TOKENS = {
     "vqarad": 8,
     "medvqa2019": 8,
 }
+
+DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
+
+
+def decode_mc_prediction(generated_text: str, *, num_options: int, use_reasoning_json: bool):
+    """Return (predicted_letter, reasoning_text_or_none, json_parse_ok_or_false)."""
+    if use_reasoning_json:
+        parsed = parse_mc_reasoning_json_output(generated_text, num_options=num_options)
+        return parsed.predicted_letter, parsed.reasoning_text, parsed.json_parse_ok
+    letter = parse_predicted_letter(generated_text, num_options=num_options)
+    return letter, None, False
 
 
 def parse_args():
@@ -67,6 +81,11 @@ def parse_args():
     parser.add_argument("--ablation_seed", type=int, default=42)
     parser.add_argument("--results_dir", type=str, default=get_results_dir())
     parser.add_argument("--n_samples", type=int, default=None)
+    parser.add_argument(
+        "--use_reasoning_json",
+        action="store_true",
+        help="Emit assistant JSON {\"reasoning\",\"answer\"} (match train_qwen --use_reasoning)",
+    )
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -114,16 +133,21 @@ def _move_inputs_to_device(inputs: dict, device: torch.device) -> dict:
 def main():
     args = parse_args()
     if args.max_new_tokens is None:
-        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
+        args.max_new_tokens = (
+            DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+            if args.use_reasoning_json
+            else DATASET_MAX_NEW_TOKENS[args.dataset]
+        )
 
     model_short = model_short_name(args.model_path)
     ft_tag = "finetuned" if args.finetuned else "pretrained"
-    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_eval_mc"
+    reason_tag = "reasoning_json" if args.use_reasoning_json else "answer_only"
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_{reason_tag}_eval_mc"
     wandb.init(
         project=args.wandb_project,
         name=run_name,
         group=args.dataset,
-        tags=["inference", "mc", "qwen", model_short, args.dataset, ft_tag],
+        tags=["inference", "mc", "qwen", model_short, args.dataset, ft_tag, reason_tag],
         config=vars(args),
     )
 
@@ -150,6 +174,7 @@ def main():
     else:
         processor_path = resolve_processor_path(args.model_path)
     processor = AutoProcessor.from_pretrained(processor_path)
+    configure_qwen_processor_pixels(processor)
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
@@ -187,10 +212,18 @@ def main():
             if args.ablation_mode == "black":
                 image = Image.new("RGB", image.size, color=(0, 0, 0))
 
-            conversation = build_mc_conversation(
-                sample.question,
-                sample.mc_options,
-                image=image,
+            conversation = (
+                build_mc_reasoning_inference_conversation(
+                    sample.question,
+                    sample.mc_options,
+                    image=image,
+                )
+                if args.use_reasoning_json
+                else build_mc_conversation(
+                    sample.question,
+                    sample.mc_options,
+                    image=image,
+                )
             )
             inputs = prepare_qwen_inputs(
                 processor,
@@ -210,8 +243,9 @@ def main():
             generated_text = clean_answer(
                 processor.decode(generated_ids, skip_special_tokens=True).strip()
             )
-            predicted_letter = parse_predicted_letter(
-                generated_text, num_options=len(sample.mc_options)
+            num_opts = len(sample.mc_options)
+            predicted_letter, pred_reason_text, json_ok = decode_mc_prediction(
+                generated_text, num_options=num_opts, use_reasoning_json=args.use_reasoning_json
             )
             ground_truth_letter = sample.answer
 
@@ -245,8 +279,8 @@ def main():
                 sample_text = clean_answer(
                     processor.decode(sample_generated_ids, skip_special_tokens=True).strip()
                 )
-                sample_letter = parse_predicted_letter(
-                    sample_text, num_options=len(sample.mc_options)
+                sample_letter, _, _ = decode_mc_prediction(
+                    sample_text, num_options=num_opts, use_reasoning_json=args.use_reasoning_json
                 )
                 sampled_predicted_letters.append(sample_letter)
                 if sample_output.scores:
@@ -265,8 +299,7 @@ def main():
             is_correct = predicted_letter == ground_truth_letter
             qtype = sample.question_type or "unknown"
 
-            results.append(
-                {
+            row_out = {
                     "image_path": effective_image_path,
                     "source_image_path": source_image_path,
                     "ablation_mode": args.ablation_mode,
@@ -284,8 +317,12 @@ def main():
                     "agreement": agreement,
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
+                    "use_reasoning_json": args.use_reasoning_json,
                 }
-            )
+            if args.use_reasoning_json:
+                row_out["predicted_reasoning_text"] = pred_reason_text
+                row_out["predicted_json_parse_ok"] = json_ok
+            results.append(row_out)
 
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]

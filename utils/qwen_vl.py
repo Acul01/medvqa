@@ -3,67 +3,159 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
 from qwen_vl_utils import process_vision_info
 
-from utils.mc_vqa import format_mc_user_text
-from utils.reasoning_mc import END_REASONING_TOKEN, format_reasoning_block_for_training
+from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 
 DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
 
-MIN_PIXELS = 256 * 28 * 28
-MAX_PIXELS = 512 * 28 * 28  # 401408
-
-REASONING_JSON_INSTRUCTION = (
-    "\n\nRespond with a single JSON object with keys \"reasoning\" and \"answer\". "
-    f"\"reasoning\" must follow REGION:/OBSERVATION:/REASONING: and end with {END_REASONING_TOKEN}. "
-    "\"answer\" is one option letter. Output only JSON."
+MC_JSON_RESPONSE_INSTRUCTION = (
+    "\n\nRespond with ONLY valid JSON in this exact schema: "
+    '{"reasoning":"<string>","answer":"<single MC option letter>"} '
+    "No markdown fences, no other text before or after."
 )
 
-# Gray placeholder required by Qwen2.5-VL processor when verifying from text-only rationale (no clinical image).
-PSEUDO_REASONING_VERIFY_PLACEHOLDER_SIZE = (224, 224)
+
+def configure_qwen_processor_pixels(_processor: Any) -> None:
+    """Optional hook to align image resolution with training; no-op unless extended."""
+    pass
 
 
-def make_pseudo_reasoning_verify_placeholder(
-    *,
-    width: int = PSEUDO_REASONING_VERIFY_PLACEHOLDER_SIZE[0],
-    height: int = PSEUDO_REASONING_VERIFY_PLACEHOLDER_SIZE[1],
-) -> Any:
-    """Uniform RGB gray image; pairing contract for ``build_pseudo_reasoning_verify_conversation``."""
-    from PIL import Image
-
-    return Image.new("RGB", (int(width), int(height)), color=(128, 128, 128))
+def pseudo_reasoning_raw_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
+    if not metadata:
+        return ""
+    raw = metadata.get("pseudo_reasoning_raw")
+    return str(raw).strip() if isinstance(raw, str) else ""
 
 
-def build_pseudo_reasoning_verify_conversation(
+def is_pseudo_reasoning_verified(metadata: Optional[Dict[str, Any]]) -> bool:
+    if not metadata:
+        return False
+    v = metadata.get("pseudo_reasoning_test")
+    if v is True:
+        return True
+    if isinstance(v, str) and v.strip().lower() in {"true", "1", "yes"}:
+        return True
+    return False
+
+
+def _normalize_mc_letter(answer: Optional[str]) -> str:
+    a = str(answer or "").strip().upper()
+    if len(a) == 1 and a in LETTER_POOL:
+        return a
+    raise ValueError(f"Invalid MC answer letter: {answer!r}")
+
+
+def build_mc_reasoning_inference_conversation(
     question: str,
     options: List[str],
-    reasoning_text: str,
     *,
-    placeholder_image: Any,
+    image: Any = None,
 ) -> List[dict]:
-    """User turn: meaningless placeholder image + rationale + MC question/options (matches ``format_mc_user_text`` tail)."""
-    intro = (
-        "You verify a medical multiple-choice item. "
-        "The image shown is only a meaningless gray placeholder — do not use visual information.\n"
-        "Base your answer solely on the textual reasoning provided below.\n\n"
-        f"Reasoning:\n{(reasoning_text or '').strip()}\n\n"
+    """User turn: MC block + instructions to emit JSON reasoning+answer (inference — no gold reasoning)."""
+    full_question = format_mc_user_text(question, options) + MC_JSON_RESPONSE_INSTRUCTION
+    image_content: dict = {"type": "image"}
+    if image is not None:
+        image_content["image"] = image
+    return [{"role": "user", "content": [image_content, {"type": "text", "text": full_question}]}]
+
+
+def build_mc_reasoning_conversation(
+    question: str,
+    options: List[str],
+    *,
+    reasoning_raw: str,
+    answer: str,
+    image: Any = None,
+) -> List[dict]:
+    """Training: user sees MC + reference pseudo reasoning; assistant learns JSON {\"reasoning\", \"answer\"}."""
+    mc = format_mc_user_text(question, options)
+    ref = (
+        "\n\nClinician reference reasoning (use as the reasoning field verbatim in training):\n\n"
+        f"{reasoning_raw.strip()}"
     )
-    rest = format_mc_user_text(question, options)
-    full_text = intro + rest
+    user_text = mc + ref + MC_JSON_RESPONSE_INSTRUCTION
+    letter = _normalize_mc_letter(answer)
+    assistant_text = json.dumps(
+        {"reasoning": reasoning_raw.strip(), "answer": letter}, ensure_ascii=False
+    )
+
+    image_content: dict = {"type": "image"}
+    if image is not None:
+        image_content["image"] = image
+
     return [
         {
             "role": "user",
-            "content": [
-                {"type": "image", "image": placeholder_image},
-                {"type": "text", "text": full_text},
-            ],
-        }
+            "content": [image_content, {"type": "text", "text": user_text}],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": assistant_text}]},
     ]
+
+
+@dataclass
+class McReasoningJsonParseResult:
+    reasoning_text: Optional[str]
+    predicted_letter: Optional[str]
+    json_parse_ok: bool
+
+
+def _strip_optional_json_fence(text: str) -> str:
+    s = (text or "").strip()
+    fence = re.match(r"^\s*```(?:json)?\s*\r?\n(.*?)\r?\n```\s*$", s, re.DOTALL | re.IGNORECASE)
+    if fence:
+        return fence.group(1).strip()
+    return s
+
+
+def parse_mc_reasoning_json_output(raw: str, num_options: int) -> McReasoningJsonParseResult:
+    """Parse {\"reasoning\", \"answer\"} from model output; fallback to parse_predicted_letter."""
+    stripped = _strip_optional_json_fence(raw)
+    clean_json_fragment = stripped
+    obj = None
+
+    try:
+        obj = json.loads(clean_json_fragment)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        if start == -1:
+            letter = parse_predicted_letter(stripped, num_options=num_options)
+            return McReasoningJsonParseResult(reasoning_text=None, predicted_letter=letter, json_parse_ok=False)
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(stripped[start:])
+        except json.JSONDecodeError:
+            letter = parse_predicted_letter(stripped, num_options=num_options)
+            return McReasoningJsonParseResult(reasoning_text=None, predicted_letter=letter, json_parse_ok=False)
+
+    if not isinstance(obj, dict):
+        letter = parse_predicted_letter(stripped, num_options=num_options)
+        return McReasoningJsonParseResult(reasoning_text=None, predicted_letter=letter, json_parse_ok=False)
+
+    reasoning_val = obj.get("reasoning")
+    reasoning_txt = reasoning_val.strip() if isinstance(reasoning_val, str) else None
+
+    ans_val = obj.get("answer")
+    letter: Optional[str] = None
+    if ans_val is not None:
+        if isinstance(ans_val, str):
+            letter = parse_predicted_letter(ans_val, num_options=num_options)
+            if letter is None and len(ans_val.strip()) == 1:
+                c = ans_val.strip().upper()
+                if c in LETTER_POOL[:num_options]:
+                    letter = c
+
+    json_ok = "reasoning" in obj and "answer" in obj
+    if letter is None:
+        letter = parse_predicted_letter(stripped, num_options=num_options)
+
+    return McReasoningJsonParseResult(reasoning_text=reasoning_txt, predicted_letter=letter, json_parse_ok=json_ok)
 
 
 def model_short_name(model_path: str) -> str:
@@ -71,60 +163,6 @@ def model_short_name(model_path: str) -> str:
     if "qwen" in name:
         return "qwen2.5-vl"
     return Path(model_path).name
-
-
-def is_pseudo_reasoning_verified(metadata: Optional[Dict[str, Any]]) -> bool:
-    """True when ``pseudo_reasoning_test`` is verified (bool or common string forms)."""
-    if not metadata:
-        return False
-    value = metadata.get("pseudo_reasoning_test")
-    if value is True:
-        return True
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "1", "yes"}
-    return False
-
-
-def pseudo_reasoning_raw_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Read ``pseudo_reasoning_raw`` or reconstruct from parsed pseudo fields."""
-    if not metadata:
-        return None
-    raw = metadata.get("pseudo_reasoning_raw")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    reg = str(metadata.get("pseudo_reasoning_region", "")).strip()
-    obs = str(metadata.get("pseudo_reasoning_observation", "")).strip()
-    exp = str(metadata.get("pseudo_reasoning_explanation", "")).strip()
-    if reg or obs or exp:
-        return format_reasoning_block_for_training(
-            reg if reg else "unknown",
-            obs if obs else "unknown",
-            exp if exp else "unknown",
-        )
-    return None
-
-
-def format_reasoning_answer_json(reasoning_raw: str, answer: str) -> str:
-    """Compact assistant target: ``{\"reasoning\": \"...\", \"answer\": \"B\"}``."""
-    payload = {
-        "reasoning": (reasoning_raw or "").strip(),
-        "answer": str(answer).strip(),
-    }
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-
-def configure_qwen_processor_pixels(
-    processor,
-    *,
-    min_pixels: int = MIN_PIXELS,
-    max_pixels: int = MAX_PIXELS,
-) -> None:
-    """Cap vision resolution for stable token counts during Qwen2.5-VL training."""
-    image_processor = getattr(processor, "image_processor", None)
-    if image_processor is None:
-        return
-    image_processor.min_pixels = min_pixels
-    image_processor.max_pixels = max_pixels
 
 
 def resolve_processor_path(model_path: str, default_path: str = DEFAULT_MODEL_PATH) -> str:
@@ -167,36 +205,6 @@ def build_mc_conversation(
     return conversation
 
 
-def build_mc_reasoning_conversation(
-    question: str,
-    options: List[str],
-    *,
-    reasoning_raw: str,
-    answer: str,
-    image: Any = None,
-) -> List[dict]:
-    """MC user turn + JSON assistant target with verified pseudo reasoning and answer letter."""
-    full_question = format_mc_user_text(question, options) + REASONING_JSON_INSTRUCTION
-    image_content: dict = {"type": "image"}
-    if image is not None:
-        image_content["image"] = image
-
-    assistant_text = format_reasoning_answer_json(reasoning_raw, answer)
-    return [
-        {
-            "role": "user",
-            "content": [
-                image_content,
-                {"type": "text", "text": full_question},
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": [{"type": "text", "text": assistant_text}],
-        },
-    ]
-
-
 def mask_labels_assistant_only(processor, input_ids: torch.Tensor, conversation: List[dict]) -> torch.Tensor:
     """Mask user/prompt tokens; loss is computed only on the assistant answer."""
     labels = input_ids.clone()
@@ -219,7 +227,6 @@ def prepare_qwen_inputs(
     add_generation_prompt: bool = False,
     max_length: Optional[int] = None,
     padding: bool | str = False,
-    truncation: bool = False,
     return_tensors: str = "pt",
 ) -> dict:
     """Apply chat template, vision preprocessing, and processor tokenization."""
@@ -239,8 +246,7 @@ def prepare_qwen_inputs(
     }
     if max_length is not None:
         processor_kwargs["max_length"] = max_length
-        if truncation:
-            processor_kwargs["truncation"] = True
+        processor_kwargs["truncation"] = True
 
     return processor(**processor_kwargs)
 
