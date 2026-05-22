@@ -107,8 +107,6 @@ def _sample_region(
     input_length = inputs["input_ids"].shape[1]
 
     letters: list[str | None] = []
-    confidences: list[float] = []
-    entropies: list[float] = []
 
     for _ in range(n_samples):
         gen_out = model.generate(
@@ -118,20 +116,21 @@ def _sample_region(
             temperature=temperature,
             top_p=top_p,
             return_dict_in_generate=True,
-            output_scores=True,
+            output_scores=False,
         )
         generated_ids = gen_out.sequences[0][input_length:]
         text = processor.decode(generated_ids, skip_special_tokens=True).strip()
         letters.append(parse_predicted_letter(text, num_options=n_options))
 
-        if gen_out.scores:
-            first_logits = gen_out.scores[0][0].double()
-            probs = torch.softmax(first_logits, dim=-1)
-            confidences.append(float(probs.max().item()))
-            entropies.append(float(
-                -torch.where(probs > 0, probs * torch.log(probs), torch.zeros_like(probs))
-                .sum().item()
-            ))
+    # Forward pass AFTER generate — raw logits free of temperature/top_p/suppressors.
+    fwd = model(**inputs, return_dict=True)
+    first_logits = fwd.logits[0, -1, :].double()
+    log_probs = torch.log_softmax(first_logits, dim=-1)
+    probs = torch.exp(log_probs)
+    mean_conf = float(probs.max().item())
+    mean_ent = float(
+        -torch.where(probs > 0, probs * log_probs, torch.zeros_like(log_probs)).sum().item()
+    )
 
     valid = [l for l in letters if l is not None]
 
@@ -142,9 +141,6 @@ def _sample_region(
 
     # agreement: plurality fraction (diagnostic; may differ when model is consistently wrong)
     agreement = (max(Counter(valid).values()) / len(valid)) if valid else 0.0
-
-    mean_conf = (sum(confidences) / len(confidences)) if confidences else 0.0
-    mean_ent  = (sum(entropies)   / len(entropies))   if entropies  else 0.0
 
     norm_entropy = min(mean_ent / log_vocab_size, 1.0) if log_vocab_size > 0 else 0.0
 
