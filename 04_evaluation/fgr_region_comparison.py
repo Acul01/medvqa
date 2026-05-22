@@ -160,7 +160,7 @@ def main() -> None:
         # Run baseline + L1 + L2.
         # global_threshold=0.0 disables the evidence gate so L2 always runs,
         # ensuring every sample contributes to all three score columns.
-        patches, _, baseline_score, baseline_score_ag, baseline_ca = run_hierarchical_perturbation(
+        patches, _, baseline_score, baseline_score_ag, baseline_ca, baseline_mc, baseline_me = run_hierarchical_perturbation(
             model,
             processor,
             image,
@@ -180,6 +180,19 @@ def main() -> None:
 
         l1_patches = [p for p in patches if p.level == 1]
         l2_patches = [p for p in patches if p.level == 2]
+
+        # ── Baseline score dicts ─────────────────────────────────────────────
+        baseline_sup_dict = {
+            "correct_agreement": round(baseline_ca, 4),
+            "mean_entropy":      round(baseline_me, 4),
+            "mean_confidence":   round(baseline_mc, 4),
+            "score":             round(baseline_score, 6),
+        }
+        baseline_ag_dict = {
+            "mean_entropy":    round(baseline_me, 4),
+            "mean_confidence": round(baseline_mc, 4),
+            "delta_score":     0.0,
+        }
 
         # ── Per-quadrant score dicts ─────────────────────────────────────────
         l1_scores_sup = {
@@ -217,46 +230,44 @@ def main() -> None:
             for i, p in enumerate(l2_patches)
         } if l2_patches else None
 
-        # ── Winner selection ─────────────────────────────────────────────────
-        best_l1_score = max(v["score"] for v in l1_scores_sup.values()) if l1_scores_sup else 0.0
-        best_l2_score = max(v["score"] for v in l2_scores_sup.values()) if l2_scores_sup else 0.0
-        best_l1_delta = max(v["delta_score"] for v in l1_scores_ag.values()) if l1_scores_ag else 0.0
-        best_l2_delta = max(v["delta_score"] for v in l2_scores_ag.values()) if l2_scores_ag else 0.0
+        # ── Per-level winners (quadrant labels) ──────────────────────────────
+        l1_winner_sup = max(l1_scores_sup, key=lambda q: l1_scores_sup[q]["score"]) if l1_scores_sup else None
+        l2_winner_sup = max(l2_scores_sup, key=lambda q: l2_scores_sup[q]["score"]) if l2_scores_sup else None
+        l1_winner_ag  = max(l1_scores_ag,  key=lambda q: l1_scores_ag[q]["delta_score"])  if l1_scores_ag  else None
+        l2_winner_ag  = max(l2_scores_ag,  key=lambda q: l2_scores_ag[q]["delta_score"])  if l2_scores_ag  else None
 
-        scores_sup = {"baseline": baseline_score, "l1": best_l1_score}
-        if l2_scores_sup:
-            scores_sup["l2"] = best_l2_score
-        winner_supervised = max(scores_sup, key=lambda k: scores_sup[k])
+        # ── Overall winner (baseline / l1 / l2) ─────────────────────────────
+        scores_sup = {"baseline": baseline_score,
+                      "l1": l1_scores_sup[l1_winner_sup]["score"] if l1_winner_sup else 0.0}
+        if l2_winner_sup:
+            scores_sup["l2"] = l2_scores_sup[l2_winner_sup]["score"]
+        overall_winner_sup = max(scores_sup, key=lambda k: scores_sup[k])
 
-        scores_ag = {"baseline": 0.0, "l1": best_l1_delta}
-        if l2_scores_ag:
-            scores_ag["l2"] = best_l2_delta
-        winner_unsupervised = max(scores_ag, key=lambda k: scores_ag[k])
+        scores_ag = {"baseline": 0.0,
+                     "l1": l1_scores_ag[l1_winner_ag]["delta_score"] if l1_winner_ag else 0.0}
+        if l2_winner_ag:
+            scores_ag["l2"] = l2_scores_ag[l2_winner_ag]["delta_score"]
+        overall_winner_ag = max(scores_ag, key=lambda k: scores_ag[k])
 
-        concordance = winner_supervised == winner_unsupervised
+        concordance = overall_winner_sup == overall_winner_ag
 
-        # ── Winner bbox ──────────────────────────────────────────────────────
-        def _winner_bbox(winner: str, sup_dict, ag_dict) -> list | None:
-            if winner == "baseline":
-                return None
-            src = sup_dict if ag_dict is None else (sup_dict if winner == "l1" else ag_dict)
-            # find the quadrant with the highest score
-            if winner == "l1":
-                best_q = max(l1_scores_sup, key=lambda q: l1_scores_sup[q]["score"])
-                return list(l1_patches[QUADS.index(best_q)].bbox)
-            if winner == "l2":
-                best_q = max(l2_scores_sup, key=lambda q: l2_scores_sup[q]["score"])
-                return list(l2_patches[QUADS.index(best_q)].bbox)
+        # ── Winner bboxes ────────────────────────────────────────────────────
+        def _sup_bbox() -> list | None:
+            if overall_winner_sup == "l1":
+                return list(l1_patches[QUADS.index(l1_winner_sup)].bbox)
+            if overall_winner_sup == "l2":
+                return list(l2_patches[QUADS.index(l2_winner_sup)].bbox)
             return None
 
-        sup_bbox = _winner_bbox(winner_supervised, l1_scores_sup, l2_scores_sup)
-        ag_bbox  = None
-        if winner_unsupervised == "l1":
-            best_q = max(l1_scores_ag, key=lambda q: l1_scores_ag[q]["delta_score"])
-            ag_bbox = list(l1_patches[QUADS.index(best_q)].bbox)
-        elif winner_unsupervised == "l2":
-            best_q = max(l2_scores_ag, key=lambda q: l2_scores_ag[q]["delta_score"])
-            ag_bbox = list(l2_patches[QUADS.index(best_q)].bbox)
+        def _ag_bbox() -> list | None:
+            if overall_winner_ag == "l1":
+                return list(l1_patches[QUADS.index(l1_winner_ag)].bbox)
+            if overall_winner_ag == "l2":
+                return list(l2_patches[QUADS.index(l2_winner_ag)].bbox)
+            return None
+
+        sup_bbox = _sup_bbox()
+        ag_bbox  = _ag_bbox()
 
         # ── Save winning crop images ─────────────────────────────────────────
         crops_dir = out_dir / f"{out_stem}_crops"
@@ -269,43 +280,45 @@ def main() -> None:
             crop_img.convert("RGB").save(crops_dir / fname, quality=95)
             return str(crops_dir / fname)
 
-        sup_crop_path = _save_crop(sup_bbox, f"sup_{winner_supervised}")
-        ag_crop_path  = _save_crop(ag_bbox,  f"ag_{winner_unsupervised}")
+        sup_crop_path = _save_crop(sup_bbox, f"sup_{overall_winner_sup}")
+        ag_crop_path  = _save_crop(ag_bbox,  f"ag_{overall_winner_ag}")
 
-        # ── Internal fields for aggregate (not in CSV columns) ───────────────
-        # correct_agreement of each winner (for winner_correct stats)
-        if winner_supervised == "baseline":
+        # ── correct_agreement of supervised winner (for aggregate stats) ─────
+        if overall_winner_sup == "baseline":
             _sup_ca = baseline_ca
-        elif winner_supervised == "l1":
-            best_q = max(l1_scores_sup, key=lambda q: l1_scores_sup[q]["score"])
-            _sup_ca = l1_scores_sup[best_q]["correct_agreement"]
+        elif overall_winner_sup == "l1":
+            _sup_ca = l1_scores_sup[l1_winner_sup]["correct_agreement"]
         else:
-            best_q = max(l2_scores_sup, key=lambda q: l2_scores_sup[q]["score"])
-            _sup_ca = l2_scores_sup[best_q]["correct_agreement"]
+            _sup_ca = l2_scores_sup[l2_winner_sup]["correct_agreement"]
 
         results.append({
             # ── Identification ────────────────────────────────────────────────
-            "image_path":   sample.image_path,
-            "question":     sample.question,
-            "options":      sample.mc_options,
-            "gt_letter":    gt_letter,
+            "image_path":    sample.image_path,
+            "question":      sample.question,
+            "options":       sample.mc_options,
+            "gt_letter":     gt_letter,
             "question_type": sample.question_type or "unknown",
             # ── Supervised ────────────────────────────────────────────────────
-            "baseline_score_supervised": round(baseline_score, 6),
-            "l1_scores_supervised":      l1_scores_sup,
-            "l2_scores_supervised":      l2_scores_sup,
-            "winner_supervised":         winner_supervised,
-            "winner_supervised_crop":    sup_crop_path,
+            "baseline_score_supervised":  baseline_sup_dict,
+            "l1_scores_supervised":       l1_scores_sup,
+            "l1_winner_supervised":       l1_winner_sup,
+            "l2_scores_supervised":       l2_scores_sup,
+            "l2_winner_supervised":       l2_winner_sup,
+            "overall_winner_supervised":       overall_winner_sup,
+            "overall_winner_supervised_crop":  sup_crop_path,
             # ── Unsupervised ──────────────────────────────────────────────────
-            "baseline_score_unsupervised": round(baseline_score_ag, 6),
+            "baseline_score_unsupervised": baseline_ag_dict,
             "l1_scores_unsupervised":      l1_scores_ag,
+            "l1_winner_unsupervised":      l1_winner_ag,
             "l2_scores_unsupervised":      l2_scores_ag,
-            "winner_unsupervised":         winner_unsupervised,
-            "winner_unsupervised_crop":    ag_crop_path,
+            "l2_winner_unsupervised":      l2_winner_ag,
+            "overall_winner_unsupervised":       overall_winner_ag,
+            "overall_winner_unsupervised_crop":  ag_crop_path,
             # ── Concordance ───────────────────────────────────────────────────
             "concordance": concordance,
-            # ── Internal (aggregate use only, excluded from CSV) ──────────────
+            # ── Internal (aggregate use only, excluded from CSV/JSON output) ──
             "_baseline_ca":        round(baseline_ca, 4),
+            "_baseline_score_ag":  round(baseline_score_ag, 6),
             "_winner_sup_ca":      round(_sup_ca, 4),
             "_winner_sup_correct": _sup_ca >= 0.5,
         })
@@ -323,8 +336,8 @@ def main() -> None:
     counts_ag  = {"baseline": 0, "l1": 0, **({"l2": 0} if has_l2 else {})}
     concordant = 0
     for r in results:
-        counts_sup[r["winner_supervised"]]  = counts_sup.get(r["winner_supervised"],  0) + 1
-        counts_ag[r["winner_unsupervised"]] = counts_ag.get(r["winner_unsupervised"], 0) + 1
+        counts_sup[r["overall_winner_supervised"]]  = counts_sup.get(r["overall_winner_supervised"],  0) + 1
+        counts_ag[r["overall_winner_unsupervised"]] = counts_ag.get(r["overall_winner_unsupervised"], 0) + 1
         if r["concordance"]:
             concordant += 1
 
@@ -333,13 +346,14 @@ def main() -> None:
     # Mean winning score per level (winners-only)
     def _mean_w_sup(key: str) -> float | None:
         if key == "baseline":
-            vals = [r["baseline_score_supervised"] for r in results if r["winner_supervised"] == "baseline"]
+            vals = [r["baseline_score_supervised"]["score"]
+                    for r in results if r["overall_winner_supervised"] == "baseline"]
         elif key == "l1":
             vals = [max(v["score"] for v in r["l1_scores_supervised"].values())
-                    for r in results if r["winner_supervised"] == "l1"]
+                    for r in results if r["overall_winner_supervised"] == "l1"]
         elif key == "l2":
             vals = [max(v["score"] for v in r["l2_scores_supervised"].values())
-                    for r in results if r["winner_supervised"] == "l2" and r["l2_scores_supervised"]]
+                    for r in results if r["overall_winner_supervised"] == "l2" and r["l2_scores_supervised"]]
         else:
             return None
         return _safe_div(sum(vals), len(vals)) if vals else float("nan")
@@ -349,10 +363,10 @@ def main() -> None:
             return 0.0
         elif key == "l1":
             vals = [max(v["delta_score"] for v in r["l1_scores_unsupervised"].values())
-                    for r in results if r["winner_unsupervised"] == "l1"]
+                    for r in results if r["overall_winner_unsupervised"] == "l1"]
         elif key == "l2":
             vals = [max(v["delta_score"] for v in r["l2_scores_unsupervised"].values())
-                    for r in results if r["winner_unsupervised"] == "l2" and r["l2_scores_unsupervised"]]
+                    for r in results if r["overall_winner_unsupervised"] == "l2" and r["l2_scores_unsupervised"]]
         else:
             return None
         return _safe_div(sum(vals), len(vals)) if vals else float("nan")
@@ -367,7 +381,7 @@ def main() -> None:
     winner_any_correct_rate  = _safe_div(winner_any_correct_count, total)
 
     mean_baseline_ag_abs = _safe_div(
-        sum(r["baseline_score_unsupervised"] for r in results), total
+        sum(r["_baseline_score_ag"] for r in results), total
     )
 
     level_keys   = ["baseline", "l1"] + (["l2"] if has_l2 else [])
@@ -425,16 +439,16 @@ def main() -> None:
     # ── Winning-crops JSON (for later inference) ──────────────────────────────
     winning_crops = [
         {
-            "image_path":               r["image_path"],
-            "question":                 r["question"],
-            "options":                  r["options"],
-            "gt_letter":                r["gt_letter"],
-            "question_type":            r["question_type"],
-            "winner_supervised":        r["winner_supervised"],
-            "winner_supervised_crop":   r["winner_supervised_crop"],
-            "winner_unsupervised":      r["winner_unsupervised"],
-            "winner_unsupervised_crop": r["winner_unsupervised_crop"],
-            "concordance":              r["concordance"],
+            "image_path":                      r["image_path"],
+            "question":                        r["question"],
+            "options":                         r["options"],
+            "gt_letter":                       r["gt_letter"],
+            "question_type":                   r["question_type"],
+            "overall_winner_supervised":       r["overall_winner_supervised"],
+            "overall_winner_supervised_crop":  r["overall_winner_supervised_crop"],
+            "overall_winner_unsupervised":     r["overall_winner_unsupervised"],
+            "overall_winner_unsupervised_crop":r["overall_winner_unsupervised_crop"],
+            "concordance":                     r["concordance"],
         }
         for r in results
     ]
@@ -447,13 +461,13 @@ def main() -> None:
     CSV_COLS = [
         "image_path", "question", "options", "gt_letter", "question_type",
         "baseline_score_supervised",
-        "l1_scores_supervised",
-        *( ["l2_scores_supervised"] if has_l2 else []),
-        "winner_supervised", "winner_supervised_crop",
+        "l1_scores_supervised", "l1_winner_supervised",
+        *( ["l2_scores_supervised", "l2_winner_supervised"] if has_l2 else []),
+        "overall_winner_supervised", "overall_winner_supervised_crop",
         "baseline_score_unsupervised",
-        "l1_scores_unsupervised",
-        *( ["l2_scores_unsupervised"] if has_l2 else []),
-        "winner_unsupervised", "winner_unsupervised_crop",
+        "l1_scores_unsupervised", "l1_winner_unsupervised",
+        *( ["l2_scores_unsupervised", "l2_winner_unsupervised"] if has_l2 else []),
+        "overall_winner_unsupervised", "overall_winner_unsupervised_crop",
         "concordance",
     ]
     flat = []
@@ -494,14 +508,14 @@ def main() -> None:
 
         table = wandb.Table(columns=[
             "image_path", "question", "gt_letter", "question_type",
-            "winner_supervised", "winner_supervised_correct",
-            "winner_unsupervised", "concordance",
+            "overall_winner_supervised", "winner_supervised_correct",
+            "overall_winner_unsupervised", "concordance",
         ])
         for r in results:
             table.add_data(
                 r["image_path"], r["question"], r["gt_letter"], r["question_type"],
-                r["winner_supervised"], r["_winner_sup_correct"],
-                r["winner_unsupervised"], r["concordance"],
+                r["overall_winner_supervised"], r["_winner_sup_correct"],
+                r["overall_winner_unsupervised"], r["concordance"],
             )
         wandb.log({"region_comparison": table})
         wandb.finish()

@@ -230,7 +230,7 @@ def run_hierarchical_perturbation(
         )
 
     # ── Baseline: full image ─────────────────────────────────────────────────
-    baseline_ca, _, _, _, baseline_score, baseline_score_agreement = _score(image)
+    baseline_ca, _, baseline_mc, baseline_me, baseline_score, baseline_score_agreement = _score(image)
 
     all_patches: list[PerturbPatch] = []
 
@@ -257,10 +257,10 @@ def run_hierarchical_perturbation(
     # ── Global-evidence gate (uses supervised score for ranking) ─────────────
     best_l1_score = max(p.importance for p in l1_patches)
     if baseline_score > 0 and best_l1_score < global_threshold * baseline_score:
-        return all_patches, "global", baseline_score, baseline_score_agreement, baseline_ca
+        return all_patches, "global", baseline_score, baseline_score_agreement, baseline_ca, baseline_mc, baseline_me
 
     if n_levels < 2:
-        return all_patches, "local", baseline_score, baseline_score_agreement, baseline_ca, baseline_ca
+        return all_patches, "local", baseline_score, baseline_score_agreement, baseline_ca, baseline_mc, baseline_me
 
     # ── Level 2: four sub-quadrants of the best L1 patch ────────────────────
     best_l1 = max(l1_patches, key=lambda p: p.importance)
@@ -272,7 +272,7 @@ def run_hierarchical_perturbation(
     all_patches.extend(l2_patches)
 
     if n_levels < 3:
-        return all_patches, "local", baseline_score, baseline_score_agreement, baseline_ca
+        return all_patches, "local", baseline_score, baseline_score_agreement, baseline_ca, baseline_mc, baseline_me
 
     # ── Level 3: four sub-quadrants of the best L2 patch ────────────────────
     best_l2 = max(l2_patches, key=lambda p: p.importance)
@@ -283,7 +283,7 @@ def run_hierarchical_perturbation(
     _delta_ag(l3_patches)
     all_patches.extend(l3_patches)
 
-    return all_patches, "local", baseline_score, baseline_score_agreement
+    return all_patches, "local", baseline_score, baseline_score_agreement, baseline_ca, baseline_mc, baseline_me
 
 
 # ---------------------------------------------------------------------------
