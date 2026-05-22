@@ -13,7 +13,7 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-from utils.ablation import DEFAULT_FGR_CROP_FIELD, prepare_fgr_crop_lookup, resolve_ablation_image
+from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_vqa import parse_predicted_letter
@@ -63,20 +63,14 @@ def parse_args():
         "--ablation_mode",
         type=str,
         default="none",
-        choices=["none", "black", "shuffle", "fgr_crop"],
+        choices=["none", "black", "shuffle", "crop_unsupervised", "crop_supervised"],
     )
     parser.add_argument("--ablation_seed", type=int, default=42)
     parser.add_argument(
         "--fgr_region_comparison_json",
         type=str,
         default=None,
-        help="Required for --ablation_mode fgr_crop (output of fgr_region_comparison.py)",
-    )
-    parser.add_argument(
-        "--fgr_crop_field",
-        type=str,
-        default=DEFAULT_FGR_CROP_FIELD,
-        help="JSON field with winning crop path (default: overall_winner_unsupervised_crop)",
+        help="Required for crop_unsupervised/crop_supervised (output of fgr_region_comparison.py)",
     )
     parser.add_argument("--results_dir", type=str, default=get_results_dir())
     parser.add_argument("--n_samples", type=int, default=None)
@@ -174,7 +168,6 @@ def main():
     fgr_crop_lookup = prepare_fgr_crop_lookup(
         args.ablation_mode,
         args.fgr_region_comparison_json,
-        crop_field=args.fgr_crop_field,
         data_root=args.data_root,
     )
 

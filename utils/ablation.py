@@ -11,7 +11,11 @@ from typing import Any, Dict, Optional, Tuple
 AblationLookupKey = Tuple[str, str]
 FgrCropLookup = Dict[AblationLookupKey, str]
 
-DEFAULT_FGR_CROP_FIELD = "overall_winner_unsupervised_crop"
+FGR_CROP_FIELD_BY_MODE = {
+    "crop_unsupervised": "overall_winner_unsupervised_crop",
+    "crop_supervised": "overall_winner_supervised_crop",
+}
+FGR_CROP_MODES = frozenset(FGR_CROP_FIELD_BY_MODE)
 
 
 @dataclass
@@ -22,6 +26,20 @@ class AblationImageResolution:
     fgr_crop_path: Optional[str] = None
     skipped: bool = False
     skip_reason: Optional[str] = None
+
+
+def is_fgr_crop_ablation(ablation_mode: str) -> bool:
+    return ablation_mode in FGR_CROP_MODES
+
+
+def fgr_crop_field_for_mode(ablation_mode: str) -> str:
+    try:
+        return FGR_CROP_FIELD_BY_MODE[ablation_mode]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown FGR crop ablation mode {ablation_mode!r}; "
+            f"expected one of {sorted(FGR_CROP_MODES)}"
+        ) from exc
 
 
 def normalize_ablation_image_key(image_path: str, data_root: Optional[str] = None) -> str:
@@ -63,7 +81,7 @@ def _load_fgr_rows(payload: Any) -> list[dict]:
 def load_fgr_crop_lookup(
     json_path: str | Path,
     *,
-    crop_field: str = DEFAULT_FGR_CROP_FIELD,
+    crop_field: str,
     data_root: Optional[str] = None,
 ) -> FgrCropLookup:
     """Build (image_key, question) -> absolute crop path from FGR comparison JSON."""
@@ -105,9 +123,10 @@ def validate_ablation_args(
     ablation_mode: str,
     fgr_region_comparison_json: Optional[str],
 ) -> None:
-    if ablation_mode == "fgr_crop" and not fgr_region_comparison_json:
+    if is_fgr_crop_ablation(ablation_mode) and not fgr_region_comparison_json:
         raise ValueError(
-            "--fgr_region_comparison_json is required when --ablation_mode fgr_crop"
+            "--fgr_region_comparison_json is required when --ablation_mode is "
+            "crop_unsupervised or crop_supervised"
         )
 
 
@@ -115,16 +134,15 @@ def prepare_fgr_crop_lookup(
     ablation_mode: str,
     fgr_region_comparison_json: Optional[str],
     *,
-    crop_field: str = DEFAULT_FGR_CROP_FIELD,
     data_root: Optional[str] = None,
 ) -> Optional[FgrCropLookup]:
     validate_ablation_args(ablation_mode, fgr_region_comparison_json)
-    if ablation_mode != "fgr_crop":
+    if not is_fgr_crop_ablation(ablation_mode):
         return None
     assert fgr_region_comparison_json is not None
     return load_fgr_crop_lookup(
         fgr_region_comparison_json,
-        crop_field=crop_field,
+        crop_field=fgr_crop_field_for_mode(ablation_mode),
         data_root=data_root,
     )
 
@@ -140,9 +158,11 @@ def resolve_ablation_image(
     data_root: Optional[str] = None,
 ) -> AblationImageResolution:
     """Resolve which image file to load for the current ablation mode."""
-    if ablation_mode == "fgr_crop":
+    if is_fgr_crop_ablation(ablation_mode):
         if fgr_crop_lookup is None:
-            raise ValueError("fgr_crop_lookup is required for ablation_mode=fgr_crop")
+            raise ValueError(
+                f"fgr_crop_lookup is required for ablation_mode={ablation_mode!r}"
+            )
         key = (
             normalize_ablation_image_key(source_image_path, data_root=data_root),
             question.strip(),

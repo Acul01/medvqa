@@ -426,14 +426,14 @@ Für kontrollierte Gegenfaktual-Tests kann ein globaler Ablationsmodus gesetzt w
 - `--ablation_mode none`: Standard, Originalbild pro Sample
 - `--ablation_mode black`: Bild wird vollständig geschwärzt (gleiche Auflösung)
 - `--ablation_mode shuffle`: Bildzuordnung wird pro Run zufällig zwischen Samples permutiert (Frage/GT bleiben beim Originalsample)
-- `--ablation_mode fgr_crop`: Statt Original wird das **FGR Winning Crop** aus einer Region-Comparison-JSON verwendet (Feld `overall_winner_unsupervised_crop` by default)
+- `--ablation_mode crop_unsupervised`: FGR Winning Crop aus `overall_winner_unsupervised_crop`
+- `--ablation_mode crop_supervised`: FGR Winning Crop aus `overall_winner_supervised_crop`
 
 Optional steuert `--ablation_seed` die reproduzierbare Permutation im `shuffle`-Modus.
 
-Für `fgr_crop` zusätzlich:
+Für `crop_unsupervised` / `crop_supervised` zusätzlich:
 
 - `--fgr_region_comparison_json` (Pfad zur JSON von `fgr_region_comparison.py`, z. B. `fgr_region_comparison_vqarad_10.json`)
-- optional `--fgr_crop_field` (Default: `overall_winner_unsupervised_crop`)
 - Samples **ohne** Mapping in der JSON werden **übersprungen** (Log: `Skipped N samples ...`)
 
 Beispiel (`black`):
@@ -457,14 +457,26 @@ python 04_evaluation/inference_llava.py \
   --results_dir 07_results
 ```
 
-Beispiel (`fgr_crop` mit Qwen):
+Beispiel (`crop_unsupervised` mit Qwen):
 
 ```bash
 PYTHONPATH=. python 04_evaluation/inference_qwen.py \
   --dataset vqarad \
   --split test \
   --n_samples 10 \
-  --ablation_mode fgr_crop \
+  --ablation_mode crop_unsupervised \
+  --fgr_region_comparison_json fgr_region_comparison_vqarad_10.json \
+  --disable_wandb
+```
+
+Beispiel (`crop_supervised`):
+
+```bash
+PYTHONPATH=. python 04_evaluation/inference_qwen.py \
+  --dataset vqarad \
+  --split test \
+  --n_samples 10 \
+  --ablation_mode crop_supervised \
   --fgr_region_comparison_json fgr_region_comparison_vqarad_10.json \
   --disable_wandb
 ```
@@ -483,7 +495,7 @@ PYTHONPATH=. python 04_evaluation/inference_qwen.py \
 ### JSON-Felder pro Sample (mindestens)
 
 - `image_path`, `source_image_path`, `ablation_mode`, `question`, `ground_truth_answer`, `predicted_answer`
-- bei `fgr_crop`: zusätzlich `fgr_crop_path` (effektives Crop-Bild; `image_path` ist gleich gesetzt)
+- bei `crop_unsupervised` / `crop_supervised`: zusätzlich `fgr_crop_path` (effektives Crop-Bild; `image_path` ist gleich gesetzt)
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - optional 2-stage Felder: `reasoning_raw`, `reasoning_region`, `reasoning_observation`, `reasoning_explanation`, `reasoning_parse_mode` (`best_effort`)
 - optionale Strict-Decoding-Felder: `stage2_decoding_mode`, `stage2_option_probs`
