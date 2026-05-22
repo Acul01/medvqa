@@ -12,6 +12,47 @@ from utils.mc_vqa import format_mc_user_text
 
 DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
 
+# Gray placeholder required by Qwen2.5-VL processor when verifying from text-only rationale (no clinical image).
+PSEUDO_REASONING_VERIFY_PLACEHOLDER_SIZE = (224, 224)
+
+
+def make_pseudo_reasoning_verify_placeholder(
+    *,
+    width: int = PSEUDO_REASONING_VERIFY_PLACEHOLDER_SIZE[0],
+    height: int = PSEUDO_REASONING_VERIFY_PLACEHOLDER_SIZE[1],
+) -> Any:
+    """Uniform RGB gray image; pairing contract for ``build_pseudo_reasoning_verify_conversation``."""
+    from PIL import Image
+
+    return Image.new("RGB", (int(width), int(height)), color=(128, 128, 128))
+
+
+def build_pseudo_reasoning_verify_conversation(
+    question: str,
+    options: List[str],
+    reasoning_text: str,
+    *,
+    placeholder_image: Any,
+) -> List[dict]:
+    """User turn: meaningless placeholder image + rationale + MC question/options (matches ``format_mc_user_text`` tail)."""
+    intro = (
+        "You verify a medical multiple-choice item. "
+        "The image shown is only a meaningless gray placeholder — do not use visual information.\n"
+        "Base your answer solely on the textual reasoning provided below.\n\n"
+        f"Reasoning:\n{(reasoning_text or '').strip()}\n\n"
+    )
+    rest = format_mc_user_text(question, options)
+    full_text = intro + rest
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": placeholder_image},
+                {"type": "text", "text": full_text},
+            ],
+        }
+    ]
+
 
 def model_short_name(model_path: str) -> str:
     name = Path(model_path).name.lower()

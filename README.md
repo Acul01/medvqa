@@ -123,6 +123,7 @@ flowchart LR
 | `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
 | `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
 | `04_evaluation/inference_qwen.py` | Inferenz + Entropie (**Qwen2.5-VL**) |
+| `04_evaluation/verify_pseudo_reasoning_qwen.py` | Qwen-Verifikation: MC-Buchstabe nur aus Pseudo-Rationale + Options (Platzhalterbild) |
 | `04_evaluation/inference_medvlm_r1.py` | Inferenz (**MedVLM-R1**, pretrained) |
 | `utils/qwen_vl.py` | Qwen-Input-Prep, Label-Masking, gemeinsame Hilfen |
 | `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
@@ -490,6 +491,19 @@ python 04_evaluation/inference_qwen.py \
 
 Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` weglassen oder explizit setzen (ohne `--finetuned`).
 
+**Pseudo-Rationale prüfen:** [`04_evaluation/verify_pseudo_reasoning_qwen.py`](04_evaluation/verify_pseudo_reasoning_qwen.py) lädt z. B. `*_mc_openai_pseudo.json`, gibt Qwen einen **neutralen Grauton** als Bild-Placeholder (kein Medizinisches Signal) und im Text **Rationale + Frage + Optionen**. Ausgabe: Kopie als `*_pr_qwen_verify.json` (+ optional CSV) mit:
+
+- `pseudo_reasoning_test`: `true` wenn extrahierte Modellbuchstaben-Antwort dem goldenen Label (`correct_index`) entspricht, sonst `false`; `null` bei ungültiger MC-Zeile oder fehlender Rationale
+- `pseudo_reasoning_verify_pred_letter`, `pseudo_reasoning_verify_raw` zur Fehleranalyse
+
+```bash
+python 04_evaluation/verify_pseudo_reasoning_qwen.py \
+  --input_json 02_data/data_mc_openai/vqarad/vqarad_test_mc_openai_pseudo.json \
+  --model_path Qwen/Qwen2.5-VL-7B-Instruct \
+  --n_samples 50
+# Standard-Ausgabe: ..._pr_qwen_verify.json (gleiches Verzeichnis); mit --no_csv nur JSON
+```
+
 ### MedVLM-R1 (off-the-shelf)
 
 **MedVLM-R1** ([`JZPeterPan/MedVLM-R1`](https://huggingface.co/JZPeterPan/MedVLM-R1)) ist ein **Qwen2-VL-2B**-Modell mit GRPO-Reasoning (strukturierte Ausgabe mit Reasoning- und `<answer>`-Tags). Es läuft über `inference_medvlm_r1.py` mit dem **gleichen** `MedicalVQALoader` und MC-Test-Splits wie Qwen/LLaVA.
@@ -839,6 +853,8 @@ python utils/build_pseudo_reasonings_openai.py \
   --datasets pathvqa \
   --resume
 ```
+
+Optional: **„kann man das Rationale konsistent mit dem Gold-Label begründen?“** prüfen mit Qwen (nur Text + MC-Optionen, graues Platzhalterbild) → `verify_pseudo_reasoning_qwen.py` (Details im Abschnitt Inferenz Qwen2.5-VL oben).
 
 Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser am Modell — die Pseudo-Rationales sind eine **separate Datenanreicherung** für Training/Analyse.
 
