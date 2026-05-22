@@ -305,6 +305,7 @@ def main() -> None:
             "l2_scores_supervised":       l2_scores_sup,
             "l2_winner_supervised":       l2_winner_sup,
             "overall_winner_supervised":       overall_winner_sup,
+            "overall_winner_supervised_bbox":  sup_bbox,
             "overall_winner_supervised_crop":  sup_crop_path,
             # ── Unsupervised ──────────────────────────────────────────────────
             "baseline_score_unsupervised": baseline_ag_dict,
@@ -463,7 +464,7 @@ def main() -> None:
         "baseline_score_supervised",
         "l1_scores_supervised", "l1_winner_supervised",
         *( ["l2_scores_supervised", "l2_winner_supervised"] if has_l2 else []),
-        "overall_winner_supervised", "overall_winner_supervised_crop",
+        "overall_winner_supervised", "overall_winner_supervised_bbox", "overall_winner_supervised_crop",
         "baseline_score_unsupervised",
         "l1_scores_unsupervised", "l1_winner_unsupervised",
         *( ["l2_scores_unsupervised", "l2_winner_unsupervised"] if has_l2 else []),

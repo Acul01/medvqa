@@ -4,18 +4,27 @@ from __future__ import annotations
 
 import json
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 AblationLookupKey = Tuple[str, str]
 FgrCropLookup = Dict[AblationLookupKey, str]
+FgrBboxLookup = Dict[AblationLookupKey, Optional[List[int]]]
+
+# Sentinel used to distinguish "key not in bbox lookup" from "key maps to None (baseline)"
+_MISSING = object()
 
 FGR_CROP_FIELD_BY_MODE = {
     "crop_unsupervised": "overall_winner_unsupervised_crop",
     "crop_supervised": "overall_winner_supervised_crop",
 }
 FGR_CROP_MODES = frozenset(FGR_CROP_FIELD_BY_MODE)
+
+FGR_BBOX_FIELD_BY_MODE = {
+    "bbox_supervised": "overall_winner_supervised_bbox",
+}
+FGR_BBOX_MODES = frozenset(FGR_BBOX_FIELD_BY_MODE)
 
 
 @dataclass
@@ -24,12 +33,19 @@ class AblationImageResolution:
 
     effective_image_path: str
     fgr_crop_path: Optional[str] = None
+    # For bbox_supervised: [x1, y1, x2, y2] to draw on the full image.
+    # None means the FGR winner was "baseline" — use the full image as-is.
+    fgr_bbox: Optional[List[int]] = None
     skipped: bool = False
     skip_reason: Optional[str] = None
 
 
 def is_fgr_crop_ablation(ablation_mode: str) -> bool:
     return ablation_mode in FGR_CROP_MODES
+
+
+def is_fgr_bbox_ablation(ablation_mode: str) -> bool:
+    return ablation_mode in FGR_BBOX_MODES
 
 
 def fgr_crop_field_for_mode(ablation_mode: str) -> str:
@@ -119,14 +135,85 @@ def load_fgr_crop_lookup(
     return lookup
 
 
+def load_fgr_bbox_lookup(
+    json_path: str | Path,
+    *,
+    bbox_field: str,
+    data_root: Optional[str] = None,
+) -> FgrBboxLookup:
+    """Build (image_key, question) -> bbox ([x1,y1,x2,y2] or None) from FGR comparison JSON.
+
+    None entries correspond to samples where the FGR winner was "baseline"
+    (the full image) — no sub-region was identified.  These are *included* in
+    the lookup so the caller can distinguish between "sample not found" and
+    "sample found but no crop region".
+    """
+    path = Path(json_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"FGR region comparison JSON not found: {path}")
+
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+
+    lookup: FgrBboxLookup = {}
+    for row in _load_fgr_rows(payload):
+        image_path = row.get("image_path")
+        question = row.get("question")
+        if not isinstance(image_path, str) or not isinstance(question, str):
+            continue
+        bbox_value = row.get(bbox_field)
+        if bbox_value is not None:
+            if not (isinstance(bbox_value, (list, tuple)) and len(bbox_value) == 4):
+                warnings.warn(
+                    f"Unexpected bbox value {bbox_value!r} in {path.name}, treating as None",
+                    stacklevel=2,
+                )
+                bbox_value = None
+            else:
+                bbox_value = [int(v) for v in bbox_value]
+        key = (normalize_ablation_image_key(image_path, data_root=data_root), question.strip())
+        lookup[key] = bbox_value  # None (baseline) or [x1, y1, x2, y2]
+
+    if not lookup:
+        raise ValueError(
+            f"No bbox mappings loaded from {path} (field={bbox_field!r})"
+        )
+    n_baseline = sum(1 for v in lookup.values() if v is None)
+    print(
+        f"Loaded {len(lookup)} FGR bbox mappings from {path.name} "
+        f"({bbox_field}; {n_baseline} baseline/no-crop)"
+    )
+    return lookup
+
+
+def prepare_fgr_bbox_lookup(
+    ablation_mode: str,
+    fgr_region_comparison_json: Optional[str],
+    *,
+    data_root: Optional[str] = None,
+) -> Optional[FgrBboxLookup]:
+    if ablation_mode not in FGR_BBOX_MODES:
+        return None
+    if not fgr_region_comparison_json:
+        raise ValueError(
+            "--fgr_region_comparison_json is required when --ablation_mode is bbox_supervised"
+        )
+    bbox_field = FGR_BBOX_FIELD_BY_MODE[ablation_mode]
+    return load_fgr_bbox_lookup(
+        fgr_region_comparison_json,
+        bbox_field=bbox_field,
+        data_root=data_root,
+    )
+
+
 def validate_ablation_args(
     ablation_mode: str,
     fgr_region_comparison_json: Optional[str],
 ) -> None:
-    if is_fgr_crop_ablation(ablation_mode) and not fgr_region_comparison_json:
+    if (is_fgr_crop_ablation(ablation_mode) or is_fgr_bbox_ablation(ablation_mode)) and not fgr_region_comparison_json:
         raise ValueError(
             "--fgr_region_comparison_json is required when --ablation_mode is "
-            "crop_unsupervised or crop_supervised"
+            "crop_unsupervised, crop_supervised, or bbox_supervised"
         )
 
 
@@ -155,6 +242,7 @@ def resolve_ablation_image(
     sample_idx: int,
     shuffle_assignment: dict[int, str],
     fgr_crop_lookup: Optional[FgrCropLookup] = None,
+    fgr_bbox_lookup: Optional[FgrBboxLookup] = None,
     data_root: Optional[str] = None,
 ) -> AblationImageResolution:
     """Resolve which image file to load for the current ablation mode."""
@@ -177,6 +265,28 @@ def resolve_ablation_image(
         return AblationImageResolution(
             effective_image_path=crop_path,
             fgr_crop_path=crop_path,
+        )
+
+    if is_fgr_bbox_ablation(ablation_mode):
+        if fgr_bbox_lookup is None:
+            raise ValueError(
+                f"fgr_bbox_lookup is required for ablation_mode={ablation_mode!r}"
+            )
+        key = (
+            normalize_ablation_image_key(source_image_path, data_root=data_root),
+            question.strip(),
+        )
+        bbox = fgr_bbox_lookup.get(key, _MISSING)
+        if bbox is _MISSING:
+            return AblationImageResolution(
+                effective_image_path=source_image_path,
+                skipped=True,
+                skip_reason="no FGR bbox mapping",
+            )
+        # bbox is None (baseline winner → use full image as-is) or [x1,y1,x2,y2]
+        return AblationImageResolution(
+            effective_image_path=source_image_path,
+            fgr_bbox=bbox,  # type: ignore[arg-type]
         )
 
     effective = shuffle_assignment.get(sample_idx, source_image_path)

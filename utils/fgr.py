@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from utils.mc_vqa import parse_predicted_letter
 from utils.qwen_vl import build_mc_conversation, prepare_qwen_inputs
@@ -383,4 +383,31 @@ def blur_fill_region(
     img = image.copy()
     blurred = img.crop(bbox).filter(ImageFilter.GaussianBlur(radius=radius))
     img.paste(blurred, (bbox[0], bbox[1]))
+    return img
+
+
+def draw_bbox_on_image(
+    image: Image.Image,
+    bbox: tuple[int, int, int, int] | list[int],
+    *,
+    color: str = "red",
+    line_width: int = 4,
+) -> Image.Image:
+    """Draw a filled-border bounding box on a copy of *image* and return it (Setting D).
+
+    Parameters
+    ----------
+    bbox:
+        ``(x1, y1, x2, y2)`` in image pixel coordinates.
+    color:
+        Any PIL-compatible colour string, e.g. ``"red"``, ``"yellow"``.
+    line_width:
+        Thickness of the rectangle outline in pixels.  Drawn inward so the
+        bbox never extends beyond the image boundary.
+    """
+    img = image.copy()
+    draw = ImageDraw.Draw(img)
+    x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+    for i in range(line_width):
+        draw.rectangle([x1 + i, y1 + i, x2 - i, y2 - i], outline=color)
     return img

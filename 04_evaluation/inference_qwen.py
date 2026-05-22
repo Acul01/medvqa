@@ -13,7 +13,8 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
+from utils.ablation import prepare_fgr_bbox_lookup, prepare_fgr_crop_lookup, resolve_ablation_image
+from utils.fgr import draw_bbox_on_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_vqa import parse_predicted_letter
@@ -63,14 +64,26 @@ def parse_args():
         "--ablation_mode",
         type=str,
         default="none",
-        choices=["none", "black", "shuffle", "crop_unsupervised", "crop_supervised"],
+        choices=["none", "black", "shuffle", "crop_unsupervised", "crop_supervised", "bbox_supervised"],
     )
     parser.add_argument("--ablation_seed", type=int, default=42)
     parser.add_argument(
         "--fgr_region_comparison_json",
         type=str,
         default=None,
-        help="Required for crop_unsupervised/crop_supervised (output of fgr_region_comparison.py)",
+        help="Required for crop_unsupervised/crop_supervised/bbox_supervised (output of fgr_region_comparison.py)",
+    )
+    parser.add_argument(
+        "--bbox_color",
+        type=str,
+        default="red",
+        help="Colour of the bounding box drawn on the image for bbox_supervised mode (default: red).",
+    )
+    parser.add_argument(
+        "--bbox_line_width",
+        type=int,
+        default=4,
+        help="Line thickness in pixels for the bounding box (default: 4).",
     )
     parser.add_argument("--results_dir", type=str, default=get_results_dir())
     parser.add_argument("--n_samples", type=int, default=None)
@@ -170,6 +183,11 @@ def main():
         args.fgr_region_comparison_json,
         data_root=args.data_root,
     )
+    fgr_bbox_lookup = prepare_fgr_bbox_lookup(
+        args.ablation_mode,
+        args.fgr_region_comparison_json,
+        data_root=args.data_root,
+    )
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
@@ -202,6 +220,7 @@ def main():
                 sample_idx=sample_idx,
                 shuffle_assignment=shuffle_assignment,
                 fgr_crop_lookup=fgr_crop_lookup,
+                fgr_bbox_lookup=fgr_bbox_lookup,
                 data_root=args.data_root,
             )
             if ablation.skipped:
@@ -211,6 +230,12 @@ def main():
             image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
                 image = Image.new("RGB", image.size, color=(0, 0, 0))
+            elif args.ablation_mode == "bbox_supervised" and ablation.fgr_bbox is not None:
+                image = draw_bbox_on_image(
+                    image, ablation.fgr_bbox,
+                    color=args.bbox_color,
+                    line_width=args.bbox_line_width,
+                )
 
             conversation = build_mc_conversation(
                 sample.question,
