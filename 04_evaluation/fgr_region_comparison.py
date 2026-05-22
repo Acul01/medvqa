@@ -176,63 +176,87 @@ def main() -> None:
             max_new_tokens=args.max_new_tokens,
         )
 
+        QUADS = ["TL", "TR", "BL", "BR"]
+
         l1_patches = [p for p in patches if p.level == 1]
         l2_patches = [p for p in patches if p.level == 2]
-        l3_patches = [p for p in patches if p.level == 3]
 
-        best_l1 = max(l1_patches, key=lambda p: p.importance) if l1_patches else None
-        best_l2 = max(l2_patches, key=lambda p: p.importance) if l2_patches else None
-        best_l3 = max(l3_patches, key=lambda p: p.importance) if l3_patches else None
+        # ── Per-quadrant score dicts ─────────────────────────────────────────
+        l1_scores_sup = {
+            QUADS[i]: {
+                "correct_agreement": round(p.correct_agreement, 4),
+                "mean_entropy":      round(p.mean_entropy, 4),
+                "mean_confidence":   round(p.mean_confidence, 4),
+                "score":             round(p.importance, 6),
+            }
+            for i, p in enumerate(l1_patches)
+        }
+        l1_scores_ag = {
+            QUADS[i]: {
+                "mean_entropy":    round(p.mean_entropy, 4),
+                "mean_confidence": round(p.mean_confidence, 4),
+                "delta_score":     round(p.importance_agreement, 6),
+            }
+            for i, p in enumerate(l1_patches)
+        }
+        l2_scores_sup = {
+            QUADS[i]: {
+                "correct_agreement": round(p.correct_agreement, 4),
+                "mean_entropy":      round(p.mean_entropy, 4),
+                "mean_confidence":   round(p.mean_confidence, 4),
+                "score":             round(p.importance, 6),
+            }
+            for i, p in enumerate(l2_patches)
+        } if l2_patches else None
+        l2_scores_ag = {
+            QUADS[i]: {
+                "mean_entropy":    round(p.mean_entropy, 4),
+                "mean_confidence": round(p.mean_confidence, 4),
+                "delta_score":     round(p.importance_agreement, 6),
+            }
+            for i, p in enumerate(l2_patches)
+        } if l2_patches else None
 
-        # Supervised scores (correct_agreement-based)
-        best_l1_score = best_l1.importance if best_l1 else 0.0
-        best_l2_score = best_l2.importance if best_l2 else 0.0
-        best_l3_score = best_l3.importance if best_l3 else 0.0
+        # ── Winner selection ─────────────────────────────────────────────────
+        best_l1_score = max(v["score"] for v in l1_scores_sup.values()) if l1_scores_sup else 0.0
+        best_l2_score = max(v["score"] for v in l2_scores_sup.values()) if l2_scores_sup else 0.0
+        best_l1_delta = max(v["delta_score"] for v in l1_scores_ag.values()) if l1_scores_ag else 0.0
+        best_l2_delta = max(v["delta_score"] for v in l2_scores_ag.values()) if l2_scores_ag else 0.0
 
         scores_sup = {"baseline": baseline_score, "l1": best_l1_score}
-        if best_l2:
+        if l2_scores_sup:
             scores_sup["l2"] = best_l2_score
-        if best_l3:
-            scores_sup["l3"] = best_l3_score
         winner_supervised = max(scores_sup, key=lambda k: scores_sup[k])
 
-        # Unsupervised scores — delta from baseline (importance_agreement is already
-        # delta-transformed in run_hierarchical_perturbation).
-        # Baseline delta is 0 by definition (it IS the reference point).
-        best_l1_score_ag = best_l1.importance_agreement if best_l1 else 0.0
-        best_l2_score_ag = best_l2.importance_agreement if best_l2 else 0.0
-        best_l3_score_ag = best_l3.importance_agreement if best_l3 else 0.0
+        scores_ag = {"baseline": 0.0, "l1": best_l1_delta}
+        if l2_scores_ag:
+            scores_ag["l2"] = best_l2_delta
+        winner_unsupervised = max(scores_ag, key=lambda k: scores_ag[k])
 
-        scores_ag = {"baseline": 0.0, "l1": best_l1_score_ag}
-        if best_l2:
-            scores_ag["l2"] = best_l2_score_ag
-        if best_l3:
-            scores_ag["l3"] = best_l3_score_ag
-        winner_agreement = max(scores_ag, key=lambda k: scores_ag[k])
+        concordance = winner_supervised == winner_unsupervised
 
-        winners_match = winner_supervised == winner_agreement
+        # ── Winner bbox ──────────────────────────────────────────────────────
+        def _winner_bbox(winner: str, sup_dict, ag_dict) -> list | None:
+            if winner == "baseline":
+                return None
+            src = sup_dict if ag_dict is None else (sup_dict if winner == "l1" else ag_dict)
+            # find the quadrant with the highest score
+            if winner == "l1":
+                best_q = max(l1_scores_sup, key=lambda q: l1_scores_sup[q]["score"])
+                return list(l1_patches[QUADS.index(best_q)].bbox)
+            if winner == "l2":
+                best_q = max(l2_scores_sup, key=lambda q: l2_scores_sup[q]["score"])
+                return list(l2_patches[QUADS.index(best_q)].bbox)
+            return None
 
-        # ── Correct-agreement of the supervised winner ───────────────────────
-        _winner_ca_map = {"baseline": baseline_ca}
-        if best_l1: _winner_ca_map["l1"] = best_l1.correct_agreement
-        if best_l2: _winner_ca_map["l2"] = best_l2.correct_agreement
-        if best_l3: _winner_ca_map["l3"] = best_l3.correct_agreement
-        winner_sup_ca = _winner_ca_map.get(winner_supervised, 0.0)
-        # majority-vote correctness: ≥50% of stochastic samples got the right answer
-        winner_sup_is_correct = winner_sup_ca >= 0.5
-
-        # ── BBox + correct_agreement of each winner ──────────────────────────
-        _bbox_map = {
-            "baseline": None,
-            "l1": list(best_l1.bbox) if best_l1 else None,
-            "l2": list(best_l2.bbox) if best_l2 else None,
-            "l3": list(best_l3.bbox) if best_l3 else None,
-        }
-        winner_sup_bbox = _bbox_map.get(winner_supervised)
-        winner_ag_bbox  = _bbox_map.get(winner_agreement)
-
-        winner_ag_ca = _winner_ca_map.get(winner_agreement, 0.0)
-        winner_ag_is_correct = winner_ag_ca >= 0.5
+        sup_bbox = _winner_bbox(winner_supervised, l1_scores_sup, l2_scores_sup)
+        ag_bbox  = None
+        if winner_unsupervised == "l1":
+            best_q = max(l1_scores_ag, key=lambda q: l1_scores_ag[q]["delta_score"])
+            ag_bbox = list(l1_patches[QUADS.index(best_q)].bbox)
+        elif winner_unsupervised == "l2":
+            best_q = max(l2_scores_ag, key=lambda q: l2_scores_ag[q]["delta_score"])
+            ag_bbox = list(l2_patches[QUADS.index(best_q)].bbox)
 
         # ── Save winning crop images ─────────────────────────────────────────
         crops_dir = out_dir / f"{out_stem}_crops"
@@ -245,72 +269,45 @@ def main() -> None:
             crop_img.convert("RGB").save(crops_dir / fname, quality=95)
             return str(crops_dir / fname)
 
-        sup_crop_path = _save_crop(winner_sup_bbox, f"sup_{winner_supervised}")
-        ag_crop_path  = _save_crop(winner_ag_bbox,  f"ag_{winner_agreement}")
+        sup_crop_path = _save_crop(sup_bbox, f"sup_{winner_supervised}")
+        ag_crop_path  = _save_crop(ag_bbox,  f"ag_{winner_unsupervised}")
+
+        # ── Internal fields for aggregate (not in CSV columns) ───────────────
+        # correct_agreement of each winner (for winner_correct stats)
+        if winner_supervised == "baseline":
+            _sup_ca = baseline_ca
+        elif winner_supervised == "l1":
+            best_q = max(l1_scores_sup, key=lambda q: l1_scores_sup[q]["score"])
+            _sup_ca = l1_scores_sup[best_q]["correct_agreement"]
+        else:
+            best_q = max(l2_scores_sup, key=lambda q: l2_scores_sup[q]["score"])
+            _sup_ca = l2_scores_sup[best_q]["correct_agreement"]
 
         results.append({
-            "image_path":    sample.image_path,
-            "question":      sample.question,
-            "mc_options":    sample.mc_options,
-            "gt_letter":     gt_letter,
+            # ── Identification ────────────────────────────────────────────────
+            "image_path":   sample.image_path,
+            "question":     sample.question,
+            "options":      sample.mc_options,
+            "gt_letter":    gt_letter,
             "question_type": sample.question_type or "unknown",
-            # ── Supervised scores (correct_agreement × conf × (1−H)) ──────────
-            "baseline_score":             round(baseline_score, 6),
-            "baseline_ca":                round(baseline_ca, 4),
-            "best_l1_score":              round(best_l1_score, 6),
-            "best_l2_score":              round(best_l2_score, 6),
-            **({"best_l3_score":          round(best_l3_score, 6)} if best_l3 else {}),
-            "winner_supervised":          winner_supervised,
-            "winner_supervised_bbox":     winner_sup_bbox,
-            "winner_supervised_score":    round(scores_sup[winner_supervised], 6),
-            "winner_supervised_ca":       round(winner_sup_ca, 4),
-            "winner_supervised_correct":  winner_sup_is_correct,
-            "winner_supervised_crop":     sup_crop_path,
-            # ── Unsupervised scores — Δ from baseline (> 0 = better than full image) ─
-            "baseline_score_ag":              round(baseline_score_ag, 6),
-            "best_l1_score_ag_delta":         round(best_l1_score_ag, 6),
-            "best_l2_score_ag_delta":         round(best_l2_score_ag, 6),
-            **({"best_l3_score_ag_delta":     round(best_l3_score_ag, 6)} if best_l3 else {}),
-            "winner_agreement":               winner_agreement,
-            "winner_agreement_bbox":          winner_ag_bbox,
-            "winner_agreement_score_delta":   round(scores_ag[winner_agreement], 6),
-            "winner_agreement_ca":            round(winner_ag_ca, 4),
-            "winner_agreement_correct":       winner_ag_is_correct,
-            "winner_agreement_crop":          ag_crop_path,
+            # ── Supervised ────────────────────────────────────────────────────
+            "baseline_score_supervised": round(baseline_score, 6),
+            "l1_scores_supervised":      l1_scores_sup,
+            "l2_scores_supervised":      l2_scores_sup,
+            "winner_supervised":         winner_supervised,
+            "winner_supervised_crop":    sup_crop_path,
+            # ── Unsupervised ──────────────────────────────────────────────────
+            "baseline_score_unsupervised": round(baseline_score_ag, 6),
+            "l1_scores_unsupervised":      l1_scores_ag,
+            "l2_scores_unsupervised":      l2_scores_ag,
+            "winner_unsupervised":         winner_unsupervised,
+            "winner_unsupervised_crop":    ag_crop_path,
             # ── Concordance ───────────────────────────────────────────────────
-            "winners_match": winners_match,
-            # ── Best-patch details ────────────────────────────────────────────
-            "best_l1_bbox":              list(best_l1.bbox) if best_l1 else None,
-            "best_l1_correct_agreement": round(best_l1.correct_agreement, 4) if best_l1 else None,
-            "best_l1_agreement":         round(best_l1.agreement, 4) if best_l1 else None,
-            "best_l1_mean_confidence":   round(best_l1.mean_confidence, 4) if best_l1 else None,
-            "best_l1_mean_entropy":      round(best_l1.mean_entropy, 4) if best_l1 else None,
-            **({"best_l2_bbox":              list(best_l2.bbox),
-                "best_l2_correct_agreement": round(best_l2.correct_agreement, 4),
-                "best_l2_agreement":         round(best_l2.agreement, 4),
-                "best_l2_mean_confidence":   round(best_l2.mean_confidence, 4),
-                "best_l2_mean_entropy":      round(best_l2.mean_entropy, 4),
-               } if best_l2 else {}),
-            **({"best_l3_bbox":              list(best_l3.bbox),
-                "best_l3_correct_agreement": round(best_l3.correct_agreement, 4),
-                "best_l3_agreement":         round(best_l3.agreement, 4),
-                "best_l3_mean_confidence":   round(best_l3.mean_confidence, 4),
-                "best_l3_mean_entropy":      round(best_l3.mean_entropy, 4),
-               } if best_l3 else {}),
-            # ── All patches ───────────────────────────────────────────────────
-            "all_patches": [
-                {
-                    "level":                p.level,
-                    "bbox":                 list(p.bbox),
-                    "region_score":         round(p.importance, 6),
-                    "region_score_ag":      round(p.importance_agreement, 6),
-                    "correct_agreement":    round(p.correct_agreement, 4),
-                    "agreement":            round(p.agreement, 4),
-                    "mean_confidence":      round(p.mean_confidence, 4),
-                    "mean_entropy":         round(p.mean_entropy, 4),
-                }
-                for p in patches
-            ],
+            "concordance": concordance,
+            # ── Internal (aggregate use only, excluded from CSV) ──────────────
+            "_baseline_ca":        round(baseline_ca, 4),
+            "_winner_sup_ca":      round(_sup_ca, 4),
+            "_winner_sup_correct": _sup_ca >= 0.5,
         })
         # Persist immediately so progress survives a crash or kill
         _ckpt_fh.write(json.dumps(results[-1], ensure_ascii=False) + "\n")
@@ -319,76 +316,63 @@ def main() -> None:
     _ckpt_fh.close()
 
     # ── Aggregate ────────────────────────────────────────────────────────────
-    total = len(results)
-    has_l2 = any(r.get("best_l2_bbox") is not None for r in results)
-    has_l3 = any(r.get("best_l3_bbox") is not None for r in results)
+    total  = len(results)
+    has_l2 = any(r.get("l2_scores_supervised") is not None for r in results)
 
-    counts_sup = {"baseline": 0, "l1": 0}
-    counts_ag  = {"baseline": 0, "l1": 0}
-    if has_l2:
-        counts_sup["l2"] = 0
-        counts_ag["l2"]  = 0
-    if has_l3:
-        counts_sup["l3"] = 0
-        counts_ag["l3"]  = 0
+    counts_sup = {"baseline": 0, "l1": 0, **({"l2": 0} if has_l2 else {})}
+    counts_ag  = {"baseline": 0, "l1": 0, **({"l2": 0} if has_l2 else {})}
     concordant = 0
     for r in results:
-        counts_sup[r["winner_supervised"]] = counts_sup.get(r["winner_supervised"], 0) + 1
-        counts_ag[r["winner_agreement"]]   = counts_ag.get(r["winner_agreement"],   0) + 1
-        if r["winners_match"]:
+        counts_sup[r["winner_supervised"]]  = counts_sup.get(r["winner_supervised"],  0) + 1
+        counts_ag[r["winner_unsupervised"]] = counts_ag.get(r["winner_unsupervised"], 0) + 1
+        if r["concordance"]:
             concordant += 1
 
     concordance_rate = _safe_div(concordant, total)
 
-    # ── Mean scores: winning samples only (per level) ────────────────────────
-    # For each level, mean score is computed only over samples where that level won.
-    def _mean_winning(key: str, score_key: str) -> float:
-        vals = [r[score_key] for r in results if r["winner_supervised"] == key]
-        return _safe_div(sum(vals), len(vals))
+    # Mean winning score per level (winners-only)
+    def _mean_w_sup(key: str) -> float | None:
+        if key == "baseline":
+            vals = [r["baseline_score_supervised"] for r in results if r["winner_supervised"] == "baseline"]
+        elif key == "l1":
+            vals = [max(v["score"] for v in r["l1_scores_supervised"].values())
+                    for r in results if r["winner_supervised"] == "l1"]
+        elif key == "l2":
+            vals = [max(v["score"] for v in r["l2_scores_supervised"].values())
+                    for r in results if r["winner_supervised"] == "l2" and r["l2_scores_supervised"]]
+        else:
+            return None
+        return _safe_div(sum(vals), len(vals)) if vals else float("nan")
 
-    mean_w_baseline = _mean_winning("baseline", "baseline_score")
-    mean_w_l1       = _mean_winning("l1",       "best_l1_score")
-    mean_w_l2       = _mean_winning("l2",       "best_l2_score") if has_l2 else None
-    mean_w_l3       = _mean_winning("l3",       "best_l3_score") if has_l3 else None
-
-    def _mean_winning_ag(key: str, delta_key: str) -> float:
+    def _mean_w_ag(key: str) -> float | None:
         if key == "baseline":
             return 0.0
-        vals = [r[delta_key] for r in results if r["winner_agreement"] == key]
-        return _safe_div(sum(vals), len(vals))
+        elif key == "l1":
+            vals = [max(v["delta_score"] for v in r["l1_scores_unsupervised"].values())
+                    for r in results if r["winner_unsupervised"] == "l1"]
+        elif key == "l2":
+            vals = [max(v["delta_score"] for v in r["l2_scores_unsupervised"].values())
+                    for r in results if r["winner_unsupervised"] == "l2" and r["l2_scores_unsupervised"]]
+        else:
+            return None
+        return _safe_div(sum(vals), len(vals)) if vals else float("nan")
 
-    mean_w_baseline_ag = 0.0
-    mean_w_l1_ag       = _mean_winning_ag("l1", "best_l1_score_ag_delta")
-    mean_w_l2_ag       = _mean_winning_ag("l2", "best_l2_score_ag_delta") if has_l2 else None
-    mean_w_l3_ag       = _mean_winning_ag("l3", "best_l3_score_ag_delta") if has_l3 else None
+    mean_w_sup = {k: _mean_w_sup(k) for k in counts_sup}
+    mean_w_ag  = {k: _mean_w_ag(k)  for k in counts_ag}
 
-    # ── Winner correctness (supervised winner only) ──────────────────────────
-    winner_correct_count = sum(1 for r in results if r["winner_supervised_correct"])
-    winner_correct_rate  = _safe_div(winner_correct_count, total)
-    # softer: at least one correct sample (ca > 0)
-    winner_any_correct_count = sum(1 for r in results if r["winner_supervised_ca"] > 0)
+    # Winner correctness
+    winner_correct_count     = sum(1 for r in results if r["_winner_sup_correct"])
+    winner_correct_rate      = _safe_div(winner_correct_count, total)
+    winner_any_correct_count = sum(1 for r in results if r["_winner_sup_ca"] > 0)
     winner_any_correct_rate  = _safe_div(winner_any_correct_count, total)
 
-    # Absolute baseline agreement score (reference, shown separately)
-    mean_baseline_ag_abs = _safe_div(sum(r["baseline_score_ag"] for r in results), total)
-    # Unsupervised deltas (all samples, for reference)
-    mean_l1_ag_delta = _safe_div(sum(r["best_l1_score_ag_delta"] for r in results), total)
-    mean_l2_ag_delta = _safe_div(
-        sum(r["best_l2_score_ag_delta"] for r in results), total
-    ) if has_l2 else None
-    mean_l3_ag_delta = _safe_div(
-        sum(r.get("best_l3_score_ag_delta") or 0.0 for r in results), total
-    ) if has_l3 else None
+    mean_baseline_ag_abs = _safe_div(
+        sum(r["baseline_score_unsupervised"] for r in results), total
+    )
 
-    level_keys = ["baseline", "l1"] + (["l2"] if has_l2 else []) + (["l3"] if has_l3 else [])
-    level_labels = {
-        "baseline": "Full image (baseline)",
-        "l1":       "Best L1 quadrant",
-        "l2":       "Best L2 sub-quadrant",
-        "l3":       "Best L3 sub-quadrant",
-    }
-    mean_w_sup = {"baseline": mean_w_baseline, "l1": mean_w_l1, "l2": mean_w_l2, "l3": mean_w_l3}
-    mean_w_ag  = {"baseline": mean_w_baseline_ag, "l1": mean_w_l1_ag, "l2": mean_w_l2_ag, "l3": mean_w_l3_ag}
+    level_keys   = ["baseline", "l1"] + (["l2"] if has_l2 else [])
+    level_labels = {"baseline": "Full image (baseline)",
+                    "l1": "Best L1 quadrant", "l2": "Best L2 sub-quadrant"}
 
     print("\n── Region Score Comparison ─────────────────────────────────────────────────────────────")
     print(f"  Total samples evaluated : {total}")
@@ -399,75 +383,58 @@ def main() -> None:
     print(f"  {'-'*90}")
     for key in level_keys:
         label = level_labels[key]
-        ns = counts_sup.get(key, 0)
-        na = counts_ag.get(key, 0)
-        ps = 100 * ns / total if total else 0
-        pa = 100 * na / total if total else 0
-        mws = mean_w_sup[key]
-        mwa = mean_w_ag[key]
-        mws_str = f"{mws:.4f}"  if (mws is not None and not (isinstance(mws, float) and mws != mws)) else "     N/A"
-        mwa_str = f"{mwa:+.4f}" if (mwa is not None and key != "baseline" and not (isinstance(mwa, float) and mwa != mwa)) else "  0.0 (ref)" if key == "baseline" else "     N/A"
-        print(f"  {label:<28}  {ns:>5} {ps:>4.1f}% {mws_str:>9}  {na:>5} {pa:>4.1f}% {mwa_str:>11}")
+        ns, na = counts_sup.get(key, 0), counts_ag.get(key, 0)
+        ps, pa = 100 * ns / total if total else 0, 100 * na / total if total else 0
+        mws, mwa = mean_w_sup.get(key), mean_w_ag.get(key)
+        mws_s = f"{mws:.4f}" if mws is not None and mws == mws else "    N/A"
+        mwa_s = ("  0.0 (ref)" if key == "baseline"
+                 else f"{mwa:+.4f}" if mwa is not None and mwa == mwa else "    N/A")
+        print(f"  {label:<28}  {ns:>5} {ps:>4.1f}% {mws_s:>9}  {na:>5} {pa:>4.1f}% {mwa_s:>11}")
     print(f"  {'-'*90}")
     print(f"\n  Supervised winner correct (majority ≥50%) : {winner_correct_count}/{total}  ({100*winner_correct_rate:.1f}%)")
-    print(f"  Supervised winner correct (any sample >0%) : {winner_any_correct_count}/{total}  ({100*winner_any_correct_rate:.1f}%)")
+    print(f"  Supervised winner correct (any >0%)        : {winner_any_correct_count}/{total}  ({100*winner_any_correct_rate:.1f}%)")
     print(f"  Concordance (same winner both methods)     : {concordant}/{total}  ({100*concordance_rate:.1f}%)")
     print("────────────────────────────────────────────────────────────────────────────────────────\n")
 
     # ── Save ─────────────────────────────────────────────────────────────────
     agg = {
-        "total_samples":            total,
-        "concordant_samples":       concordant,
-        "concordance_rate":         concordance_rate,
-        # supervised (correct_agreement-based)
-        "winner_counts_supervised":        counts_sup,
-        "winner_fractions_supervised":     {k: _safe_div(v, total) for k, v in counts_sup.items()},
-        "mean_winning_score_baseline":     mean_w_baseline,
-        "mean_winning_score_l1":           mean_w_l1,
-        "mean_winning_score_l2":           mean_w_l2,
-        "mean_winning_score_l3":           mean_w_l3,
-        "winner_correct_majority":         winner_correct_count,
-        "winner_correct_majority_rate":    winner_correct_rate,
-        "winner_correct_any":              winner_any_correct_count,
-        "winner_correct_any_rate":         winner_any_correct_rate,
-        # unsupervised (delta scoring: crop_score_ag − baseline_score_ag)
-        "winner_counts_agreement":         counts_ag,
-        "winner_fractions_agreement":      {k: _safe_div(v, total) for k, v in counts_ag.items()},
-        "mean_baseline_score_ag_abs":      mean_baseline_ag_abs,
-        "mean_winning_delta_l1":           mean_w_l1_ag,
-        "mean_winning_delta_l2":           mean_w_l2_ag,
-        "mean_winning_delta_l3":           mean_w_l3_ag,
-        "mean_all_l1_ag_delta":            mean_l1_ag_delta,
-        "mean_all_l2_ag_delta":            mean_l2_ag_delta,
+        "total_samples":                total,
+        "concordant_samples":           concordant,
+        "concordance_rate":             concordance_rate,
+        "winner_counts_supervised":     counts_sup,
+        "winner_fractions_supervised":  {k: _safe_div(v, total) for k, v in counts_sup.items()},
+        "mean_winning_score":           {k: mean_w_sup[k] for k in level_keys},
+        "winner_correct_majority":      winner_correct_count,
+        "winner_correct_majority_rate": winner_correct_rate,
+        "winner_correct_any":           winner_any_correct_count,
+        "winner_correct_any_rate":      winner_any_correct_rate,
+        "winner_counts_unsupervised":   counts_ag,
+        "winner_fractions_unsupervised":{k: _safe_div(v, total) for k, v in counts_ag.items()},
+        "mean_winning_delta":           {k: mean_w_ag[k] for k in level_keys},
+        "mean_baseline_score_ag_abs":   mean_baseline_ag_abs,
     }
 
+    # ── JSON (full data) ──────────────────────────────────────────────────────
+    # Strip internal _ fields from the JSON samples output
+    samples_out = [{k: v for k, v in r.items() if not k.startswith("_")} for r in results]
     json_path = out_dir / f"{out_stem}.json"
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"aggregate": agg, "samples": results}, f, indent=2, ensure_ascii=False)
+        json.dump({"aggregate": agg, "samples": samples_out}, f, indent=2, ensure_ascii=False)
     print(f"  Saved: {json_path}")
 
-    # ── Winning-crops JSON (for later inference comparison) ───────────────────
+    # ── Winning-crops JSON (for later inference) ──────────────────────────────
     winning_crops = [
         {
-            "image_path":                   r["image_path"],
-            "question":                     r["question"],
-            "mc_options":                   r["mc_options"],
-            "gt_letter":                    r["gt_letter"],
-            "question_type":                r["question_type"],
-            # supervised selection
-            "winner_supervised":            r["winner_supervised"],
-            "winner_supervised_bbox":       r["winner_supervised_bbox"],
-            "winner_supervised_crop":       r["winner_supervised_crop"],
-            "winner_supervised_ca":         r["winner_supervised_ca"],
-            "winner_supervised_correct":    r["winner_supervised_correct"],
-            # unsupervised selection
-            "winner_agreement":             r["winner_agreement"],
-            "winner_agreement_bbox":        r["winner_agreement_bbox"],
-            "winner_agreement_crop":        r["winner_agreement_crop"],
-            "winner_agreement_ca":          r["winner_agreement_ca"],
-            "winner_agreement_correct":     r["winner_agreement_correct"],
-            # concordance
-            "winners_match":                r["winners_match"],
+            "image_path":               r["image_path"],
+            "question":                 r["question"],
+            "options":                  r["options"],
+            "gt_letter":                r["gt_letter"],
+            "question_type":            r["question_type"],
+            "winner_supervised":        r["winner_supervised"],
+            "winner_supervised_crop":   r["winner_supervised_crop"],
+            "winner_unsupervised":      r["winner_unsupervised"],
+            "winner_unsupervised_crop": r["winner_unsupervised_crop"],
+            "concordance":              r["concordance"],
         }
         for r in results
     ]
@@ -476,21 +443,28 @@ def main() -> None:
         json.dump(winning_crops, f, indent=2, ensure_ascii=False)
     print(f"  Saved: {crops_path}")
 
-    # Drop list columns and any level columns that were never populated
-    # (e.g. no best_l3_* columns when run with n_levels=2)
-    _l2_keys = {k for k in (results[0] if results else {}) if "l2" in k}
-    _l3_keys = {k for k in (results[0] if results else {}) if "l3" in k}
-    _drop = set()
-    if not has_l2:
-        _drop |= _l2_keys
-    if not has_l3:
-        _drop |= _l3_keys
-    flat = [
-        {k: v for k, v in r.items() if not isinstance(v, list) and k not in _drop}
-        for r in results
+    # ── CSV (flat, exact column order, dict cols as JSON strings) ────────────
+    CSV_COLS = [
+        "image_path", "question", "options", "gt_letter", "question_type",
+        "baseline_score_supervised",
+        "l1_scores_supervised",
+        *( ["l2_scores_supervised"] if has_l2 else []),
+        "winner_supervised", "winner_supervised_crop",
+        "baseline_score_unsupervised",
+        "l1_scores_unsupervised",
+        *( ["l2_scores_unsupervised"] if has_l2 else []),
+        "winner_unsupervised", "winner_unsupervised_crop",
+        "concordance",
     ]
+    flat = []
+    for r in results:
+        row = {}
+        for col in CSV_COLS:
+            val = r.get(col)
+            row[col] = json.dumps(val, ensure_ascii=False) if isinstance(val, (dict, list)) else val
+        flat.append(row)
     csv_path = out_dir / f"{out_stem}.csv"
-    pd.DataFrame(flat).to_csv(csv_path, index=False, encoding="utf-8")
+    pd.DataFrame(flat, columns=CSV_COLS).to_csv(csv_path, index=False, encoding="utf-8")
     print(f"  Saved: {csv_path}")
 
     # Remove checkpoint now that final outputs are written
@@ -500,33 +474,34 @@ def main() -> None:
 
     # ── W&B ─────────────────────────────────────────────────────────────────
     if not args.disable_wandb:
-        wandb.summary["concordance_rate"]    = concordance_rate
-        wandb.summary["concordant_samples"]  = concordant
+        wandb.summary["concordance_rate"]           = concordance_rate
+        wandb.summary["concordant_samples"]         = concordant
+        wandb.summary["winner_correct_majority_rate"] = winner_correct_rate
+        wandb.summary["winner_correct_any_rate"]    = winner_any_correct_rate
+        wandb.summary["mean_baseline_score_ag_abs"] = mean_baseline_ag_abs
         for k, v in counts_sup.items():
             wandb.summary[f"winner_sup_count_{k}"] = v
             wandb.summary[f"winner_sup_frac_{k}"]  = _safe_div(v, total)
         for k, v in counts_ag.items():
-            wandb.summary[f"winner_ag_count_{k}"] = v
-            wandb.summary[f"winner_ag_frac_{k}"]  = _safe_div(v, total)
-        wandb.summary["mean_winning_score_baseline"]   = mean_w_baseline
-        wandb.summary["mean_winning_score_l1"]         = mean_w_l1
-        wandb.summary["mean_winning_score_l2"]         = mean_w_l2
-        wandb.summary["winner_correct_majority_rate"]  = winner_correct_rate
-        wandb.summary["winner_correct_any_rate"]       = winner_any_correct_rate
-        wandb.summary["mean_baseline_score_ag_abs"]    = mean_baseline_ag_abs
-        wandb.summary["mean_winning_delta_l1"]         = mean_w_l1_ag
-        wandb.summary["mean_winning_delta_l2"]         = mean_w_l2_ag
+            wandb.summary[f"winner_ag_count_{k}"]  = v
+            wandb.summary[f"winner_ag_frac_{k}"]   = _safe_div(v, total)
+        for k, v in mean_w_sup.items():
+            if v is not None:
+                wandb.summary[f"mean_winning_score_{k}"] = v
+        for k, v in mean_w_ag.items():
+            if v is not None:
+                wandb.summary[f"mean_winning_delta_{k}"] = v
 
         table = wandb.Table(columns=[
             "image_path", "question", "gt_letter", "question_type",
-            "winner_supervised", "winner_supervised_score", "winner_supervised_correct",
-            "winner_agreement", "winner_agreement_score_delta", "winners_match",
+            "winner_supervised", "winner_supervised_correct",
+            "winner_unsupervised", "concordance",
         ])
         for r in results:
             table.add_data(
                 r["image_path"], r["question"], r["gt_letter"], r["question_type"],
-                r["winner_supervised"], r["winner_supervised_score"], r["winner_supervised_correct"],
-                r["winner_agreement"], r["winner_agreement_score_delta"], r["winners_match"],
+                r["winner_supervised"], r["_winner_sup_correct"],
+                r["winner_unsupervised"], r["concordance"],
             )
         wandb.log({"region_comparison": table})
         wandb.finish()
