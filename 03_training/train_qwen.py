@@ -6,8 +6,10 @@ For standard LLaVA, use train.py. For LLaVA-Med, use train_med.py.
 """
 
 import argparse
+import json
 from collections import Counter
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 import torch
 import wandb
@@ -39,6 +41,66 @@ from utils.qwen_vl import (
 )
 
 
+FgrTrainLookup = Dict[Tuple[str, str], str]  # (image_path, question) → effective_image_path
+
+
+def build_fgr_train_lookup(json_path: str) -> FgrTrainLookup:
+    """Build (image_path, question) → effective_image_path from FGR region comparison JSON.
+
+    For samples where ``overall_winner_supervised == 'baseline'`` the original
+    image path is kept.  For l1/l2 winners the saved crop path is used instead.
+    """
+    path = Path(json_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"FGR crops JSON not found: {path}")
+
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+
+    rows: list[dict] = []
+    if isinstance(payload, dict) and "samples" in payload:
+        rows = payload["samples"]
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        raise ValueError("FGR JSON must be a list or contain a 'samples' key")
+
+    lookup: FgrTrainLookup = {}
+    n_crops = 0
+    n_baseline = 0
+    n_missing = 0
+
+    for row in rows:
+        image_path = (row.get("image_path") or "").strip()
+        question   = (row.get("question")    or "").strip()
+        if not image_path or not question:
+            continue
+
+        winner     = row.get("overall_winner_supervised", "baseline")
+        crop_path  = (row.get("overall_winner_supervised_crop") or "").strip()
+
+        if winner == "baseline" or not crop_path:
+            effective = image_path
+            n_baseline += 1
+        elif Path(crop_path).is_file():
+            effective = crop_path
+            n_crops += 1
+        else:
+            # Crop file not found on this machine — fall back to original
+            effective = image_path
+            n_missing += 1
+
+        key = (str(Path(image_path).resolve()) if Path(image_path).exists() else image_path,
+               question)
+        lookup[key] = effective
+
+    print(
+        f"FGR train lookup: {len(lookup)} samples — "
+        f"{n_crops} crops, {n_baseline} baseline (original), {n_missing} missing (fallback)"
+    )
+    return lookup
+
+
 def filter_verified_reasoning_samples(samples: list[VQASample]) -> list[VQASample]:
     """Keep only rows with pseudo_reasoning_test=True and non-empty pseudo_reasoning_raw."""
     filtered: list[VQASample] = []
@@ -60,22 +122,48 @@ def resolve_train_mc_export_suffix(use_reasoning: bool, mc_export_suffix: str) -
 
 
 class QwenMCTrainDataset(Dataset):
-    """MC training dataset for Qwen2.5-VL; loss only on assistant answer tokens."""
+    """MC training dataset for Qwen2.5-VL; loss only on assistant answer tokens.
 
-    def __init__(self, samples, processor, max_length=512, *, use_reasoning: bool = False):
+    Parameters
+    ----------
+    fgr_lookup:
+        Optional lookup built by ``build_fgr_train_lookup``.  When provided,
+        each sample's image is replaced by its FGR supervised winning crop
+        (or kept as the original image for baseline winners).
+    """
+
+    def __init__(
+        self,
+        samples,
+        processor,
+        max_length=512,
+        *,
+        use_reasoning: bool = False,
+        fgr_lookup: Optional[FgrTrainLookup] = None,
+    ):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
         self.use_reasoning = use_reasoning
+        self.fgr_lookup = fgr_lookup
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
+
+    def _resolve_image_path(self, sample: VQASample) -> str:
+        """Return effective image path: FGR crop if available, else original."""
+        if self.fgr_lookup is None:
+            return sample.image_path
+        p = Path(sample.image_path)
+        key = (str(p.resolve()) if p.exists() else sample.image_path,
+               sample.question.strip())
+        return self.fgr_lookup.get(key, sample.image_path)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample.image_path).convert("RGB")
+        image = Image.open(self._resolve_image_path(sample)).convert("RGB")
 
         if not sample.mc_options:
             raise ValueError("MC options missing in sample; ensure mc_data_root points to MC exports.")
@@ -179,6 +267,17 @@ def parse_args():
         default=["q_proj", "k_proj", "v_proj", "o_proj"],
     )
 
+    parser.add_argument(
+        "--fgr_crops_json",
+        type=str,
+        default=None,
+        help=(
+            "Path to fgr_region_comparison JSON (output of fgr_region_comparison.py). "
+            "When set, replaces each training sample's image with its supervised FGR "
+            "winning crop; baseline-winner samples keep the original image."
+        ),
+    )
+
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
 
@@ -265,6 +364,11 @@ def main():
         print(f"Loading {args.dataset} {args.train_split} split (mc suffix={train_suffix!r})...")
         train_samples = train_loader.load_dataset(args.dataset, split=args.train_split)
 
+    # Optional FGR crop lookup (replaces training images with supervised winning crops)
+    fgr_lookup: Optional[FgrTrainLookup] = None
+    if args.fgr_crops_json:
+        fgr_lookup = build_fgr_train_lookup(args.fgr_crops_json)
+
     train_total = len(train_samples)
     if args.use_reasoning:
         train_samples = filter_verified_reasoning_samples(train_samples)
@@ -285,6 +389,7 @@ def main():
         processor,
         args.max_length,
         use_reasoning=args.use_reasoning,
+        fgr_lookup=fgr_lookup,
     )
     if use_all and not args.use_reasoning:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
