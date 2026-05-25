@@ -21,6 +21,9 @@ from transformers import (
 )
 from transformers.trainer_utils import set_seed
 
+from dataclasses import dataclass
+from typing import Any
+
 from utils.ablation import load_fgr_crop_lookup, normalize_ablation_image_key
 from utils.load_data import MedicalVQALoader
 from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen
@@ -83,6 +86,30 @@ class QwenMCTrainDataset(Dataset):
         labels = mask_labels_assistant_only(self.processor, input_ids, conversation)
         item["labels"] = labels
         return item
+
+
+@dataclass
+class QwenVLDataCollator:
+    """Collator for Qwen2.5-VL with variable-size pixel_values.
+
+    The Qwen2.5-VL processor encodes each image into a variable number of
+    patches.  The default HuggingFace collator tries to *stack* tensors of
+    equal shape, which fails when crops and full images are mixed in one batch.
+    Here pixel_values are *concatenated* along the patch dimension (dim 0) and
+    image_grid_thw is stacked so the model knows which patches belong to which
+    image.  All token-level tensors (already padded to max_length by the
+    dataset) are simply stacked.
+    """
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        batch = {}
+        for key in ("input_ids", "attention_mask", "labels"):
+            batch[key] = torch.stack([f[key] for f in features])
+        # pixel_values: (n_patches_i, ...) — concatenate across samples
+        batch["pixel_values"] = torch.cat([f["pixel_values"] for f in features], dim=0)
+        # image_grid_thw: (1, 3) per sample — stack into (batch, 3)
+        batch["image_grid_thw"] = torch.cat([f["image_grid_thw"] for f in features], dim=0)
+        return batch
 
 
 def parse_args():
@@ -278,6 +305,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         processing_class=processor.tokenizer,
+        data_collator=QwenVLDataCollator(),
     )
 
     print("Starting Qwen2.5-VL training (loss on assistant answer tokens only)...")
