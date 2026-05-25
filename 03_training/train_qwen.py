@@ -21,6 +21,7 @@ from transformers import (
 )
 from transformers.trainer_utils import set_seed
 
+from utils.ablation import load_fgr_crop_lookup, normalize_ablation_image_key
 from utils.load_data import MedicalVQALoader
 from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen
 from utils.qwen_vl import (
@@ -37,10 +38,12 @@ from utils.qwen_vl import (
 class QwenMCTrainDataset(Dataset):
     """MC training dataset for Qwen2.5-VL; loss only on assistant answer tokens."""
 
-    def __init__(self, samples, processor, max_length=512):
+    def __init__(self, samples, processor, max_length=512, fgr_crop_lookup=None, data_root=None):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
+        self.fgr_crop_lookup = fgr_crop_lookup  # (image_key, question) -> crop_path; None = use original
+        self.data_root = data_root
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
@@ -49,7 +52,15 @@ class QwenMCTrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample.image_path).convert("RGB")
+        if self.fgr_crop_lookup is not None:
+            key = (
+                normalize_ablation_image_key(sample.image_path, data_root=self.data_root),
+                sample.question.strip(),
+            )
+            image_path = self.fgr_crop_lookup.get(key, sample.image_path)
+        else:
+            image_path = sample.image_path
+        image = Image.open(image_path).convert("RGB")
 
         if not sample.mc_options:
             raise ValueError("MC options missing in sample; ensure mc_data_root points to MC exports.")
@@ -123,6 +134,14 @@ def parse_args():
         default=["q_proj", "k_proj", "v_proj", "o_proj"],
     )
 
+    parser.add_argument(
+        "--fgr_crops_json",
+        type=str,
+        default=None,
+        help="Path to fgr_region_comparison_*_train.json. When given, replaces each "
+             "training image with its supervised FGR winning crop (or the original "
+             "image when the FGR winner is 'baseline').",
+    )
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
 
@@ -195,7 +214,20 @@ def main():
         print(f"Loading {args.dataset} {args.train_split} split...")
         train_samples = loader.load_dataset(args.dataset, split=args.train_split)
 
-    train_dataset = QwenMCTrainDataset(train_samples, processor, args.max_length)
+    fgr_crop_lookup = None
+    if args.fgr_crops_json:
+        fgr_crop_lookup = load_fgr_crop_lookup(
+            args.fgr_crops_json,
+            crop_field="overall_winner_supervised_crop",
+            data_root=args.data_root,
+        )
+        print(f"FGR crop training: {len(fgr_crop_lookup)} mappings loaded")
+
+    train_dataset = QwenMCTrainDataset(
+        train_samples, processor, args.max_length,
+        fgr_crop_lookup=fgr_crop_lookup,
+        data_root=args.data_root,
+    )
     print(f"Train: {len(train_dataset)} samples")
     if use_all:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
