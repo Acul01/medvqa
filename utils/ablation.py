@@ -78,6 +78,12 @@ def _resolve_crop_file_path(crop_path: str, *, json_path: Path) -> Optional[Path
     if not raw.is_absolute():
         candidates.append(Path.cwd() / raw)
         candidates.append(json_path.parent / raw)
+    else:
+        # Absolute path stored in JSON may be stale (JSON moved, server remount, etc.).
+        # Fallback: look for the same filename in a *_crops dir next to the JSON.
+        fname = raw.name
+        stem = json_path.stem  # e.g. fgr_region_comparison_vqarad_all
+        candidates.append(json_path.parent / f"{stem}_crops" / fname)
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
