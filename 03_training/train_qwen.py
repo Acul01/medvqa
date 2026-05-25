@@ -107,8 +107,12 @@ class QwenVLDataCollator:
             batch[key] = torch.stack([f[key] for f in features])
         # pixel_values: (n_patches_i, ...) — concatenate across samples
         batch["pixel_values"] = torch.cat([f["pixel_values"] for f in features], dim=0)
-        # image_grid_thw: (1, 3) per sample — stack into (batch, 3)
-        batch["image_grid_thw"] = torch.cat([f["image_grid_thw"] for f in features], dim=0)
+        # image_grid_thw: shape (3,) per sample after squeeze → stack to (batch, 3).
+        # The model iterates over rows as (t, h, w) tuples, so must be 2-D.
+        thws = [f["image_grid_thw"] for f in features]
+        # Handle both (3,) and (1, 3) shapes that squeeze_batch_dim may produce.
+        thws = [t.unsqueeze(0) if t.dim() == 1 else t for t in thws]
+        batch["image_grid_thw"] = torch.cat(thws, dim=0)
         return batch
 
 
