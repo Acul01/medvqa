@@ -130,6 +130,39 @@ def _move_inputs_to_device(inputs: dict, device: torch.device) -> dict:
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
 
+def _get_answer_letter_token_ids(tokenizer, num_opts: int = 10) -> dict[int, str]:
+    """Return a mapping {token_id: letter} covering common encodings of A–J."""
+    mapping: dict[int, str] = {}
+    for letter in "ABCDEFGHIJ"[:num_opts]:
+        for variant in [letter, f" {letter}", f"▁{letter}"]:  # bare / space / sentencepiece
+            ids = tokenizer.encode(variant, add_special_tokens=False)
+            if len(ids) == 1:
+                mapping[ids[0]] = letter
+    return mapping
+
+
+def _find_answer_token_step(token_ids: list[int], answer_token_ids: dict[int, str]) -> int | None:
+    """Return the index of the last answer-letter token in token_ids (backwards search)."""
+    for i in reversed(range(len(token_ids))):
+        if token_ids[i] in answer_token_ids:
+            return i
+    return None
+
+
+def _compute_first_token_entropy(
+    model, inputs: dict
+) -> tuple[float, float, int]:
+    """Forward pass over the prompt; returns (entropy, confidence, argmax_token_id)."""
+    fwd = model(**inputs, return_dict=True)
+    first_logits = fwd.logits[0, -1, :].double()
+    log_probs = torch.log_softmax(first_logits, dim=-1)
+    probs = torch.exp(log_probs)
+    entropy = -torch.where(probs > 0, probs * log_probs, torch.zeros_like(log_probs)).sum().item()
+    confidence = float(probs.max().item())
+    top_id = int(torch.argmax(first_logits).item())
+    return entropy, confidence, top_id
+
+
 def main():
     args = parse_args()
     if args.max_new_tokens is None:
@@ -200,6 +233,9 @@ def main():
         "top_p": args.top_p,
     }
 
+    # Precompute answer-letter token-id mapping (used for reasoning-mode entropy)
+    answer_letter_token_ids = _get_answer_letter_token_ids(processor.tokenizer)
+
     results = []
     with torch.no_grad():
         for sample_idx, sample in enumerate(tqdm(samples)):
@@ -249,22 +285,37 @@ def main():
             )
             ground_truth_letter = sample.answer
 
-            fwd = model(**inputs, return_dict=True)
-            first_logits = fwd.logits[0, -1, :].double()
-            log_probs_fwd = torch.log_softmax(first_logits, dim=-1)
-            probs_fwd = torch.exp(log_probs_fwd)
-            entropy_val = -torch.where(
-                probs_fwd > 0,
-                probs_fwd * log_probs_fwd,
-                torch.zeros_like(log_probs_fwd),
-            ).sum().item()
-            confidence = float(probs_fwd.max().item())
-            first_tok_id = int(torch.argmax(first_logits).item())
-            first_tok_text = processor.tokenizer.decode(
-                [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-            ).strip() or f"tok_{first_tok_id}"
-            entropy_tokens = {first_tok_text: entropy_val}
-            entropy_mean = entropy_val
+            if args.use_reasoning_json and generation_output.scores:
+                # Reasoning mode: entropy at the final answer-letter token position
+                valid_answer_ids = {
+                    tid: l for tid, l in answer_letter_token_ids.items()
+                    if l in "ABCDEFGHIJ"[:num_opts]
+                }
+                answer_step = _find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
+                if answer_step is not None:
+                    ans_logits = generation_output.scores[answer_step][0].double()
+                    ans_log_probs = torch.log_softmax(ans_logits, dim=-1)
+                    ans_probs = torch.exp(ans_log_probs)
+                    entropy_val = -(ans_probs * ans_log_probs.clamp(min=1e-12)).sum().item()
+                    confidence = float(ans_probs.max().item())
+                    entropy_tokens = {predicted_letter or "?": entropy_val}
+                    entropy_mean = entropy_val
+                else:
+                    # Fallback: no answer token found – use first-token forward pass
+                    entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs)
+                    first_tok_text = processor.tokenizer.decode(
+                        [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+                    ).strip() or f"tok_{first_tok_id}"
+                    entropy_tokens = {first_tok_text: entropy_val}
+                    entropy_mean = entropy_val
+            else:
+                # Standard mode: entropy of first generated token via forward pass
+                entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs)
+                first_tok_text = processor.tokenizer.decode(
+                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+                ).strip() or f"tok_{first_tok_id}"
+                entropy_tokens = {first_tok_text: entropy_val}
+                entropy_mean = entropy_val
 
             sampled_predicted_letters = []
             agreement_confidences = []

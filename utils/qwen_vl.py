@@ -77,11 +77,7 @@ def build_mc_reasoning_conversation(
 ) -> List[dict]:
     """Training: user sees MC + reference pseudo reasoning; assistant learns JSON {\"reasoning\", \"answer\"}."""
     mc = format_mc_user_text(question, options)
-    ref = (
-        "\n\nClinician reference reasoning (use as the reasoning field verbatim in training):\n\n"
-        f"{reasoning_raw.strip()}"
-    )
-    user_text = mc + ref + MC_JSON_RESPONSE_INSTRUCTION
+    user_text = mc + MC_JSON_RESPONSE_INSTRUCTION
     letter = _normalize_mc_letter(answer)
     assistant_text = json.dumps(
         {"reasoning": reasoning_raw.strip(), "answer": letter}, ensure_ascii=False
