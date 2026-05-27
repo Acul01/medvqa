@@ -3,21 +3,51 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 END_REASONING_TOKEN = "<END_REASONING>"
 
 
-def build_reasoning_prompt(question: str) -> str:
-    return (
-        "You are a medical imaging expert analyzing an image.\n\n"
-        f"Question: {question}\n\n"
-        "Provide your reasoning in exactly this format:\n"
-        "REGION: [identify the anatomical region relevant to this question]\n"
-        "OBSERVATION: [describe what you observe in that region]\n"
-        "REASONING: [explain how this observation relates to the question]\n\n"
+def build_reasoning_prompt(
+    question: str,
+    *,
+    options: Optional[List[str]] = None,
+    correct_answer: Optional[str] = None,
+) -> str:
+    """Build the prompt sent to GPT-4o-mini for pseudo-reasoning generation.
+
+    When ``options`` and ``correct_answer`` are provided the model is told the
+    correct answer upfront and asked to justify it against the distractors.
+    This eliminates answer-leaking shortcuts in the verification step and
+    produces reasoning that explicitly argues *why* the other options are wrong.
+    """
+    parts = [
+        "You are a medical imaging expert analyzing an image.\n",
+        f"Question: {question}",
+    ]
+
+    if options:
+        opts_text = "\n".join(f"{chr(65 + i)}) {opt}" for i, opt in enumerate(options))
+        parts.append(f"\nOptions:\n{opts_text}")
+
+    if correct_answer:
+        parts.append(f"\nThe correct answer is: {correct_answer}")
+        parts.append(
+            "\nExplain step by step why this answer is correct. "
+            "Your reasoning must also briefly state why the other options are less appropriate."
+        )
+    else:
+        parts.append("\nProvide your reasoning for the most likely answer.")
+
+    parts.append(
+        "\n\nRespond in exactly this format:\n"
+        "REGION: [anatomical region most relevant to this question]\n"
+        "OBSERVATION: [what you observe in that region]\n"
+        "REASONING: [why this observation supports the correct answer and rules out the alternatives]\n\n"
         f"End your response with exactly this token: {END_REASONING_TOKEN}"
     )
+
+    return "\n".join(parts)
 
 
 def parse_reasoning_fields(text: str) -> Tuple[Dict[str, str], str]:
