@@ -25,6 +25,7 @@ from llava.mm_utils import process_images, tokenizer_image_token
 from llava.model import LlavaMistralForCausalLM
 from llava.model.builder import load_pretrained_model
 
+from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
@@ -88,10 +89,16 @@ def parse_args():
         "--ablation_mode",
         type=str,
         default="none",
-        choices=["none", "black", "shuffle"],
-        help="Image ablation mode: none, black image, or sample-level image assignment shuffle",
+        choices=["none", "black", "shuffle", "crop_unsupervised", "crop_supervised"],
+        help="Image ablation mode: none, black, shuffle, or FGR winning crop (supervised/unsupervised)",
     )
     parser.add_argument("--ablation_seed", type=int, default=42, help="Seed used for ablation shuffle mode")
+    parser.add_argument(
+        "--fgr_region_comparison_json",
+        type=str,
+        default=None,
+        help="Required for crop_unsupervised/crop_supervised (output of fgr_region_comparison.py)",
+    )
     parser.add_argument("--results_dir", type=str, default=get_results_dir())
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--finetuned", action="store_true", default=False)
@@ -618,6 +625,11 @@ def main():
     if args.n_samples is not None:
         samples = samples[: args.n_samples]
     shuffle_assignment = _build_shuffle_assignment(samples, args.ablation_seed) if args.ablation_mode == "shuffle" else {}
+    fgr_crop_lookup = prepare_fgr_crop_lookup(
+        args.ablation_mode,
+        args.fgr_region_comparison_json,
+        data_root=args.data_root,
+    )
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
@@ -643,6 +655,7 @@ def main():
         chunk_ranges = [(0, len(samples))]
 
     results = []
+    skipped_fgr = 0
     with torch.no_grad():
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_ranges, start=1):
             chunk_samples = samples[chunk_start:chunk_end]
@@ -652,7 +665,19 @@ def main():
                     continue
 
                 source_image_path = sample.image_path
-                effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+                ablation = resolve_ablation_image(
+                    ablation_mode=args.ablation_mode,
+                    source_image_path=source_image_path,
+                    question=sample.question,
+                    sample_idx=sample_idx,
+                    shuffle_assignment=shuffle_assignment,
+                    fgr_crop_lookup=fgr_crop_lookup,
+                    data_root=args.data_root,
+                )
+                if ablation.skipped:
+                    skipped_fgr += 1
+                    continue
+                effective_image_path = ablation.effective_image_path
                 image = Image.open(effective_image_path).convert("RGB")
                 if args.ablation_mode == "black":
                     image = Image.new("RGB", image.size, color=(0, 0, 0))
@@ -801,8 +826,7 @@ def main():
 
                 is_correct = predicted_letter == ground_truth_letter
                 qtype = sample.question_type or "unknown"
-                results.append(
-                    {
+                row = {
                         "image_path": effective_image_path,
                         "source_image_path": source_image_path,
                         "ablation_mode": args.ablation_mode,
@@ -833,7 +857,9 @@ def main():
                         "confidence": confidence,
                         "agreement_samples": sampled_predicted_letters,
                     }
-                )
+                if ablation.fgr_crop_path is not None:
+                    row["fgr_crop_path"] = ablation.fgr_crop_path
+                results.append(row)
 
             if gradcam_effective:
                 # Drop large temporary references early to keep peak VRAM stable.
@@ -872,6 +898,9 @@ def main():
                     len(chunk_ranges),
                     chunk_end - chunk_start,
                 )
+
+    if skipped_fgr:
+        logger.info("Skipped %d samples (no FGR crop mapping).", skipped_fgr)
 
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]

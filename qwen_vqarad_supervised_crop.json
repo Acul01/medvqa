@@ -1,0 +1,31 @@
+{
+  "start_time": "2026-05-22 16:24:30",
+  "results_file": "/fs/dss/home/esba3078/medvqa/medvqa/06_results/vqarad_MC_full_vqarad_all.json",
+  "dataset": "vqarad",
+  "model_path": "vqarad_MC_full",
+  "n_samples": "all",
+  "counts": {
+    "total_rows": 451,
+    "valid_rows": 451,
+    "closed_rows": 251,
+    "open_rows": 200
+  },
+  "closed": {
+    "accuracy": 0.848605577689243,
+    "entropy": 0.2787752240718503,
+    "confidence": 0.9189198159065514,
+    "agreement": 0.9274900398406376
+  },
+  "open": {
+    "accuracy": 0.75,
+    "entropy": 0.40535286786901337,
+    "confidence": 0.8880538957253736,
+    "agreement": 0.9079999999999998
+  },
+  "overall": {
+    "accuracy": 0.8048780487804879,
+    "entropy": 0.33490721688655706,
+    "confidence": 0.9052320464248758,
+    "agreement": 0.9188470066518866
+  }
+}
