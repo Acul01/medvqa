@@ -157,7 +157,6 @@ def request_n_reasonings(
     data_url = image_path_to_data_url(image_path)
     user_text = build_reasoning_prompt(
         question,
-        options=options,
         correct_answer=correct_answer,
     )
     last_err: Optional[Exception] = None
