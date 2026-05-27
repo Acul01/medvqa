@@ -52,6 +52,16 @@ def load_results(path: Path) -> List[Dict]:
     return data
 
 
+def filter_by_question_type(results: List[Dict], question_type: str) -> List[Dict]:
+    if question_type == "overall":
+        return results
+    return [
+        r
+        for r in results
+        if str(r.get("question_type", "")).strip().lower() == question_type
+    ]
+
+
 def metric_value_from_row(row: Dict, risk_metric: str) -> float | None:
     """Extract per-sample metric value in [0,1] for risk computation."""
     if risk_metric == "match":
@@ -240,6 +250,13 @@ def parse_args():
         choices=["entropy", "agreement", "confidence"],
         help="Field used for thresholding (entropy lower=more confident, agreement/confidence higher=more confident)",
     )
+    parser.add_argument(
+        "--question_type",
+        type=str,
+        default="overall",
+        choices=["open", "closed", "overall"],
+        help="Filter samples by question type before computing risk/coverage",
+    )
     return parser.parse_args()
 
 
@@ -250,14 +267,24 @@ def main():
         raise FileNotFoundError(f"Results file not found: {results_path}")
 
     results = load_results(results_path)
+    filtered_results = filter_by_question_type(results, question_type=args.question_type)
+    if not filtered_results:
+        raise ValueError(
+            f"No samples found for question_type='{args.question_type}' "
+            f"(total input rows: {len(results)})."
+        )
+
     samples = prepare_samples(
-        results,
+        filtered_results,
         risk_metric=args.risk_metric,
         score_field=args.score_field,
         max_entropy=args.max_entropy,
     )
     if not samples:
-        raise ValueError("No valid samples found with letter labels and numeric entropy.")
+        raise ValueError(
+            f"No valid samples found for question_type='{args.question_type}' "
+            "with letter labels and numeric score values."
+        )
 
     answer_when_higher = args.score_field in {"agreement", "confidence"}
     curve = compute_curve(samples, num_thresholds=args.num_thresholds, answer_when_higher=answer_when_higher)
@@ -267,16 +294,24 @@ def main():
 
     out_dir = Path(args.output_dir)
     base = results_path.stem
+    if args.question_type != "overall":
+        base = f"{base}_{args.question_type}"
     csv_path = out_dir / f"{base}_risk_coverage.csv"
     plot_path = out_dir / f"{base}_risk_coverage_curve.png"
     summary_path = out_dir / f"{base}_risk_coverage_summary.json"
 
     save_curve_csv(curve, csv_path)
-    plot_curve(curve, plot_path, title=f"Risk-Coverage Curve ({base})")
+    plot_curve(
+        curve,
+        plot_path,
+        title=f"Risk-Coverage Curve ({base}, {args.question_type})",
+    )
 
     summary = {
         "results_file": str(results_path),
+        "question_type": args.question_type,
         "total_input_rows": len(results),
+        "filtered_rows": len(filtered_results),
         "valid_samples": len(samples),
         "num_thresholds": len(curve),
         "max_entropy_filter": args.max_entropy,
@@ -289,6 +324,8 @@ def main():
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
+    print(f"Question type: {args.question_type}")
+    print(f"Filtered rows: {len(filtered_results)} / {len(results)}")
     print(f"Valid samples: {len(samples)}")
     print(f"AURC: {area:.6f}")
     print(f"Saved: {csv_path}")
