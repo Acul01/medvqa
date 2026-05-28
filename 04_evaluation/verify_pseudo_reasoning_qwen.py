@@ -18,8 +18,11 @@ from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO,
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
     DEFAULT_MODEL_PATH,
+    QWEN_VERIFY_FIELD,
     build_pseudo_reasoning_verify_conversation,
     configure_qwen_processor_pixels,
+    qwen_verify_from_metadata,
+    is_qwen_verify_done,
     prepare_qwen_inputs,
     reasoning_text_from_pseudo_row,
     resolve_processor_path,
@@ -43,14 +46,7 @@ def default_verify_output_path(input_path: Path) -> Path:
 
 
 def is_verify_done(row: Dict[str, Any]) -> bool:
-    v = row.get("pseudo_reasoning_test")
-    if v is True or v is False:
-        return True
-    if isinstance(v, str):
-        s = v.strip().lower()
-        if s in {"true", "false", "1", "0", "yes", "no"}:
-            return True
-    return False
+    return is_qwen_verify_done(row)
 
 
 def load_json_rows(path: Path) -> List[Dict[str, Any]]:
@@ -138,9 +134,10 @@ def verify_row(
     reasoning_text = reasoning_text_from_pseudo_row(row)
 
     if options is None or ci is None or ci >= len(options) or not question or not reasoning_text:
-        out["pseudo_reasoning_test"] = None
+        out[QWEN_VERIFY_FIELD] = None
         out["pseudo_reasoning_verify_pred_letter"] = None
         out["pseudo_reasoning_verify_raw"] = None
+        out.pop("pseudo_reasoning_test", None)
         return out
 
     conversation = build_pseudo_reasoning_verify_conversation(
@@ -159,14 +156,15 @@ def verify_row(
     gold = correct_index_to_letter(ci)
     out["pseudo_reasoning_verify_pred_letter"] = pred
     out["pseudo_reasoning_verify_raw"] = raw
-    out["pseudo_reasoning_test"] = pred is not None and pred == gold
+    out[QWEN_VERIFY_FIELD] = pred is not None and pred == gold
+    out.pop("pseudo_reasoning_test", None)
     return out
 
 
 def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    verified = [r for r in rows if is_verify_done(r)]
-    true_n = sum(1 for r in verified if r.get("pseudo_reasoning_test") is True)
-    false_n = sum(1 for r in verified if r.get("pseudo_reasoning_test") is False)
+    verified = [r for r in rows if is_qwen_verify_done(r)]
+    true_n = sum(1 for r in verified if qwen_verify_from_metadata(r) is True)
+    false_n = sum(1 for r in verified if qwen_verify_from_metadata(r) is False)
     skipped = len(rows) - len(verified)
     acc = true_n / len(verified) if verified else 0.0
     return {
@@ -191,7 +189,7 @@ def parse_args():
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip rows where pseudo_reasoning_test is already true/false",
+        help="Skip rows where qwen_verify is already true/false",
     )
     parser.add_argument(
         "--write_csv",

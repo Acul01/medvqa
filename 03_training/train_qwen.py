@@ -102,7 +102,7 @@ def build_fgr_train_lookup(json_path: str) -> FgrTrainLookup:
 
 
 def filter_verified_reasoning_samples(samples: list[VQASample]) -> list[VQASample]:
-    """Keep only rows with pseudo_reasoning_test=True and non-empty pseudo_reasoning_raw."""
+    """Keep only rows with qwen_verify=True and non-empty pseudo_reasoning_raw."""
     filtered: list[VQASample] = []
     for sample in samples:
         if not is_pseudo_reasoning_verified(sample.metadata):
@@ -225,7 +225,7 @@ def parse_args():
         "--use_reasoning",
         action="store_true",
         help=(
-            "Train on verified pseudo reasoning (pseudo_reasoning_test=True) with JSON "
+            "Train on verified pseudo reasoning (qwen_verify=True) with JSON "
             "assistant targets {reasoning, answer}; val stays answer-only on standard MC."
         ),
     )
@@ -374,12 +374,12 @@ def main():
         train_samples = filter_verified_reasoning_samples(train_samples)
         print(
             f"Train: {len(train_samples)} / {train_total} samples "
-            f"(use_reasoning, pseudo_reasoning_test=True)"
+            f"(use_reasoning, qwen_verify=True)"
         )
         if not train_samples:
             raise ValueError(
                 "No verified reasoning samples after filtering. "
-                "Ensure verify JSON exists and pseudo_reasoning_test=True rows are present."
+                "Ensure verify JSON exists and qwen_verify=True rows are present."
             )
     else:
         print(f"Train: {len(train_samples)} samples")

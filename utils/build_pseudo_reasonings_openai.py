@@ -4,13 +4,13 @@ Generate pseudo REGION/OBSERVATION/REASONING annotations for MC training samples
 - Gold label (correct answer text) is passed to GPT so the reasoning justifies that answer.
 - N reasoning variants per sample (OpenAI ``n`` parameter); each variant is a separate row.
 - Output suffix default ``_pseudo`` → e.g. ``vqarad_train_mc_openai_pseudo.json``.
-- Run ``04_evaluation/verify_pseudo_reasoning_qwen.py`` afterward to set ``pseudo_reasoning_test``
+- Run ``04_evaluation/verify_pseudo_reasoning_qwen.py`` afterward to set ``qwen_verify``
   and write ``*_mc_openai_pseudo_pr_qwen_verify.json`` for ``train_qwen --use_reasoning``.
 
 Output fields per expanded row (among others):
     pseudo_reasoning_raw, pseudo_region, pseudo_observation, pseudo_reasoning
     pseudo_reasoning_index, pseudo_reasoning_total
-    (pseudo_reasoning_test is set by the Qwen verify step, not here)
+    (qwen_verify is set by the Qwen verify step, not here)
 """
 
 from __future__ import annotations
@@ -209,6 +209,7 @@ def expand_row(base_row: Dict[str, Any], raws: List[str], model: str) -> List[Di
         row["pseudo_reasoning_index"] = idx
         row["pseudo_reasoning_total"] = len(raws)
         row.pop("pseudo_reasoning_test", None)
+        row.pop("qwen_verify", None)
         row.pop("pseudo_reasoning_error", None)
         expanded.append(row)
     return expanded

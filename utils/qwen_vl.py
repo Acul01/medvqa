@@ -17,6 +17,7 @@ from utils.reasoning_mc import format_reasoning_block_for_training
 DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO = "_pseudo"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
+QWEN_VERIFY_FIELD = "qwen_verify"
 
 MC_JSON_RESPONSE_INSTRUCTION = (
     "\n\nRespond with ONLY valid JSON in this exact schema: "
@@ -37,15 +38,37 @@ def pseudo_reasoning_raw_from_metadata(metadata: Optional[Dict[str, Any]]) -> st
     return str(raw).strip() if isinstance(raw, str) else ""
 
 
-def is_pseudo_reasoning_verified(metadata: Optional[Dict[str, Any]]) -> bool:
-    if not metadata:
+def _parse_bool_field(value: Any) -> Optional[bool]:
+    if value is True:
+        return True
+    if value is False:
         return False
-    v = metadata.get("pseudo_reasoning_test")
-    if v is True:
-        return True
-    if isinstance(v, str) and v.strip().lower() in {"true", "1", "yes"}:
-        return True
-    return False
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in {"true", "1", "yes"}:
+            return True
+        if s in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def qwen_verify_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """Return qwen_verify value (true/false) or None if not yet verified."""
+    if not metadata:
+        return None
+    v = _parse_bool_field(metadata.get(QWEN_VERIFY_FIELD))
+    if v is not None:
+        return v
+    return _parse_bool_field(metadata.get("pseudo_reasoning_test"))
+
+
+def is_qwen_verify_done(metadata: Optional[Dict[str, Any]]) -> bool:
+    return qwen_verify_from_metadata(metadata) is not None
+
+
+def is_pseudo_reasoning_verified(metadata: Optional[Dict[str, Any]]) -> bool:
+    """True when Qwen verify passed (qwen_verify=True; legacy: pseudo_reasoning_test=True)."""
+    return qwen_verify_from_metadata(metadata) is True
 
 
 def reasoning_text_from_pseudo_row(row: Dict[str, Any]) -> Optional[str]:

@@ -123,7 +123,7 @@ flowchart LR
 | `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
 | `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
 | `04_evaluation/inference_qwen.py` | Inferenz + Entropie (**Qwen2.5-VL**) |
-| `04_evaluation/verify_pseudo_reasoning_qwen.py` | Qwen-Verify für Pseudo-Rationales (`pseudo_reasoning_test`) |
+| `04_evaluation/verify_pseudo_reasoning_qwen.py` | Qwen-Verify für Pseudo-Rationales (`qwen_verify`) |
 | `04_evaluation/inference_medvlm_r1.py` | Inferenz (**MedVLM-R1**, pretrained) |
 | `utils/qwen_vl.py` | Qwen-Input-Prep, Label-Masking, gemeinsame Hilfen |
 | `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
@@ -863,8 +863,8 @@ python utils/build_mc_datasets_openai.py \
 Pipeline für **Pseudo-Rationales** auf MC-Trainingsdaten:
 
 1. **Generieren** (`utils/build_pseudo_reasonings_openai.py`) — GPT-4o-mini erzeugt REGION/OBSERVATION/REASONING mit Gold-Antwort im Prompt; Ausgabe z. B. `*_mc_openai_pseudo.json` (Default-Suffix `_pseudo`).
-2. **Qwen-Verify** (`04_evaluation/verify_pseudo_reasoning_qwen.py`) — Pretrained **Qwen2.5-VL** bekommt den Reasoning-Text + MC-Frage/Optionen **ohne Bild** (Hinweis im Prompt: die Beschreibung bezieht sich auf ein nicht gezeigtes Bild); setzt `pseudo_reasoning_test` true/false. Ausgabe z. B. `*_mc_openai_pseudo_pr_qwen_verify.json`.
-3. **Training** (`03_training/train_qwen.py --use_reasoning`) — nutzt nur Zeilen mit `pseudo_reasoning_test=True` und nicht-leerem `pseudo_reasoning_raw`.
+2. **Qwen-Verify** (`04_evaluation/verify_pseudo_reasoning_qwen.py`) — Pretrained **Qwen2.5-VL** bekommt den Reasoning-Text + MC-Frage/Optionen **ohne Bild** (Hinweis im Prompt: die Beschreibung bezieht sich auf ein nicht gezeigtes Bild); setzt `qwen_verify` true/false. Ausgabe z. B. `*_mc_openai_pseudo_pr_qwen_verify.json`.
+3. **Training** (`03_training/train_qwen.py --use_reasoning`) — nutzt nur Zeilen mit `qwen_verify=True` und nicht-leerem `pseudo_reasoning_raw`.
 
 ```bash
 # 1) Pseudo-Rationales generieren
