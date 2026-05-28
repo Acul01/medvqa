@@ -123,6 +123,7 @@ flowchart LR
 | `04_evaluation/inference.py` | Inferenz + Entropie (**LLaVA**) |
 | `04_evaluation/inference_med.py` | Inferenz (**LLaVA-Med**) |
 | `04_evaluation/inference_qwen.py` | Inferenz + Entropie (**Qwen2.5-VL**) |
+| `04_evaluation/verify_pseudo_reasoning_qwen.py` | Qwen-Verify für Pseudo-Rationales (`pseudo_reasoning_test`) |
 | `04_evaluation/inference_medvlm_r1.py` | Inferenz (**MedVLM-R1**, pretrained) |
 | `utils/qwen_vl.py` | Qwen-Input-Prep, Label-Masking, gemeinsame Hilfen |
 | `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
@@ -131,6 +132,7 @@ flowchart LR
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
 | `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
+| `utils/build_pseudo_reasonings_openai.py` | Pseudo REGION/OBS/REASONING via OpenAI Vision |
 | `utils/download_datasets.py` | Download PathVQA / SLAKE / VQA-Rad / Med-VQA-2019 nach `02_data/` |
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
@@ -856,9 +858,41 @@ python utils/build_mc_datasets_openai.py \
   --resume
 ```
 
-### Pseudo-Reasoning (nicht Bestandteil dieses Repos)
+### Pseudo-Reasoning (OpenAI → Qwen-Verify → Training)
 
-Eine frühere Pipeline (OpenAI-Vision + Qwen-Verifikation + optionales Training auf Pseudo-Reasonings) ist **hier nicht enthalten**. Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser.
+Pipeline für **Pseudo-Rationales** auf MC-Trainingsdaten:
+
+1. **Generieren** (`utils/build_pseudo_reasonings_openai.py`) — GPT-4o-mini erzeugt REGION/OBSERVATION/REASONING mit Gold-Antwort im Prompt; Ausgabe z. B. `*_mc_openai_pseudo.json` (Default-Suffix `_pseudo`).
+2. **Qwen-Verify** (`04_evaluation/verify_pseudo_reasoning_qwen.py`) — Pretrained **Qwen2.5-VL** bekommt den Reasoning-Text + MC-Frage/Optionen **ohne Bild** (Hinweis im Prompt: die Beschreibung bezieht sich auf ein nicht gezeigtes Bild); setzt `pseudo_reasoning_test` true/false. Ausgabe z. B. `*_mc_openai_pseudo_pr_qwen_verify.json`.
+3. **Training** (`03_training/train_qwen.py --use_reasoning`) — nutzt nur Zeilen mit `pseudo_reasoning_test=True` und nicht-leerem `pseudo_reasoning_raw`.
+
+```bash
+# 1) Pseudo-Rationales generieren
+PYTHONPATH=. python utils/build_pseudo_reasonings_openai.py \
+  --data_root 02_data \
+  --mc_data_root 02_data/data_mc_openai \
+  --datasets vqarad \
+  --openai_model gpt-4o-mini \
+  --n_reasonings 5 --temperature 0.7
+
+# 2) Mit Basis-Qwen verifizieren (empfohlen: Pretrained, nicht das später fine-getunte Reasoning-Modell)
+python 04_evaluation/verify_pseudo_reasoning_qwen.py \
+  --input_json 02_data/data_mc_openai/vqarad/vqarad_train_mc_openai_pseudo.json \
+  --model_path Qwen/Qwen2.5-VL-7B-Instruct \
+  --resume
+
+# 3) Reasoning-Training
+python 03_training/train_qwen.py \
+  --dataset vqarad \
+  --use_reasoning \
+  --use_lora \
+  --output_dir ./05_outputs/qwen_vqarad_reasoning \
+  --bf16 --gradient_checkpointing
+```
+
+Inferenz auf dem Reasoning-Checkpoint: `inference_qwen.py --use_reasoning_json --max_new_tokens 512` (siehe Abschnitt Qwen-Inferenz).
+
+Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser (unabhängig von dieser Pseudo-Pipeline).
 
 Ausgabe pro Datensatz:
 **MC als Standardpfad:** `MedicalVQALoader()` nutzt `MEDVQA_DATA_ROOT` / `MEDVQA_MC_ROOT` bzw. die Fallbacks `02_data` und `02_data/data_mc_openai` (siehe [`utils/paths.py`](utils/paths.py)). Fehlen die MC-Dateien unter dem MC-Root, gibt der Loader einen Fehler mit Verweis auf `utils/build_mc_datasets_openai.py`. **`utils/build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.

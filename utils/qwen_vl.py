@@ -12,8 +12,10 @@ import torch
 from qwen_vl_utils import process_vision_info
 
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
+from utils.reasoning_mc import format_reasoning_block_for_training
 
 DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
+DEFAULT_MC_EXPORT_SUFFIX_PSEUDO = "_pseudo"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
 
 MC_JSON_RESPONSE_INSTRUCTION = (
@@ -44,6 +46,47 @@ def is_pseudo_reasoning_verified(metadata: Optional[Dict[str, Any]]) -> bool:
     if isinstance(v, str) and v.strip().lower() in {"true", "1", "yes"}:
         return True
     return False
+
+
+def reasoning_text_from_pseudo_row(row: Dict[str, Any]) -> Optional[str]:
+    """Extract reasoning text from a pseudo-MC JSON row (raw or parsed fields)."""
+    raw = row.get("pseudo_reasoning_raw")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    reg = str(row.get("pseudo_region", "")).strip()
+    obs = str(row.get("pseudo_observation", "")).strip()
+    exp = str(row.get("pseudo_reasoning", "")).strip()
+    if reg or obs or exp:
+        return format_reasoning_block_for_training(
+            reg if reg else "unknown",
+            obs if obs else "unknown",
+            exp if exp else "unknown",
+        )
+    return None
+
+
+def build_pseudo_reasoning_verify_conversation(
+    question: str,
+    options: List[str],
+    reasoning_text: str,
+) -> List[dict]:
+    """User turn: reasoning + MC question/options; no image (reasoning refers to an unseen image)."""
+    option_list = [str(opt).strip() for opt in options]
+    if len(option_list) < 2:
+        raise ValueError("MC question requires at least 2 options")
+    option_lines = [f"{LETTER_POOL[i]}) {opt}" for i, opt in enumerate(option_list)]
+    allowed = ", ".join(LETTER_POOL[: len(option_list)])
+    verify_prompt = (
+        "You answer a multiple-choice medical question. "
+        "The reasoning below describes visual findings from a medical image. "
+        "The image itself is not shown. Base your choice solely on the reasoning text.\n\n"
+        f"Reasoning:\n{reasoning_text.strip()}\n\n"
+        f"Question:\n{str(question).strip()}\n\n"
+        f"Options:\n" + "\n".join(option_lines) + "\n\n"
+        f"Respond with ONLY the single MC option letter ({allowed}) that is most supported by the reasoning."
+        "Do not output any other text."
+    )
+    return [{"role": "user", "content": [{"type": "text", "text": verify_prompt}]}]
 
 
 def _normalize_mc_letter(answer: Optional[str]) -> str:

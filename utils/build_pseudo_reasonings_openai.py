@@ -1,25 +1,16 @@
 """
 Generate pseudo REGION/OBSERVATION/REASONING annotations for MC training samples via OpenAI vision.
 
-Key design choices vs. the original script:
-- Gold label (correct answer + all MC options) is passed to GPT so the reasoning explicitly
-  justifies the correct answer and rules out distractors. No verification step needed.
-- N reasoning variants are generated per sample (default 5) using OpenAI's ``n`` parameter
-  with temperature > 0 for diversity.  Each variant becomes a separate training row.
-- Output is written to a new file (default suffix ``_pseudo_pr_qwen_verify``) so the source
-  MC JSON is never overwritten.
+- Gold label (correct answer text) is passed to GPT so the reasoning justifies that answer.
+- N reasoning variants per sample (OpenAI ``n`` parameter); each variant is a separate row.
+- Output suffix default ``_pseudo`` → e.g. ``vqarad_train_mc_openai_pseudo.json``.
+- Run ``04_evaluation/verify_pseudo_reasoning_qwen.py`` afterward to set ``pseudo_reasoning_test``
+  and write ``*_mc_openai_pseudo_pr_qwen_verify.json`` for ``train_qwen --use_reasoning``.
 
-Output JSON rows are identical to the source MC rows but add:
-    pseudo_reasoning_raw        str   raw GPT output (REGION/OBS/REASON + <END_REASONING>)
-    pseudo_region               str   parsed REGION field
-    pseudo_observation          str   parsed OBSERVATION field
-    pseudo_reasoning            str   parsed REASONING field
-    pseudo_reasoning_parse_mode str
-    pseudo_reasoning_openai_model str
-    pseudo_reasoning_generated_at str
-    pseudo_reasoning_index      int   0 … n_reasonings-1
-    pseudo_reasoning_total      int   n_reasonings
-    pseudo_reasoning_test       bool  True (gold-label guided → no separate verify needed)
+Output fields per expanded row (among others):
+    pseudo_reasoning_raw, pseudo_region, pseudo_observation, pseudo_reasoning
+    pseudo_reasoning_index, pseudo_reasoning_total
+    (pseudo_reasoning_test is set by the Qwen verify step, not here)
 """
 
 from __future__ import annotations
@@ -217,8 +208,7 @@ def expand_row(base_row: Dict[str, Any], raws: List[str], model: str) -> List[Di
         row["pseudo_reasoning_generated_at"] = generated_at
         row["pseudo_reasoning_index"] = idx
         row["pseudo_reasoning_total"] = len(raws)
-        # Gold-label guided → no separate verification step needed
-        row["pseudo_reasoning_test"] = True
+        row.pop("pseudo_reasoning_test", None)
         row.pop("pseudo_reasoning_error", None)
         expanded.append(row)
     return expanded
@@ -391,8 +381,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--output_suffix",
         type=str,
-        default="_pseudo_pr_qwen_verify",
-        help="Suffix appended before .json in output filename (default: _pseudo_pr_qwen_verify).",
+        default="_pseudo",
+        help="Suffix appended before .json in output filename (default: _pseudo). Verify writes _pseudo_pr_qwen_verify.",
     )
     p.add_argument(
         "--split",
