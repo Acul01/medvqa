@@ -25,9 +25,9 @@ MIN_PIXELS = 256 * 28 * 28
 MAX_PIXELS = 512 * 28 * 28
 
 MC_JSON_RESPONSE_INSTRUCTION = (
-    "\n\nRespond with ONLY valid JSON in this exact schema: "
-    '{"reasoning":"<string>","answer":"<single MC option letter>"} '
-    "No markdown fences, no other text before or after."
+    "\n\nAnalyze the image and respond with ONLY valid JSON using this exact schema:\n"
+    '{"reasoning":"REGION: <anatomical region>\\nOBSERVATION: <what you observe in that region>\\nREASONING: <why this observation explains the correct answer>","answer":"<single uppercase MC letter>"}\n'
+    "No text before or after the JSON."
 )
 
 
