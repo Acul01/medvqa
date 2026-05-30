@@ -289,6 +289,7 @@ def prepare_qwen_inputs(
     add_generation_prompt: bool = False,
     max_length: Optional[int] = None,
     padding: bool | str = False,
+    truncation: bool = True,
     return_tensors: str = "pt",
 ) -> dict:
     """Apply chat template, vision preprocessing, and processor tokenization."""
@@ -308,7 +309,7 @@ def prepare_qwen_inputs(
     }
     if max_length is not None:
         processor_kwargs["max_length"] = max_length
-        processor_kwargs["truncation"] = True
+        processor_kwargs["truncation"] = truncation
 
     return processor(**processor_kwargs)
 
