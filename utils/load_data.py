@@ -50,6 +50,7 @@ class MedicalVQALoader:
         self,
         data_root: Optional[str] = None,
         mc_data_root: Optional[Any] = MC_DEFAULT,
+        mc_export_suffix: str = "",
     ):
         self.data_root = Path(data_root if data_root is not None else get_data_root())
         if mc_data_root is MC_DEFAULT:
@@ -58,6 +59,7 @@ class MedicalVQALoader:
             self.mc_data_root = None
         else:
             self.mc_data_root = Path(mc_data_root)
+        self.mc_export_suffix = mc_export_suffix
 
         self.dataset_configs = {
             "PathVQA": {
@@ -162,7 +164,7 @@ class MedicalVQALoader:
         if self.mc_data_root is None:
             raise ValueError("mc_data_root is disabled")
         slug = self.canonical_to_slug[dataset_name]
-        base = self.mc_data_root / slug / f"{slug}_{split}_mc_openai"
+        base = self.mc_data_root / slug / f"{slug}_{split}_mc_openai{self.mc_export_suffix}"
         return base.with_suffix(".json"), base.with_suffix(".csv")
 
     def _load_mc_records(self, dataset_name: str, split: str, config: Dict) -> List[VQASample]:
