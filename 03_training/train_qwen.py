@@ -28,6 +28,7 @@ from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qw
 from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
     DEFAULT_MODEL_PATH,
+    QwenVLDataCollator,
     build_mc_conversation,
     build_mc_reasoning_conversation,
     configure_qwen_processor_pixels,
@@ -190,9 +191,7 @@ class QwenMCTrainDataset(Dataset):
             self.processor,
             conversation,
             add_generation_prompt=False,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=False,
+            padding=False,
         )
         item = squeeze_batch_dim(batch)
         input_ids = item["input_ids"]
@@ -434,11 +433,14 @@ def main():
         save_only_model=True,
     )
 
+    collator = QwenVLDataCollator(tokenizer=processor.tokenizer)
+
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
+        data_collator=collator,
         processing_class=processor.tokenizer,
     )
 

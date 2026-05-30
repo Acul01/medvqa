@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import torch
 from qwen_vl_utils import process_vision_info
@@ -18,6 +18,11 @@ DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO = "_pseudo"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
 QWEN_VERIFY_FIELD = "qwen_verify"
+LABEL_IGNORE_INDEX = -100
+
+# Cap vision resolution for stable token counts during batched training (512×28×28 patches).
+MIN_PIXELS = 256 * 28 * 28
+MAX_PIXELS = 512 * 28 * 28
 
 MC_JSON_RESPONSE_INSTRUCTION = (
     "\n\nRespond with ONLY valid JSON in this exact schema: "
@@ -26,9 +31,13 @@ MC_JSON_RESPONSE_INSTRUCTION = (
 )
 
 
-def configure_qwen_processor_pixels(_processor: Any) -> None:
-    """Optional hook to align image resolution with training; no-op unless extended."""
-    pass
+def configure_qwen_processor_pixels(processor: Any) -> None:
+    """Limit image resolution so vision token counts stay stable across batches."""
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        return
+    image_processor.min_pixels = MIN_PIXELS
+    image_processor.max_pixels = MAX_PIXELS
 
 
 def pseudo_reasoning_raw_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
@@ -312,6 +321,52 @@ def prepare_qwen_inputs(
         processor_kwargs["truncation"] = truncation
 
     return processor(**processor_kwargs)
+
+
+@dataclass
+class QwenVLDataCollator:
+    """Pad text fields; concatenate vision tensors (Qwen2.5-VL batch layout)."""
+
+    tokenizer: Any
+
+    def __call__(self, instances: Sequence[dict]) -> dict:
+        input_ids = [inst["input_ids"] for inst in instances]
+        labels = [inst["labels"] for inst in instances]
+
+        pad_id = self.tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = self.tokenizer.eos_token_id
+
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids, batch_first=True, padding_value=pad_id
+        )
+        labels = torch.nn.utils.rnn.pad_sequence(
+            labels, batch_first=True, padding_value=LABEL_IGNORE_INDEX
+        )
+
+        batch: dict = {
+            "input_ids": input_ids,
+            "labels": labels,
+            "attention_mask": input_ids.ne(pad_id),
+        }
+
+        if instances and "pixel_values" in instances[0]:
+            pixel_values = [inst["pixel_values"] for inst in instances if inst.get("pixel_values") is not None]
+            if pixel_values:
+                batch["pixel_values"] = torch.cat(pixel_values, dim=0)
+
+        if instances and "image_grid_thw" in instances[0]:
+            grids = [inst["image_grid_thw"] for inst in instances if inst.get("image_grid_thw") is not None]
+            if grids:
+                rows = []
+                for grid in grids:
+                    if grid.ndim == 1:
+                        rows.append(grid.unsqueeze(0))
+                    else:
+                        rows.append(grid)
+                batch["image_grid_thw"] = torch.cat(rows, dim=0)
+
+        return batch
 
 
 def squeeze_batch_dim(batch: dict) -> dict:
