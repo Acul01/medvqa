@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 AblationLookupKey = Tuple[str, str]
 FgrCropLookup = Dict[AblationLookupKey, str]
+FgrTrainLookup = Dict[AblationLookupKey, str]  # (image_key, question) -> effective training image path
 FgrBboxLookup = Dict[AblationLookupKey, Optional[List[int]]]
 
 # Sentinel used to distinguish "key not in bbox lookup" from "key maps to None (baseline)"
@@ -139,6 +140,60 @@ def load_fgr_crop_lookup(
             f"No usable crop mappings loaded from {path} (field={crop_field!r}, missing={missing_crop})"
         )
     print(f"Loaded {len(lookup)} FGR crop mappings from {path.name} ({crop_field})")
+    return lookup
+
+
+def load_fgr_supervised_train_lookup(
+    json_path: str | Path,
+    *,
+    data_root: Optional[str] = None,
+) -> FgrTrainLookup:
+    """Build (image_key, question) -> effective image path for Qwen FGR training.
+
+    Baseline supervised winners keep the original ``image_path``; l1/l2 winners use
+    the resolved crop when available, otherwise fall back to the original image.
+    """
+    path = Path(json_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"FGR region comparison JSON not found: {path}")
+
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+
+    lookup: FgrTrainLookup = {}
+    n_crops = n_baseline = n_missing = 0
+
+    for row in _load_fgr_rows(payload):
+        image_path = (row.get("image_path") or "").strip()
+        question = (row.get("question") or "").strip()
+        if not image_path or not question:
+            continue
+
+        winner = row.get("overall_winner_supervised", "baseline")
+        crop_path = (row.get("overall_winner_supervised_crop") or "").strip()
+
+        if winner == "baseline" or not crop_path:
+            effective = image_path
+            n_baseline += 1
+        else:
+            resolved = _resolve_crop_file_path(crop_path, json_path=path)
+            if resolved is not None:
+                effective = str(resolved)
+                n_crops += 1
+            elif Path(crop_path).is_file():
+                effective = crop_path
+                n_crops += 1
+            else:
+                effective = image_path
+                n_missing += 1
+
+        key = (normalize_ablation_image_key(image_path, data_root=data_root), question)
+        lookup[key] = effective
+
+    print(
+        f"FGR train lookup: {len(lookup)} samples — "
+        f"{n_crops} crops, {n_baseline} baseline (original), {n_missing} missing (fallback)"
+    )
     return lookup
 
 
