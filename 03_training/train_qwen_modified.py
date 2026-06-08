@@ -35,14 +35,39 @@ from utils.qwen_vl import (
 
 
 # Spatial Filter Layer
-def _get_visual_merger_output_dim(model) -> int:
+def _find_visual_merger(model: nn.Module) -> nn.Module:
+    """
+    Return the visual merger module, searching common attribute paths.
+    Raises RuntimeError if not found.
+    """
+    candidate_paths = [
+        "visual.merger",           # Qwen2.5-VL (some versions)
+        "model.visual.merger",     # Qwen2.5-VL (other versions)
+        "vision_model.merger",
+    ]
+    for path in candidate_paths:
+        obj = model
+        try:
+            for part in path.split("."):
+                obj = getattr(obj, part)
+            return obj  # found
+        except AttributeError:
+            continue
+    raise RuntimeError(
+        f"Cannot find visual merger. Tried paths: {candidate_paths}. "
+        "Inspect model architecture and extend candidate_paths."
+    )
+
+
+def _get_visual_merger_output_dim(model: nn.Module) -> int:
     """Infer merger output dim (= LLM hidden size) from the model architecture."""
-    # 1. Preferred: last Linear in visual.merger outputs exactly the LLM hidden size
+    # 1. Preferred: last Linear in visual merger outputs exactly the LLM hidden size
     try:
-        for m in reversed(list(model.visual.merger.modules())):
+        merger = _find_visual_merger(model)
+        for m in reversed(list(merger.modules())):
             if isinstance(m, nn.Linear):
                 return m.out_features
-    except AttributeError:
+    except RuntimeError:
         pass
     # 2. LM head: Linear(hidden_size → vocab), so in_features = hidden_size
     try:
@@ -142,6 +167,9 @@ class QwenWithSpatialFilter(nn.Module):
         super().__init__()
         self.model = base_model
         self.spatial_filter = SpatialFilterLayer(d_model, bottleneck)
+        # Resolve merger once at init — avoids repeated attribute traversal
+        # and works regardless of how deeply the merger is nested.
+        self._merger = _find_visual_merger(base_model)
 
     def _make_hook(self, image_grid_thw: torch.Tensor):
         """
@@ -168,7 +196,7 @@ class QwenWithSpatialFilter(nn.Module):
     def forward(self, input_ids, attention_mask, pixel_values=None,
                 image_grid_thw=None, labels=None, **kwargs):
         hook_fn = self._make_hook(image_grid_thw) if image_grid_thw is not None else None
-        handle = self.model.visual.merger.register_forward_hook(hook_fn) if hook_fn else None
+        handle = self._merger.register_forward_hook(hook_fn) if hook_fn else None
         try:
             return self.model(
                 input_ids=input_ids,
@@ -185,7 +213,7 @@ class QwenWithSpatialFilter(nn.Module):
     def generate(self, **kwargs):
         image_grid_thw = kwargs.get("image_grid_thw")
         hook_fn = self._make_hook(image_grid_thw) if image_grid_thw is not None else None
-        handle = self.model.visual.merger.register_forward_hook(hook_fn) if hook_fn else None
+        handle = self._merger.register_forward_hook(hook_fn) if hook_fn else None
         try:
             return self.model.generate(**kwargs)
         finally:
