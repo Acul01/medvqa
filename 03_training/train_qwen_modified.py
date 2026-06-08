@@ -36,14 +36,32 @@ from utils.qwen_vl import (
 
 # Spatial Filter Layer
 def _get_visual_merger_output_dim(model) -> int:
-    """Infer merger output dim by inspecting the last Linear in visual.merger."""
+    """Infer merger output dim (= LLM hidden size) from the model architecture."""
+    # 1. Preferred: last Linear in visual.merger outputs exactly the LLM hidden size
     try:
         for m in reversed(list(model.visual.merger.modules())):
             if isinstance(m, nn.Linear):
                 return m.out_features
     except AttributeError:
         pass
-    return model.config.hidden_size
+    # 2. LM head: Linear(hidden_size → vocab), so in_features = hidden_size
+    try:
+        return model.lm_head.in_features
+    except AttributeError:
+        pass
+    # 3. Config fallback — attribute name differs across Qwen variants
+    for attr in ("hidden_size", "text_config.hidden_size"):
+        try:
+            obj = model.config
+            for part in attr.split("."):
+                obj = getattr(obj, part)
+            return int(obj)
+        except AttributeError:
+            pass
+    raise RuntimeError(
+        "Cannot infer visual merger output dimension. "
+        "Check model.visual.merger or model.lm_head."
+    )
 
 
 def _spatial_position_encoding(
