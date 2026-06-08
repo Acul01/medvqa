@@ -1,11 +1,11 @@
-"""Fine-tune Qwen2.5-VL on Medical VQA (MC) via HuggingFace Trainer."""
+"""Fine-tune Qwen2.5-VL with spatial filter on Medical VQA (MC) via HuggingFace Trainer."""
 
 import argparse
 from collections import Counter
+from pathlib import Path
 
 import torch
 import torch.nn as nn
-import wandb
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import (
@@ -16,12 +16,7 @@ from transformers import (
 )
 from transformers.trainer_utils import set_seed
 
-from utils.ablation import (
-    FgrTrainLookup as CropLookup,
-    load_fgr_supervised_train_lookup as load_crop_lookup,
-    normalize_ablation_image_key,
-)
-from utils.load_data import MedicalVQALoader, VQASample
+from utils.load_data import MedicalVQALoader
 from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen
 from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
@@ -32,7 +27,6 @@ from utils.qwen_vl import (
     configure_qwen_processor_pixels,
     is_pseudo_reasoning_verified,
     mask_labels_assistant_only,
-    model_short_name,
     prepare_qwen_inputs,
     pseudo_reasoning_raw_from_metadata,
     resolve_processor_path,
@@ -40,9 +34,7 @@ from utils.qwen_vl import (
 )
 
 
-# ── Spatial Filter Layer ──────────────────────────────────────────────────────
-
-
+# Spatial Filter Layer
 def _get_visual_merger_output_dim(model) -> int:
     """Infer merger output dim by inspecting the last Linear in visual.merger."""
     try:
@@ -123,9 +115,9 @@ class SpatialFilterLayer(nn.Module):
 
 class QwenWithSpatialFilter(nn.Module):
     """
-    Thin wrapper around Qwen2_5_VLForConditionalGeneration that installs a
-    forward hook on ``visual.merger`` to apply SpatialFilterLayer to every batch
-    of merged visual tokens — transparently, without changing the LLM interface.
+    Wrapper around Qwen2_5_VLForConditionalGeneration that installs a
+    forward hook on visual.merger to apply SpatialFilterLayer to every batch
+    of merged visual tokens. This is done transparently, without changing the LLM interface.
     """
 
     def __init__(self, base_model, d_model: int, bottleneck: int = 64):
@@ -189,11 +181,8 @@ class QwenWithSpatialFilter(nn.Module):
             return getattr(self.model, name)
 
 
-# ── Dataset ───────────────────────────────────────────────────────────────────
-
-
 class QwenMCTrainDataset(Dataset):
-    """MC Qwen dataset; loss only on assistant tokens (JSON or answer letter)."""
+    """MC Qwen dataset: loss only on assistant tokens (JSON or answer letter)."""
 
     def __init__(
         self,
@@ -202,33 +191,20 @@ class QwenMCTrainDataset(Dataset):
         max_length=512,
         *,
         use_reasoning: bool = False,
-        crop_lookup: CropLookup | None = None,
-        data_root: str | None = None,
     ):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
         self.use_reasoning = use_reasoning
-        self.crop_lookup = crop_lookup
-        self.data_root = data_root
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    def _resolve_image_path(self, sample: VQASample) -> str:
-        if self.crop_lookup is None:
-            return sample.image_path
-        key = (
-            normalize_ablation_image_key(sample.image_path, data_root=self.data_root),
-            sample.question.strip(),
-        )
-        return self.crop_lookup.get(key, sample.image_path)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(self._resolve_image_path(sample)).convert("RGB")
+        image = Image.open(sample.image_path).convert("RGB")
 
         if not sample.mc_options:
             raise ValueError("MC options missing; ensure mc_data_root points to MC exports.")
@@ -267,7 +243,9 @@ class QwenMCTrainDataset(Dataset):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Fine-tune Qwen2.5-VL on Medical VQA (MC)")
+    p = argparse.ArgumentParser(
+        description="Fine-tune Qwen2.5-VL with spatial filter on Medical VQA (MC)"
+    )
     p.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     p.add_argument("--data_root", type=str, default=get_data_root())
     p.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
@@ -314,24 +292,11 @@ def parse_args():
         default=["q_proj", "k_proj", "v_proj", "o_proj"],
     )
     p.add_argument(
-        "--crops_json",
-        type=str,
-        default=None,
-        help="Region comparison JSON: supervised winning crop path per training image.",
-    )
-    p.add_argument(
-        "--use_spatial_filter",
-        action="store_true",
-        help="Wrap model with learnable spatial filter layer (scorer MLP + feature concat + projection).",
-    )
-    p.add_argument(
         "--filter_bottleneck",
         type=int,
         default=64,
         help="Hidden dim of the scorer MLP inside SpatialFilterLayer (default: 64).",
     )
-    p.add_argument("--wandb_project", type=str, default="medvqa")
-    p.add_argument("--wandb_run_name", type=str, default=None)
     return p.parse_args()
 
 
@@ -353,16 +318,6 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
-    ft_tag = ("reasoning-" if args.use_reasoning else "") + ("lora" if args.use_lora else "full-ft")
-    model_short = model_short_name(args.model_path)
-    wandb.init(
-        project=args.wandb_project,
-        name=args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_train",
-        group=args.dataset,
-        tags=["training", "qwen", model_short, args.dataset, ft_tag],
-        config=vars(args),
-    )
-
     if args.use_8bit_optimizer:
         try:
             import bitsandbytes  # noqa: F401
@@ -382,14 +337,11 @@ def main():
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
 
-    # ── Optionally wrap with learnable spatial filter ─────────────────────────
-    if args.use_spatial_filter:
-        d_model = _get_visual_merger_output_dim(model)
-        n_params = (d_model + 1) * args.filter_bottleneck + args.filter_bottleneck + d_model * 2 * d_model + d_model
-        print(f"SpatialFilterLayer: d_model={d_model}, bottleneck={args.filter_bottleneck}, params≈{n_params:,}")
-        model = QwenWithSpatialFilter(model, d_model=d_model, bottleneck=args.filter_bottleneck)
+    d_model = _get_visual_merger_output_dim(model)
+    n_params = (d_model + 1) * args.filter_bottleneck + args.filter_bottleneck + d_model * 2 * d_model + d_model
+    print(f"SpatialFilterLayer: d_model={d_model}, bottleneck={args.filter_bottleneck}, params≈{n_params:,}")
+    model = QwenWithSpatialFilter(model, d_model=d_model, bottleneck=args.filter_bottleneck)
 
-    # ── LoRA (applied to inner base model) ────────────────────────────────────
     if args.use_lora:
         from peft import LoraConfig, TaskType, get_peft_model
 
@@ -401,13 +353,9 @@ def main():
             task_type=TaskType.CAUSAL_LM,
             bias="none",
         )
-        inner = model.model if args.use_spatial_filter else model
-        inner = get_peft_model(inner, lora_cfg)
+        inner = get_peft_model(model.model, lora_cfg)
         inner.print_trainable_parameters()
-        if args.use_spatial_filter:
-            model.model = inner
-        else:
-            model = inner
+        model.model = inner
 
     processor_path = resolve_processor_path(args.model_path)
     if processor_path != args.model_path:
@@ -426,10 +374,6 @@ def main():
     use_all = args.dataset == "all"
     print(f"Loading train ({args.train_split}, suffix={train_suffix!r})...")
     train_samples = _load_samples(loader, args.dataset, args.train_split)
-
-    crop_lookup = None
-    if args.crops_json:
-        crop_lookup = load_crop_lookup(args.crops_json, data_root=args.data_root)
 
     train_total = len(train_samples)
     if args.use_reasoning:
@@ -450,8 +394,6 @@ def main():
         processor,
         args.max_length,
         use_reasoning=args.use_reasoning,
-        crop_lookup=crop_lookup,
-        data_root=args.data_root,
     )
     if use_all and not args.use_reasoning:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
@@ -477,7 +419,6 @@ def main():
             val_samples,
             processor,
             args.max_length,
-            data_root=args.data_root,
         )
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
@@ -503,7 +444,7 @@ def main():
             bf16=args.bf16,
             dataloader_num_workers=args.dataloader_num_workers,
             remove_unused_columns=False,
-            report_to="wandb",
+            report_to="none",
             seed=args.seed,
             optim="adamw_8bit" if args.use_8bit_optimizer else "adamw_torch",
             max_grad_norm=1.0,
@@ -520,7 +461,7 @@ def main():
         if args.use_reasoning
         else "assistant answer tokens only"
     )
-    print(f"Starting Qwen2.5-VL training (loss on {loss_desc})...")
+    print(f"Starting Qwen2.5-VL training with spatial filter (loss on {loss_desc})...")
     result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     print(f"Saving model to {args.output_dir}")
@@ -528,24 +469,11 @@ def main():
     trainer.save_state()
     processor.save_pretrained(args.output_dir)
 
-    if args.use_spatial_filter:
-        from pathlib import Path
-        filter_path = Path(args.output_dir) / "spatial_filter.pt"
-        torch.save(model.spatial_filter.state_dict(), filter_path)
-        print(f"Spatial filter saved → {filter_path}")
+    filter_path = Path(args.output_dir) / "spatial_filter.pt"
+    torch.save(model.spatial_filter.state_dict(), filter_path)
+    print(f"Spatial filter saved → {filter_path}")
 
     print(f"Training completed! loss={result.training_loss}")
-
-    wandb.log(
-        {
-            "final_train_loss": result.training_loss,
-            "train_samples": len(train_dataset),
-            "train_samples_total_before_filter": train_total if args.use_reasoning else len(train_dataset),
-            "train_samples_filtered": len(train_dataset) if args.use_reasoning else None,
-            "val_samples": len(val_dataset) if val_dataset else 0,
-        }
-    )
-    wandb.finish()
 
 
 if __name__ == "__main__":

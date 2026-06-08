@@ -51,6 +51,7 @@ def save_results(
     dataset: str,
     n_samples: int | None,
     results_dir: str | Path = RESULTS_DIR,
+    name_suffix: str | None = None,
 ) -> Path:
     """Write inference JSON/CSV/XLSX under ``results_dir``; return path to the JSON file."""
     results_dir = Path(results_dir)
@@ -59,6 +60,8 @@ def save_results(
     model_name = _derive_model_short_name(model_path)
     n_tag = str(n_samples) if n_samples is not None else "all"
     base_name = f"{model_name}_{dataset}_{n_tag}"
+    if name_suffix:
+        base_name = f"{base_name}_{name_suffix}"
 
     json_path = results_dir / f"{base_name}.json"
     with open(json_path, "w", encoding="utf-8") as f:
