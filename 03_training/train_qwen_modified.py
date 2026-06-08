@@ -169,7 +169,10 @@ class QwenWithSpatialFilter(nn.Module):
         self.spatial_filter = SpatialFilterLayer(d_model, bottleneck)
         # Resolve merger once at init — avoids repeated attribute traversal
         # and works regardless of how deeply the merger is nested.
-        self._merger = _find_visual_merger(base_model)
+        # Use object.__setattr__ so _merger is not registered as a submodule;
+        # otherwise state_dict duplicates merger weights (shared memory) and
+        # safetensors save fails.
+        object.__setattr__(self, "_merger", _find_visual_merger(base_model))
         # In newer transformers versions image_grid_thw stores PRE-merger dims
         # (before the 2×2 spatial compression). We need spatial_merge_size to
         # convert pre-merger (h, w) → post-merger (h/ms, w/ms).
@@ -255,7 +258,7 @@ class QwenMCTrainDataset(Dataset):
         self,
         samples,
         processor,
-        max_length=512,
+        max_length=2048,
         *,
         use_reasoning: bool = False,
     ):
@@ -340,7 +343,7 @@ def parse_args():
     p.add_argument("--logging_steps", type=int, default=10)
     p.add_argument("--save_steps", type=int, default=500)
     p.add_argument("--eval_steps", type=int, default=500)
-    p.add_argument("--max_length", type=int, default=512)
+    p.add_argument("--max_length", type=int, default=2048)
     p.add_argument("--gradient_checkpointing", action="store_true")
     p.add_argument("--fp16", action="store_true")
     p.add_argument("--bf16", action="store_true")
