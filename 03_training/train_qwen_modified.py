@@ -170,23 +170,33 @@ class QwenWithSpatialFilter(nn.Module):
         # Resolve merger once at init — avoids repeated attribute traversal
         # and works regardless of how deeply the merger is nested.
         self._merger = _find_visual_merger(base_model)
+        # In newer transformers versions image_grid_thw stores PRE-merger dims
+        # (before the 2×2 spatial compression). We read spatial_merge_size from
+        # the merger so we can convert to post-merger dimensions correctly.
+        # Falls back to 1 (= image_grid_thw already post-merger, old behaviour).
+        self._merge_size = int(getattr(self._merger, "spatial_merge_size", 1))
 
     def _make_hook(self, image_grid_thw: torch.Tensor):
         """
         Return a merger hook that applies SpatialFilterLayer per image,
-        passing each image's own (grid_h, grid_w, grid_t) for position encoding.
+        passing each image's own post-merger (h, w, t) for position encoding.
 
-        image_grid_thw: (B, 3) — t, h, w after merger for each image in batch.
-        merger output:  (Σ t_i*h_i*w_i, D) — all images concatenated.
+        image_grid_thw: (B, 3) — t, h, w as returned by the processor.
+          Older transformers: post-merger dims  → merge_size=1 (no adjustment)
+          Newer transformers: pre-merger dims   → divide h,w by merge_size
+        merger output: (Σ t_i * (h_i/ms) * (w_i/ms), D) — post-merger tokens.
         """
         spatial_filter = self.spatial_filter
+        ms = self._merge_size
 
         def hook(module, inp, output):  # noqa: ARG001
             result = output.clone()
             ptr = 0
             for thw in image_grid_thw:
-                t, h, w = int(thw[0]), int(thw[1]), int(thw[2])
-                n = t * h * w
+                t       = int(thw[0])
+                h       = int(thw[1]) // ms   # post-merger grid height
+                w       = int(thw[2]) // ms   # post-merger grid width
+                n       = t * h * w            # actual tokens in merger output
                 result[ptr : ptr + n] = spatial_filter(output[ptr : ptr + n], h, w, t)
                 ptr += n
             return result
