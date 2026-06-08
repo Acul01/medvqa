@@ -356,7 +356,7 @@ def main():
         print("Gradient checkpointing enabled")
 
     d_model = _get_visual_merger_output_dim(model)
-    n_params = (d_model + 1) * args.filter_bottleneck + args.filter_bottleneck + d_model * 2 * d_model + d_model
+    n_params = (d_model + 2) * args.filter_bottleneck + args.filter_bottleneck + d_model * 2 * d_model + d_model
     print(f"SpatialFilterLayer: d_model={d_model}, bottleneck={args.filter_bottleneck}, params≈{n_params:,}")
     model = QwenWithSpatialFilter(model, d_model=d_model, bottleneck=args.filter_bottleneck)
 
