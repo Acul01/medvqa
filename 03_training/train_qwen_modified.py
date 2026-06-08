@@ -171,10 +171,21 @@ class QwenWithSpatialFilter(nn.Module):
         # and works regardless of how deeply the merger is nested.
         self._merger = _find_visual_merger(base_model)
         # In newer transformers versions image_grid_thw stores PRE-merger dims
-        # (before the 2×2 spatial compression). We read spatial_merge_size from
-        # the merger so we can convert to post-merger dimensions correctly.
-        # Falls back to 1 (= image_grid_thw already post-merger, old behaviour).
-        self._merge_size = int(getattr(self._merger, "spatial_merge_size", 1))
+        # (before the 2×2 spatial compression). We need spatial_merge_size to
+        # convert pre-merger (h, w) → post-merger (h/ms, w/ms).
+        #
+        # Qwen2_5_VLPatchMerger receives spatial_merge_size in __init__ but
+        # does NOT store it as self.spatial_merge_size — only self.hidden_size
+        # = context_dim * ms² is kept. Try three fallback paths:
+        ms = getattr(self._merger, "spatial_merge_size", None)
+        if ms is None:
+            try:
+                ms = base_model.config.vision_config.spatial_merge_size
+            except AttributeError:
+                pass
+        if ms is None:
+            ms = 2  # Qwen2-VL and Qwen2.5-VL always use spatial_merge_size=2
+        self._merge_size = int(ms)
 
     def _make_hook(self, image_grid_thw: torch.Tensor):
         """
