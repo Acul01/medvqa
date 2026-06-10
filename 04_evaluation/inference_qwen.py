@@ -191,27 +191,45 @@ def main():
     # like "./05_outputs/..." in from_pretrained.
     model_path = os.path.abspath(args.model_path)
 
-    # When loading from a local directory, set local_files_only=True.
-    # Without it, from_pretrained calls maybe_load_adapters → cached_file(
-    # "adapter_config.json"); if that file is absent, cached_files falls back to
-    # hf_hub_download, which rejects the local path as an invalid repo-id.
     is_local = os.path.isdir(model_path)
-    local_kwargs = {"local_files_only": True} if is_local else {}
+    is_lora  = is_local and (Path(model_path) / "adapter_config.json").exists()
 
-    is_lora = is_local and (Path(model_path) / "adapter_config.json").exists()
-    if is_lora:
-        from peft import PeftModel
+    # WORKAROUND: In this transformers version, from_pretrained internally calls
+    # maybe_load_adapters → cached_files("adapter_config.json").  When that file
+    # is absent locally, cached_files falls back to hf_hub_download, passing the
+    # local absolute path as a repo_id.  huggingface_hub's validator then rejects
+    # it with HFValidationError (wrapped as OSError).
+    #
+    # Fix: for local directories without adapter_config.json, temporarily replace
+    # maybe_load_adapters with a no-op that returns "no adapter found".  The
+    # original function is restored in the finally block.
+    _peft_int       = None
+    _original_mla   = None
+    if is_local and not is_lora:
+        try:
+            import transformers.integrations.peft as _peft_int
+            _original_mla = _peft_int.maybe_load_adapters
+            _peft_int.maybe_load_adapters = lambda p, *a, **k: (None, p, {})
+        except (ImportError, AttributeError):
+            _peft_int = None
 
-        base_path = args.base_model or DEFAULT_MODEL_PATH
-        base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            base_path, torch_dtype=torch.float32, device_map="auto"
-        )
-        model = PeftModel.from_pretrained(base_model, model_path, **local_kwargs)
-        model = model.merge_and_unload()
-    else:
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path, torch_dtype=torch.float32, device_map="auto", **local_kwargs
-        )
+    try:
+        if is_lora:
+            from peft import PeftModel
+            base_path  = args.base_model or DEFAULT_MODEL_PATH
+            base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                base_path, torch_dtype=torch.float32, device_map="auto"
+            )
+            model = PeftModel.from_pretrained(base_model, model_path)
+            model = model.merge_and_unload()
+        else:
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_path, torch_dtype=torch.float32, device_map="auto"
+            )
+    finally:
+        # Always restore, even if loading raised an exception.
+        if _peft_int is not None and _original_mla is not None:
+            _peft_int.maybe_load_adapters = _original_mla
     model.eval()
 
     # Auto-detect spatial filter checkpoint produced by train_qwen_modified.py.
