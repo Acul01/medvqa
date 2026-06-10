@@ -196,61 +196,50 @@ def main():
 
     # WORKAROUND for a bug in this transformers version:
     #
-    # from_pretrained → maybe_load_adapters (peft.py) → cached_file("adapter_config.json")
-    #   → cached_files → hf_hub_download(repo_id=<local_abs_path>)
-    #   → HFValidationError (wrapped as OSError, not caught by maybe_load_adapters)
+    # from_pretrained → maybe_load_adapters (peft.py)
+    #   → cached_file("adapter_config.json")          [hub.py:278]
+    #     → cached_files(...)                         [hub.py:473]
+    #       → hf_hub_download(repo_id=<local_path>)  ← HFValidationError!
     #
-    # Root cause: cached_files falls back to hf_hub_download even for local dirs
-    # when the file is absent, and in this version maybe_load_adapters has no
-    # try/except to swallow that error.
+    # cached_files tries hf_hub_download even for local dirs when the file is
+    # absent, and maybe_load_adapters has no try/except to catch it.
     #
-    # Fix: patch cached_file IN the peft module's own namespace so that for local
-    # directories it returns None (honouring _raise_exceptions_for_missing_entries=False)
-    # instead of attempting a Hub download.  The original is restored in finally.
-    _patches: list[tuple] = []   # (module, attr_name, original_value)
+    # Key insight: cached_file (hub.py) calls cached_files via a *global name
+    # lookup in hub.py's own namespace*.  Patching hub_mod.cached_files affects
+    # that lookup regardless of how peft.py imported cached_file.
+    #
+    # Our replacement returns None-per-missing-file for local dirs so that
+    # cached_file → None → maybe_load_adapters → "no adapter found".
+    _patches: list[tuple] = []
     if is_local and not is_lora:
         try:
-            import transformers.integrations.peft as _peft_int_mod
             import transformers.utils.hub as _hub_mod
 
-            orig_cached_file = getattr(_peft_int_mod, "cached_file", None)
+            _orig_cached_files = _hub_mod.cached_files
 
-            def _safe_cached_file(
-                path_or_repo_id,
-                filename,
-                _raise_exceptions_for_missing_entries=True,
-                _raise_exceptions_for_connection_errors=True,
-                **kwargs,
-            ):
-                # For local directories: resolve without Hub.
-                if isinstance(path_or_repo_id, (str, os.PathLike)) and os.path.isdir(
-                    str(path_or_repo_id)
+            def _safe_cached_files(path_or_repo_id=None, filenames=None, **kwargs):
+                if (
+                    path_or_repo_id is not None
+                    and filenames is not None
+                    and isinstance(path_or_repo_id, (str, os.PathLike))
+                    and os.path.isdir(str(path_or_repo_id))
                 ):
-                    local = os.path.join(str(path_or_repo_id), filename)
-                    if os.path.exists(local):
-                        return local
-                    if not _raise_exceptions_for_missing_entries:
-                        return None
-                    raise OSError(
-                        f"{filename!r} not found in local directory {path_or_repo_id!r}"
-                    )
-                # Non-local path: use original implementation.
-                return _hub_mod.cached_file(
-                    path_or_repo_id,
-                    filename,
-                    _raise_exceptions_for_missing_entries=_raise_exceptions_for_missing_entries,
-                    _raise_exceptions_for_connection_errors=_raise_exceptions_for_connection_errors,
-                    **kwargs,
+                    p = str(path_or_repo_id)
+                    # Return local path if the file exists, else None.
+                    # None causes cached_file to return None, which
+                    # maybe_load_adapters interprets as "no adapter present".
+                    return [
+                        (os.path.join(p, fn) if os.path.exists(os.path.join(p, fn)) else None)
+                        for fn in filenames
+                    ]
+                return _orig_cached_files(
+                    path_or_repo_id=path_or_repo_id, filenames=filenames, **kwargs
                 )
 
-            # Patch every module namespace that may hold a reference to cached_file
-            # that peft.py's maybe_load_adapters could call.
-            for _mod in (_peft_int_mod, _hub_mod):
-                if hasattr(_mod, "cached_file"):
-                    _patches.append((_mod, "cached_file", getattr(_mod, "cached_file")))
-                    setattr(_mod, "cached_file", _safe_cached_file)
+            _hub_mod.cached_files = _safe_cached_files
+            _patches.append((_hub_mod, "cached_files", _orig_cached_files))
         except (ImportError, AttributeError):
-            pass  # If patching fails, proceed and let from_pretrained error naturally.
+            pass
 
     try:
         if is_lora:
