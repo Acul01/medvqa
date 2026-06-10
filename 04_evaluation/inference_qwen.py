@@ -53,6 +53,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run inference with Qwen2.5-VL on MC Medical VQA")
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--base_model", type=str, default=None)
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=["float32", "float16", "bfloat16"],
+        help="Model dtype. bfloat16 halves memory vs float32 (default: bfloat16).",
+    )
     parser.add_argument("--data_root", type=str, default=get_data_root())
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
     parser.add_argument(
@@ -191,6 +198,9 @@ def main():
     # like "./05_outputs/..." in from_pretrained.
     model_path = os.path.abspath(args.model_path)
 
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    load_dtype = dtype_map[args.dtype]
+
     is_local = os.path.isdir(model_path)
     is_lora  = is_local and (Path(model_path) / "adapter_config.json").exists()
 
@@ -246,13 +256,13 @@ def main():
             from peft import PeftModel
             base_path  = args.base_model or DEFAULT_MODEL_PATH
             base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                base_path, torch_dtype=torch.float32, device_map="auto"
+                base_path, torch_dtype=load_dtype, device_map="auto"
             )
             model = PeftModel.from_pretrained(base_model, model_path)
             model = model.merge_and_unload()
         else:
             model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float32, device_map="auto"
+                model_path, torch_dtype=load_dtype, device_map="auto"
             )
     finally:
         for _mod, _attr, _orig in _patches:
