@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import os
 import random
 from collections import Counter
 from pathlib import Path
@@ -186,7 +187,11 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    is_lora = Path(args.model_path).exists() and (Path(args.model_path) / "adapter_config.json").exists()
+    # Resolve to absolute path — newer huggingface_hub rejects relative paths
+    # like "./05_outputs/..." in from_pretrained.
+    model_path = os.path.abspath(args.model_path)
+
+    is_lora = Path(model_path).exists() and (Path(model_path) / "adapter_config.json").exists()
     if is_lora:
         from peft import PeftModel
 
@@ -194,18 +199,31 @@ def main():
         base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             base_path, torch_dtype=torch.float32, device_map="auto"
         )
-        model = PeftModel.from_pretrained(base_model, args.model_path)
+        model = PeftModel.from_pretrained(base_model, model_path)
         model = model.merge_and_unload()
     else:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            args.model_path, torch_dtype=torch.float32, device_map="auto"
+            model_path, torch_dtype=torch.float32, device_map="auto"
         )
     model.eval()
+
+    # Auto-detect spatial filter checkpoint produced by train_qwen_modified.py.
+    # If spatial_filter.pt is present in the model directory, wrap the model so
+    # that the filter is active during inference (same as during training).
+    spatial_filter_ckpt = Path(model_path) / "spatial_filter.pt"
+    if spatial_filter_ckpt.exists():
+        from utils.spatial_filter import load_spatial_filter_checkpoint
+        model = load_spatial_filter_checkpoint(
+            model, str(spatial_filter_ckpt), bottleneck=64
+        )
+        print(f"Spatial filter applied ({spatial_filter_ckpt})")
+    else:
+        print("No spatial_filter.pt found — running without spatial filter.")
 
     if is_lora:
         processor_path = resolve_processor_path(args.base_model or DEFAULT_MODEL_PATH)
     else:
-        processor_path = resolve_processor_path(args.model_path)
+        processor_path = resolve_processor_path(model_path)
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
 

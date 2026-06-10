@@ -17,11 +17,18 @@ from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
+    DEFAULT_RATIONALE_MAX_NEW_TOKENS,
+    DEFAULT_STAGE2_MAX_NEW_TOKENS,
     build_mc_json_user_text,
+    build_stage1_rationale_prompt,
+    build_stage2_answer_prompt,
+    cast_json_single_shot,
     find_answer_token_step,
     get_answer_letter_token_ids,
+    is_json_single_shot,
     parse_mc_answer_rationale_json,
 )
+from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
 
@@ -45,11 +52,17 @@ def parse_args():
         "--json_order",
         type=str,
         required=True,
-        choices=["answer_first", "rationale_first"],
-        help="JSON field order controlling generation sequence",
+        choices=["answer_first", "rationale_first", "rationale_first_2stage"],
+        help="Output mode: JSON single-shot field order or 2-stage CoT",
     )
     parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--max_new_tokens", type=int, default=DEFAULT_JSON_MAX_NEW_TOKENS)
+    parser.add_argument("--max_new_tokens", type=int, default=None)
+    parser.add_argument(
+        "--rationale_max_new_tokens",
+        type=int,
+        default=DEFAULT_RATIONALE_MAX_NEW_TOKENS,
+        help="Stage-1 rationale max tokens (rationale_first_2stage only)",
+    )
     parser.add_argument("--do_sample", action="store_true", default=False)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
@@ -169,8 +182,26 @@ def _compute_answer_token_entropy(
     return entropy_val, confidence, entropy_tokens, entropy_val
 
 
+def _prepare_llava_inputs(processor, image, user_text: str, device):
+    conversation = build_conversation(user_text)
+    prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+    inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+    return inputs, inputs["input_ids"].shape[1]
+
+
+def _decode_llava_new(processor, sequences, input_length: int) -> str:
+    generated_ids = sequences[0][input_length:]
+    return clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
+
+
 def main():
     args = parse_args()
+    if args.max_new_tokens is None:
+        args.max_new_tokens = (
+            DEFAULT_STAGE2_MAX_NEW_TOKENS
+            if args.json_order == "rationale_first_2stage"
+            else DEFAULT_JSON_MAX_NEW_TOKENS
+        )
 
     model_short = _model_short_name(args.model_path)
     run_name = (
@@ -235,6 +266,13 @@ def main():
         "temperature": args.temperature,
         "top_p": args.top_p,
     }
+    stage1_gen_kwargs = {"max_new_tokens": args.rationale_max_new_tokens, "do_sample": False}
+    agreement_stage1_kwargs = {
+        "max_new_tokens": args.rationale_max_new_tokens,
+        "do_sample": True,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+    }
 
     answer_letter_token_ids = get_answer_letter_token_ids(processor.tokenizer)
 
@@ -250,72 +288,71 @@ def main():
             if args.ablation_mode == "black":
                 image = Image.new("RGB", image.size, color=(0, 0, 0))
 
-            user_text = build_mc_json_user_text(
-                sample.question,
-                sample.mc_options,
-                json_order=args.json_order,
-            )
-            conversation = build_conversation(user_text)
-            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-            inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
-            input_length = inputs["input_ids"].shape[1]
-
-            generation_output = model.generate(
-                **inputs,
-                **gen_kwargs,
-                return_dict_in_generate=True,
-                output_scores=True,
-            )
-            generated_ids = generation_output.sequences[0][input_length:]
-            generated_text = clean_answer(
-                processor.decode(generated_ids, skip_special_tokens=True).strip()
-            )
             num_opts = len(sample.mc_options)
-            parsed = parse_mc_answer_rationale_json(generated_text, num_options=num_opts)
-            predicted_letter = parsed.predicted_letter
             ground_truth_letter = sample.answer
 
-            entropy_mean, confidence, entropy_tokens, _ = _compute_answer_token_entropy(
-                generation_output,
-                generated_ids,
-                num_opts=num_opts,
-                answer_letter_token_ids=answer_letter_token_ids,
-                predicted_letter=predicted_letter,
-                model=model,
-                inputs=inputs,
-                tokenizer=processor.tokenizer,
-            )
+            if is_json_single_shot(args.json_order):
+                json_order = cast_json_single_shot(args.json_order)
+                user_text = build_mc_json_user_text(
+                    sample.question,
+                    sample.mc_options,
+                    json_order=json_order,
+                )
+                inputs, input_length = _prepare_llava_inputs(processor, image, user_text, device)
 
-            sampled_predicted_letters = []
-            agreement_confidences = []
-            for _ in range(agreement_samples):
-                sample_output = model.generate(
+                generation_output = model.generate(
                     **inputs,
-                    **agreement_gen_kwargs,
+                    **gen_kwargs,
                     return_dict_in_generate=True,
                     output_scores=True,
                 )
-                sample_generated_ids = sample_output.sequences[0][input_length:]
-                sample_text = clean_answer(
-                    processor.decode(sample_generated_ids, skip_special_tokens=True).strip()
+                generated_ids = generation_output.sequences[0][input_length:]
+                generated_text = clean_answer(
+                    processor.decode(generated_ids, skip_special_tokens=True).strip()
                 )
-                sample_parsed = parse_mc_answer_rationale_json(sample_text, num_options=num_opts)
-                sampled_predicted_letters.append(sample_parsed.predicted_letter)
-                if sample_output.scores:
-                    agreement_confidences.append(
-                        _compute_generation_confidence(
-                            sample_output.scores,
-                            sample_generated_ids,
-                            processor.tokenizer,
-                        )
+                parsed = parse_mc_answer_rationale_json(generated_text, num_options=num_opts)
+                predicted_letter = parsed.predicted_letter
+
+                entropy_mean, confidence, entropy_tokens, _ = _compute_answer_token_entropy(
+                    generation_output,
+                    generated_ids,
+                    num_opts=num_opts,
+                    answer_letter_token_ids=answer_letter_token_ids,
+                    predicted_letter=predicted_letter,
+                    model=model,
+                    inputs=inputs,
+                    tokenizer=processor.tokenizer,
+                )
+
+                sampled_predicted_letters = []
+                agreement_confidences = []
+                for _ in range(agreement_samples):
+                    sample_output = model.generate(
+                        **inputs,
+                        **agreement_gen_kwargs,
+                        return_dict_in_generate=True,
+                        output_scores=True,
                     )
+                    sample_generated_ids = sample_output.sequences[0][input_length:]
+                    sample_text = clean_answer(
+                        processor.decode(sample_generated_ids, skip_special_tokens=True).strip()
+                    )
+                    sample_parsed = parse_mc_answer_rationale_json(sample_text, num_options=num_opts)
+                    sampled_predicted_letters.append(sample_parsed.predicted_letter)
+                    if sample_output.scores:
+                        agreement_confidences.append(
+                            _compute_generation_confidence(
+                                sample_output.scores,
+                                sample_generated_ids,
+                                processor.tokenizer,
+                            )
+                        )
 
-            agreement = _compute_agreement(sampled_predicted_letters)
-            if agreement_confidences:
-                confidence = sum(agreement_confidences) / len(agreement_confidences)
+                agreement = _compute_agreement(sampled_predicted_letters)
+                if agreement_confidences:
+                    confidence = sum(agreement_confidences) / len(agreement_confidences)
 
-            results.append(
-                {
+                row_out = {
                     "image_path": effective_image_path,
                     "source_image_path": source_image_path,
                     "ablation_mode": args.ablation_mode,
@@ -338,7 +375,103 @@ def main():
                     "predicted_json_parse_ok": parsed.json_parse_ok,
                     "zeroshot_json": True,
                 }
-            )
+            else:
+                stage1_text = build_stage1_rationale_prompt(sample.question, sample.mc_options)
+                inputs1, len1 = _prepare_llava_inputs(processor, image, stage1_text, device)
+                out1 = model.generate(
+                    **inputs1,
+                    **stage1_gen_kwargs,
+                    return_dict_in_generate=True,
+                    output_scores=False,
+                )
+                rationale_text = _decode_llava_new(processor, out1.sequences, len1)
+
+                stage2_text_prompt = build_stage2_answer_prompt(
+                    sample.question, sample.mc_options, rationale_text
+                )
+                inputs2, len2 = _prepare_llava_inputs(processor, image, stage2_text_prompt, device)
+                out2 = model.generate(
+                    **inputs2,
+                    **gen_kwargs,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                )
+                stage2_text = _decode_llava_new(processor, out2.sequences, len2)
+                predicted_letter = parse_predicted_letter(stage2_text, num_options=num_opts)
+
+                entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs2)
+                first_tok_text = processor.tokenizer.decode(
+                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+                ).strip() or f"tok_{first_tok_id}"
+                entropy_tokens = {first_tok_text: entropy_val}
+                entropy_mean = entropy_val
+
+                sampled_predicted_letters = []
+                agreement_confidences = []
+                for _ in range(agreement_samples):
+                    agr_out1 = model.generate(
+                        **inputs1,
+                        **agreement_stage1_kwargs,
+                        return_dict_in_generate=True,
+                        output_scores=False,
+                    )
+                    agr_rationale = _decode_llava_new(processor, agr_out1.sequences, len1)
+                    agr_stage2_prompt = build_stage2_answer_prompt(
+                        sample.question, sample.mc_options, agr_rationale
+                    )
+                    agr_inputs2, agr_len2 = _prepare_llava_inputs(
+                        processor, image, agr_stage2_prompt, device
+                    )
+                    agr_out2 = model.generate(
+                        **agr_inputs2,
+                        **agreement_gen_kwargs,
+                        return_dict_in_generate=True,
+                        output_scores=True,
+                    )
+                    agr_stage2 = _decode_llava_new(processor, agr_out2.sequences, agr_len2)
+                    sampled_predicted_letters.append(
+                        parse_predicted_letter(agr_stage2, num_options=num_opts)
+                    )
+                    if agr_out2.scores:
+                        agreement_confidences.append(
+                            _compute_generation_confidence(
+                                agr_out2.scores,
+                                agr_out2.sequences[0][agr_len2:],
+                                processor.tokenizer,
+                            )
+                        )
+
+                agreement = _compute_agreement(sampled_predicted_letters)
+                if agreement_confidences:
+                    confidence = sum(agreement_confidences) / len(agreement_confidences)
+
+                row_out = {
+                    "image_path": effective_image_path,
+                    "source_image_path": source_image_path,
+                    "ablation_mode": args.ablation_mode,
+                    "question": sample.question,
+                    "options": sample.mc_options,
+                    "correct_index": sample.mc_correct_index,
+                    "question_type": sample.question_type or "unknown",
+                    "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
+                    "ground_truth_letter": ground_truth_letter,
+                    "predicted_answer": stage2_text,
+                    "predicted_letter": predicted_letter,
+                    "is_correct": predicted_letter == ground_truth_letter,
+                    "entropy_tokens": entropy_tokens,
+                    "entropy": entropy_mean,
+                    "agreement": agreement,
+                    "confidence": confidence,
+                    "agreement_samples": sampled_predicted_letters,
+                    "json_order": args.json_order,
+                    "predicted_rationale_text": rationale_text,
+                    "stage1_raw": rationale_text,
+                    "predicted_json_parse_ok": False,
+                    "zeroshot_json": False,
+                    "two_stage_cot": True,
+                }
+
+            results.append(row_out)
 
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]

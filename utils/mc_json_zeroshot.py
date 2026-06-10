@@ -5,18 +5,21 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, List, Literal, Optional
+from typing import Any, Iterable, List, Literal, Optional, cast
 
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 
-JsonOrder = Literal["answer_first", "rationale_first"]
+JsonOrder = Literal["answer_first", "rationale_first", "rationale_first_2stage"]
+JsonSingleShotOrder = Literal["answer_first", "rationale_first"]
 
 DEFAULT_JSON_MAX_NEW_TOKENS = 256
+DEFAULT_RATIONALE_MAX_NEW_TOKENS = 128
+DEFAULT_STAGE2_MAX_NEW_TOKENS = 8
 
 _ANSWER_PLACEHOLDER = "<single uppercase MC letter>"
 _RATIONALE_PLACEHOLDER = "<brief medical rationale in 1-3 sentences>"
 
-_JSON_SCHEMAS: dict[JsonOrder, str] = {
+_JSON_SCHEMAS: dict[JsonSingleShotOrder, str] = {
     "answer_first": (
         f'{{"answer":"{_ANSWER_PLACEHOLDER}","rationale":"{_RATIONALE_PLACEHOLDER}"}}'
     ),
@@ -30,8 +33,42 @@ _MC_JSON_INSTRUCTION_PREFIX = (
 )
 _MC_JSON_INSTRUCTION_SUFFIX = "\nNo text before or after the JSON."
 
+_STAGE1_RATIONALE_SUFFIX = (
+    "\n\nAnalyze the image and provide a brief medical rationale (1-3 sentences) "
+    "explaining what visual findings are relevant to this question. "
+    "Do not output an answer letter."
+)
 
-def build_mc_json_instruction(*, json_order: JsonOrder) -> str:
+
+def is_json_single_shot(json_order: str) -> bool:
+    return json_order in ("answer_first", "rationale_first")
+
+
+def format_mc_question_options(question: str, options: Iterable[str]) -> str:
+    """Question + MC options block without the answer-letter instruction."""
+    option_list = [str(opt).strip() for opt in options]
+    if len(option_list) < 2:
+        raise ValueError("MC question requires at least 2 options")
+    if len(option_list) > len(LETTER_POOL):
+        raise ValueError("Too many options for letter mapping")
+    option_lines = [f"{LETTER_POOL[i]}) {opt}" for i, opt in enumerate(option_list)]
+    return f"{str(question).strip()}\n\nOptions:\n" + "\n".join(option_lines)
+
+
+def build_stage1_rationale_prompt(question: str, options: List[str]) -> str:
+    return format_mc_question_options(question, options) + _STAGE1_RATIONALE_SUFFIX
+
+
+def build_stage2_answer_prompt(question: str, options: List[str], rationale: str) -> str:
+    return (
+        "You have analyzed this medical image and provided the following rationale:\n"
+        f"{rationale.strip()}\n\n"
+        "Based on this rationale, answer the following multiple-choice question.\n\n"
+        f"{format_mc_user_text(question, options)}"
+    )
+
+
+def build_mc_json_instruction(*, json_order: JsonSingleShotOrder) -> str:
     """Return the JSON schema instruction suffix for the given field order."""
     return (
         _MC_JSON_INSTRUCTION_PREFIX
@@ -44,30 +81,57 @@ def build_mc_json_user_text(
     question: str,
     options: List[str],
     *,
-    json_order: JsonOrder,
+    json_order: JsonSingleShotOrder,
 ) -> str:
     """MC question block plus JSON output instructions."""
     return format_mc_user_text(question, options) + build_mc_json_instruction(json_order=json_order)
 
 
-def build_qwen_json_conversation(
-    question: str,
-    options: List[str],
-    *,
-    json_order: JsonOrder,
-    image: Any = None,
-) -> List[dict]:
-    """Qwen chat messages: user image + MC/JSON prompt (no assistant turn)."""
-    full_question = build_mc_json_user_text(question, options, json_order=json_order)
+def _qwen_image_conversation(user_text: str, image: Any = None) -> List[dict]:
     image_content: dict = {"type": "image"}
     if image is not None:
         image_content["image"] = image
     return [
         {
             "role": "user",
-            "content": [image_content, {"type": "text", "text": full_question}],
+            "content": [image_content, {"type": "text", "text": user_text}],
         }
     ]
+
+
+def build_qwen_json_conversation(
+    question: str,
+    options: List[str],
+    *,
+    json_order: JsonSingleShotOrder,
+    image: Any = None,
+) -> List[dict]:
+    """Qwen chat messages: user image + MC/JSON prompt (no assistant turn)."""
+    full_question = build_mc_json_user_text(question, options, json_order=json_order)
+    return _qwen_image_conversation(full_question, image=image)
+
+
+def build_qwen_stage1_conversation(
+    question: str,
+    options: List[str],
+    *,
+    image: Any = None,
+) -> List[dict]:
+    return _qwen_image_conversation(
+        build_stage1_rationale_prompt(question, options), image=image
+    )
+
+
+def build_qwen_stage2_conversation(
+    question: str,
+    options: List[str],
+    *,
+    rationale: str,
+    image: Any = None,
+) -> List[dict]:
+    return _qwen_image_conversation(
+        build_stage2_answer_prompt(question, options, rationale), image=image
+    )
 
 
 @dataclass
@@ -154,3 +218,9 @@ def find_answer_token_step(token_ids: list[int], answer_token_ids: dict[int, str
         if token_ids[i] in answer_token_ids:
             return i
     return None
+
+
+def cast_json_single_shot(json_order: str) -> JsonSingleShotOrder:
+    if not is_json_single_shot(json_order):
+        raise ValueError(f"Not a JSON single-shot order: {json_order!r}")
+    return cast(JsonSingleShotOrder, json_order)
