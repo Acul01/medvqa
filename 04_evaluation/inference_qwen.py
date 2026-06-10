@@ -194,24 +194,63 @@ def main():
     is_local = os.path.isdir(model_path)
     is_lora  = is_local and (Path(model_path) / "adapter_config.json").exists()
 
-    # WORKAROUND: In this transformers version, from_pretrained internally calls
-    # maybe_load_adapters → cached_files("adapter_config.json").  When that file
-    # is absent locally, cached_files falls back to hf_hub_download, passing the
-    # local absolute path as a repo_id.  huggingface_hub's validator then rejects
-    # it with HFValidationError (wrapped as OSError).
+    # WORKAROUND for a bug in this transformers version:
     #
-    # Fix: for local directories without adapter_config.json, temporarily replace
-    # maybe_load_adapters with a no-op that returns "no adapter found".  The
-    # original function is restored in the finally block.
-    _peft_int       = None
-    _original_mla   = None
+    # from_pretrained → maybe_load_adapters (peft.py) → cached_file("adapter_config.json")
+    #   → cached_files → hf_hub_download(repo_id=<local_abs_path>)
+    #   → HFValidationError (wrapped as OSError, not caught by maybe_load_adapters)
+    #
+    # Root cause: cached_files falls back to hf_hub_download even for local dirs
+    # when the file is absent, and in this version maybe_load_adapters has no
+    # try/except to swallow that error.
+    #
+    # Fix: patch cached_file IN the peft module's own namespace so that for local
+    # directories it returns None (honouring _raise_exceptions_for_missing_entries=False)
+    # instead of attempting a Hub download.  The original is restored in finally.
+    _patches: list[tuple] = []   # (module, attr_name, original_value)
     if is_local and not is_lora:
         try:
-            import transformers.integrations.peft as _peft_int
-            _original_mla = _peft_int.maybe_load_adapters
-            _peft_int.maybe_load_adapters = lambda p, *a, **k: (None, p, {})
+            import transformers.integrations.peft as _peft_int_mod
+            import transformers.utils.hub as _hub_mod
+
+            orig_cached_file = getattr(_peft_int_mod, "cached_file", None)
+
+            def _safe_cached_file(
+                path_or_repo_id,
+                filename,
+                _raise_exceptions_for_missing_entries=True,
+                _raise_exceptions_for_connection_errors=True,
+                **kwargs,
+            ):
+                # For local directories: resolve without Hub.
+                if isinstance(path_or_repo_id, (str, os.PathLike)) and os.path.isdir(
+                    str(path_or_repo_id)
+                ):
+                    local = os.path.join(str(path_or_repo_id), filename)
+                    if os.path.exists(local):
+                        return local
+                    if not _raise_exceptions_for_missing_entries:
+                        return None
+                    raise OSError(
+                        f"{filename!r} not found in local directory {path_or_repo_id!r}"
+                    )
+                # Non-local path: use original implementation.
+                return _hub_mod.cached_file(
+                    path_or_repo_id,
+                    filename,
+                    _raise_exceptions_for_missing_entries=_raise_exceptions_for_missing_entries,
+                    _raise_exceptions_for_connection_errors=_raise_exceptions_for_connection_errors,
+                    **kwargs,
+                )
+
+            # Patch every module namespace that may hold a reference to cached_file
+            # that peft.py's maybe_load_adapters could call.
+            for _mod in (_peft_int_mod, _hub_mod):
+                if hasattr(_mod, "cached_file"):
+                    _patches.append((_mod, "cached_file", getattr(_mod, "cached_file")))
+                    setattr(_mod, "cached_file", _safe_cached_file)
         except (ImportError, AttributeError):
-            _peft_int = None
+            pass  # If patching fails, proceed and let from_pretrained error naturally.
 
     try:
         if is_lora:
@@ -227,9 +266,8 @@ def main():
                 model_path, torch_dtype=torch.float32, device_map="auto"
             )
     finally:
-        # Always restore, even if loading raised an exception.
-        if _peft_int is not None and _original_mla is not None:
-            _peft_int.maybe_load_adapters = _original_mla
+        for _mod, _attr, _orig in _patches:
+            setattr(_mod, _attr, _orig)
     model.eval()
 
     # Auto-detect spatial filter checkpoint produced by train_qwen_modified.py.
