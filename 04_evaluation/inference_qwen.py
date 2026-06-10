@@ -191,7 +191,14 @@ def main():
     # like "./05_outputs/..." in from_pretrained.
     model_path = os.path.abspath(args.model_path)
 
-    is_lora = Path(model_path).exists() and (Path(model_path) / "adapter_config.json").exists()
+    # When loading from a local directory, set local_files_only=True.
+    # Without it, from_pretrained calls maybe_load_adapters → cached_file(
+    # "adapter_config.json"); if that file is absent, cached_files falls back to
+    # hf_hub_download, which rejects the local path as an invalid repo-id.
+    is_local = os.path.isdir(model_path)
+    local_kwargs = {"local_files_only": True} if is_local else {}
+
+    is_lora = is_local and (Path(model_path) / "adapter_config.json").exists()
     if is_lora:
         from peft import PeftModel
 
@@ -199,11 +206,11 @@ def main():
         base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             base_path, torch_dtype=torch.float32, device_map="auto"
         )
-        model = PeftModel.from_pretrained(base_model, model_path)
+        model = PeftModel.from_pretrained(base_model, model_path, **local_kwargs)
         model = model.merge_and_unload()
     else:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path, torch_dtype=torch.float32, device_map="auto"
+            model_path, torch_dtype=torch.float32, device_map="auto", **local_kwargs
         )
     model.eval()
 
