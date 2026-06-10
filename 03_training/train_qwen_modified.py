@@ -326,7 +326,16 @@ def main():
     result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     print(f"Saving model to {args.output_dir}")
-    trainer.save_model()
+    # Save base Qwen model directly (not through the QwenWithSpatialFilter wrapper).
+    # trainer.save_model() on a non-PreTrainedModel wrapper saves the full
+    # state_dict including the "model." prefix and "spatial_filter.*" keys, which
+    # breaks from_pretrained loading.  Calling save_pretrained on the inner model
+    # produces a standard sharded safetensors layout that loads correctly.
+    base_model = model.model  # unwrap: QwenWithSpatialFilter → Qwen2_5_VLForConditionalGeneration
+    if args.use_lora:
+        # LoRA was applied to model.model; merge before saving
+        base_model = base_model.merge_and_unload()
+    base_model.save_pretrained(args.output_dir, max_shard_size="4GB", safe_serialization=True)
     trainer.save_state()
     processor.save_pretrained(args.output_dir)
 

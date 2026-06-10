@@ -258,6 +258,10 @@ def load_spatial_filter_checkpoint(
     wrapped = QwenWithSpatialFilter(base_model, d_model=d_model, bottleneck=bottleneck)
     state = torch.load(filter_path, map_location="cpu", weights_only=True)
     wrapped.spatial_filter.load_state_dict(state, strict=strict)
+    # Move filter to the same device + dtype as the visual merger so that the
+    # forward hook does not mix CPU filter weights with GPU merger outputs.
+    merger_param = next(wrapped._merger.parameters())
+    wrapped.spatial_filter.to(device=merger_param.device, dtype=merger_param.dtype)
     wrapped.eval()
     print(f"Spatial filter loaded from {filter_path}  (d_model={d_model}, bottleneck={bottleneck})")
     return wrapped
