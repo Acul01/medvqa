@@ -13,18 +13,13 @@ from gradcam.gradcam_llava import LLaVAGradCAM
 from gradcam.overlay import create_gradcam_overlay
 from llava.constants import IMAGE_TOKEN_INDEX
 
+from utils.mc_json_zeroshot import normalize_generation_sequences
 
-def normalize_generation_sequences(raw_sequences: torch.Tensor, input_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, int]:
-    """Return (full_ids, generated_ids, prompt_len) across HF sequence output variants."""
-    prompt_len = int(input_ids.shape[1])
-    has_prompt_prefix = raw_sequences.shape[1] >= prompt_len and torch.equal(raw_sequences[:, :prompt_len], input_ids)
-    if has_prompt_prefix:
-        full_ids = raw_sequences
-        generated_ids = raw_sequences[:, prompt_len:]
-    else:
-        full_ids = torch.cat([input_ids, raw_sequences], dim=1)
-        generated_ids = raw_sequences
-    return full_ids, generated_ids, prompt_len
+__all__ = [
+    "compute_reasoning_gradcam_overlay",
+    "normalize_generation_sequences",
+    "save_gradcam_artifacts",
+]
 
 
 def compute_reasoning_gradcam_overlay(

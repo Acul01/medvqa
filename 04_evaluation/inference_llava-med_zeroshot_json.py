@@ -18,7 +18,6 @@ from llava.conversation import conv_templates
 from llava.mm_utils import process_images, tokenizer_image_token
 from llava.model.builder import load_pretrained_model
 
-from utils.gradcam_inference import normalize_generation_sequences
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_json_zeroshot import (
@@ -32,6 +31,7 @@ from utils.mc_json_zeroshot import (
     find_answer_token_step,
     get_answer_letter_token_ids,
     is_json_single_shot,
+    normalize_generation_sequences,
     parse_mc_answer_rationale_json,
 )
 from utils.mc_vqa import parse_predicted_letter

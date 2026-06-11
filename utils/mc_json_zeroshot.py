@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Literal, Optional, cast
+from typing import Any, Iterable, List, Literal, Optional, Tuple, cast
+
+import torch
 
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 
@@ -224,3 +226,20 @@ def cast_json_single_shot(json_order: str) -> JsonSingleShotOrder:
     if not is_json_single_shot(json_order):
         raise ValueError(f"Not a JSON single-shot order: {json_order!r}")
     return cast(JsonSingleShotOrder, json_order)
+
+
+def normalize_generation_sequences(
+    raw_sequences: torch.Tensor, input_ids: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    """Return (full_ids, generated_ids, prompt_len) across HF sequence output variants."""
+    prompt_len = int(input_ids.shape[1])
+    has_prompt_prefix = raw_sequences.shape[1] >= prompt_len and torch.equal(
+        raw_sequences[:, :prompt_len], input_ids
+    )
+    if has_prompt_prefix:
+        full_ids = raw_sequences
+        generated_ids = raw_sequences[:, prompt_len:]
+    else:
+        full_ids = torch.cat([input_ids, raw_sequences], dim=1)
+        generated_ids = raw_sequences
+    return full_ids, generated_ids, prompt_len
