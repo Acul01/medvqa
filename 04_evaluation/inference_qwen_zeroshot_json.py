@@ -157,7 +157,9 @@ def _compute_answer_token_entropy(
         ans_logits = generation_output.scores[answer_step][0].double()
         ans_log_probs = torch.log_softmax(ans_logits, dim=-1)
         ans_probs = torch.exp(ans_log_probs)
-        entropy_val = -(ans_probs * ans_log_probs.clamp(min=1e-12)).sum().item()
+        entropy_val = -torch.where(
+            ans_probs > 0, ans_probs * ans_log_probs, torch.zeros_like(ans_log_probs)
+        ).sum().item()
         confidence = float(ans_probs.max().item())
         entropy_tokens = {predicted_letter or "?": entropy_val}
         return entropy_val, confidence, entropy_tokens, entropy_val
