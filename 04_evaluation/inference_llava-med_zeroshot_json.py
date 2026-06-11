@@ -18,6 +18,7 @@ from llava.conversation import conv_templates
 from llava.mm_utils import process_images, tokenizer_image_token
 from llava.model.builder import load_pretrained_model
 
+from utils.gradcam_inference import normalize_generation_sequences
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_json_zeroshot import (
@@ -216,9 +217,15 @@ def _prepare_llava_med_inputs(
     return input_ids, image_tensor, input_ids.shape[1]
 
 
-def _decode_llava_med_new(tokenizer, sequences, input_length: int) -> str:
-    generated_ids = sequences[0][input_length:]
-    return clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())
+def _decode_llava_med_new(tokenizer, sequences: torch.Tensor, input_ids: torch.Tensor) -> str:
+    _, generated_ids, _ = normalize_generation_sequences(sequences, input_ids)
+    return clean_answer(tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip())
+
+
+def _generated_suffix(sequences: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+    """Return generated token ids only (handles HF variants with/without prompt prefix)."""
+    _, generated_ids, _ = normalize_generation_sequences(sequences, input_ids)
+    return generated_ids[0]
 
 
 def load_llava_med_pretrained(model_path: str, device: torch.device):
@@ -325,7 +332,7 @@ def main():
                     sample.mc_options,
                     json_order=json_order,
                 )
-                input_ids, image_tensor, input_length = _prepare_llava_med_inputs(
+                input_ids, image_tensor, _ = _prepare_llava_med_inputs(
                     user_text,
                     image,
                     conv_template=args.conv_template,
@@ -343,7 +350,7 @@ def main():
                     return_dict_in_generate=True,
                     output_scores=True,
                 )
-                generated_ids = generation_output.sequences[0][input_length:]
+                generated_ids = _generated_suffix(generation_output.sequences, input_ids)
                 generated_text = clean_answer(
                     tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
                 )
@@ -374,7 +381,7 @@ def main():
                         return_dict_in_generate=True,
                         output_scores=True,
                     )
-                    sample_generated_ids = sample_output.sequences[0][input_length:]
+                    sample_generated_ids = _generated_suffix(sample_output.sequences, input_ids)
                     sample_text = clean_answer(
                         tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip()
                     )
@@ -418,7 +425,7 @@ def main():
                 }
             else:
                 stage1_text = build_stage1_rationale_prompt(sample.question, sample.mc_options)
-                input_ids1, image_tensor1, len1 = _prepare_llava_med_inputs(
+                input_ids1, image_tensor1, _ = _prepare_llava_med_inputs(
                     stage1_text,
                     image,
                     conv_template=args.conv_template,
@@ -435,12 +442,12 @@ def main():
                     return_dict_in_generate=True,
                     output_scores=False,
                 )
-                rationale_text = _decode_llava_med_new(tokenizer, out1.sequences, len1)
+                rationale_text = _decode_llava_med_new(tokenizer, out1.sequences, input_ids1)
 
                 stage2_text = build_stage2_answer_prompt(
                     sample.question, sample.mc_options, rationale_text
                 )
-                input_ids2, image_tensor2, len2 = _prepare_llava_med_inputs(
+                input_ids2, image_tensor2, _ = _prepare_llava_med_inputs(
                     stage2_text,
                     image,
                     conv_template=args.conv_template,
@@ -457,7 +464,7 @@ def main():
                     return_dict_in_generate=True,
                     output_scores=True,
                 )
-                stage2_raw = _decode_llava_med_new(tokenizer, out2.sequences, len2)
+                stage2_raw = _decode_llava_med_new(tokenizer, out2.sequences, input_ids2)
                 predicted_letter = parse_predicted_letter(stage2_raw, num_options=num_opts)
 
                 entropy_val, confidence, first_tok_id = _compute_first_token_entropy(
@@ -480,11 +487,11 @@ def main():
                         return_dict_in_generate=True,
                         output_scores=False,
                     )
-                    agr_rationale = _decode_llava_med_new(tokenizer, agr_out1.sequences, len1)
+                    agr_rationale = _decode_llava_med_new(tokenizer, agr_out1.sequences, input_ids1)
                     agr_stage2_prompt = build_stage2_answer_prompt(
                         sample.question, sample.mc_options, agr_rationale
                     )
-                    agr_ids2, agr_img2, agr_len2 = _prepare_llava_med_inputs(
+                    agr_ids2, agr_img2, _ = _prepare_llava_med_inputs(
                         agr_stage2_prompt,
                         image,
                         conv_template=args.conv_template,
@@ -501,15 +508,16 @@ def main():
                         return_dict_in_generate=True,
                         output_scores=True,
                     )
-                    agr_stage2 = _decode_llava_med_new(tokenizer, agr_out2.sequences, agr_len2)
+                    agr_stage2 = _decode_llava_med_new(tokenizer, agr_out2.sequences, agr_ids2)
                     sampled_predicted_letters.append(
                         parse_predicted_letter(agr_stage2, num_options=num_opts)
                     )
                     if agr_out2.scores:
+                        agr_gen_ids = _generated_suffix(agr_out2.sequences, agr_ids2)
                         agreement_confidences.append(
                             _compute_generation_confidence(
                                 agr_out2.scores,
-                                agr_out2.sequences[0][agr_len2:],
+                                agr_gen_ids,
                                 tokenizer,
                             )
                         )
