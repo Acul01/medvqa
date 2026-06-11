@@ -78,7 +78,7 @@ def parse_args():
         "--agreement_samples",
         type=int,
         default=5,
-        help="Number of stochastic generations used to compute agreement",
+        help="Stochastic generations for agreement, confidence, and entropy (mean over K)",
     )
     parser.add_argument(
         "--ablation_mode",
@@ -157,18 +157,39 @@ def _find_answer_token_step(token_ids: list[int], answer_token_ids: dict[int, st
     return None
 
 
-def _compute_first_token_entropy(
-    model, inputs: dict
-) -> tuple[float, float, int]:
-    """Forward pass over the prompt; returns (entropy, confidence, argmax_token_id)."""
-    fwd = model(**inputs, return_dict=True)
-    first_logits = fwd.logits[0, -1, :].double()
-    log_probs = torch.log_softmax(first_logits, dim=-1)
+def _entropy_from_logits(logits: torch.Tensor) -> float:
+    log_probs = torch.log_softmax(logits.double(), dim=-1)
     probs = torch.exp(log_probs)
-    entropy = -torch.where(probs > 0, probs * log_probs, torch.zeros_like(log_probs)).sum().item()
-    confidence = float(probs.max().item())
-    top_id = int(torch.argmax(first_logits).item())
-    return entropy, confidence, top_id
+    return -torch.where(probs > 0, probs * log_probs, torch.zeros_like(probs)).sum().item()
+
+
+def _mean_finite(values: list[float]) -> float:
+    finite = [v for v in values if math.isfinite(v)]
+    return sum(finite) / len(finite) if finite else float("nan")
+
+
+def _compute_sample_token_entropy(
+    step_scores,
+    generated_ids: torch.Tensor,
+    *,
+    use_reasoning_json: bool,
+    num_opts: int,
+    answer_letter_token_ids: dict[int, str],
+) -> float:
+    """Per-sample token entropy: first token (answer-only) or answer-letter token (reasoning JSON)."""
+    if not step_scores:
+        return float("nan")
+    if use_reasoning_json:
+        valid_answer_ids = {
+            tid: letter
+            for tid, letter in answer_letter_token_ids.items()
+            if letter in "ABCDEFGHIJ"[:num_opts]
+        }
+        answer_step = _find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
+        if answer_step is None or answer_step >= len(step_scores):
+            return float("nan")
+        return _entropy_from_logits(step_scores[answer_step][0])
+    return _entropy_from_logits(step_scores[0][0])
 
 
 def main():
@@ -365,40 +386,9 @@ def main():
             )
             ground_truth_letter = sample.answer
 
-            if args.use_reasoning_json and generation_output.scores:
-                # Reasoning mode: entropy at the final answer-letter token position
-                valid_answer_ids = {
-                    tid: l for tid, l in answer_letter_token_ids.items()
-                    if l in "ABCDEFGHIJ"[:num_opts]
-                }
-                answer_step = _find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
-                if answer_step is not None:
-                    ans_logits = generation_output.scores[answer_step][0].double()
-                    ans_log_probs = torch.log_softmax(ans_logits, dim=-1)
-                    ans_probs = torch.exp(ans_log_probs)
-                    entropy_val = -(ans_probs * ans_log_probs.clamp(min=1e-12)).sum().item()
-                    confidence = float(ans_probs.max().item())
-                    entropy_tokens = {predicted_letter or "?": entropy_val}
-                    entropy_mean = entropy_val
-                else:
-                    # Fallback: no answer token found – use first-token forward pass
-                    entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs)
-                    first_tok_text = processor.tokenizer.decode(
-                        [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-                    ).strip() or f"tok_{first_tok_id}"
-                    entropy_tokens = {first_tok_text: entropy_val}
-                    entropy_mean = entropy_val
-            else:
-                # Standard mode: entropy of first generated token via forward pass
-                entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs)
-                first_tok_text = processor.tokenizer.decode(
-                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-                ).strip() or f"tok_{first_tok_id}"
-                entropy_tokens = {first_tok_text: entropy_val}
-                entropy_mean = entropy_val
-
             sampled_predicted_letters = []
             agreement_confidences = []
+            agreement_entropies = []
             for _ in range(agreement_samples):
                 sample_output = model.generate(
                     **inputs,
@@ -422,10 +412,24 @@ def main():
                             processor.tokenizer,
                         )
                     )
+                    agreement_entropies.append(
+                        _compute_sample_token_entropy(
+                            sample_output.scores,
+                            sample_generated_ids,
+                            use_reasoning_json=args.use_reasoning_json,
+                            num_opts=num_opts,
+                            answer_letter_token_ids=answer_letter_token_ids,
+                        )
+                    )
 
             agreement = _compute_agreement(sampled_predicted_letters)
-            if agreement_confidences:
-                confidence = sum(agreement_confidences) / len(agreement_confidences)
+            confidence = _mean_finite(agreement_confidences)
+            entropy_mean = _mean_finite(agreement_entropies)
+            entropy_tokens = (
+                {predicted_letter or "?": entropy_mean}
+                if math.isfinite(entropy_mean)
+                else {}
+            )
 
             is_correct = predicted_letter == ground_truth_letter
             qtype = sample.question_type or "unknown"
@@ -448,6 +452,7 @@ def main():
                     "agreement": agreement,
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
+                    "entropy_samples": agreement_entropies,
                     "use_reasoning_json": args.use_reasoning_json,
                 }
             if args.use_reasoning_json:
