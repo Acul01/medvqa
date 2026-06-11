@@ -169,15 +169,20 @@ def _mean_finite(values: list[float]) -> float:
 
 
 def _compute_sample_token_entropy(
-    step_scores,
+    step_logits,
     generated_ids: torch.Tensor,
     *,
     use_reasoning_json: bool,
     num_opts: int,
     answer_letter_token_ids: dict[int, str],
 ) -> float:
-    """Per-sample token entropy: first token (answer-only) or answer-letter token (reasoning JSON)."""
-    if not step_scores:
+    """Per-sample token entropy using raw (pre-processor) logits.
+
+    step_logits should be generate()'s .logits (output_logits=True), NOT .scores.
+    .scores are post-temperature/top_p and collapse to near-zero entropy for
+    confident models; .logits reflect true model uncertainty.
+    """
+    if not step_logits:
         return float("nan")
     if use_reasoning_json:
         valid_answer_ids = {
@@ -186,10 +191,10 @@ def _compute_sample_token_entropy(
             if letter in "ABCDEFGHIJ"[:num_opts]
         }
         answer_step = _find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
-        if answer_step is None or answer_step >= len(step_scores):
+        if answer_step is None or answer_step >= len(step_logits):
             return float("nan")
-        return _entropy_from_logits(step_scores[answer_step][0])
-    return _entropy_from_logits(step_scores[0][0])
+        return _entropy_from_logits(step_logits[answer_step][0])
+    return _entropy_from_logits(step_logits[0][0])
 
 
 def main():
@@ -395,6 +400,7 @@ def main():
                     **agreement_gen_kwargs,
                     return_dict_in_generate=True,
                     output_scores=True,
+                    output_logits=True,
                 )
                 sample_generated_ids = sample_output.sequences[0][input_length:]
                 sample_text = clean_answer(
@@ -412,9 +418,10 @@ def main():
                             processor.tokenizer,
                         )
                     )
+                if sample_output.logits:
                     agreement_entropies.append(
                         _compute_sample_token_entropy(
-                            sample_output.scores,
+                            sample_output.logits,
                             sample_generated_ids,
                             use_reasoning_json=args.use_reasoning_json,
                             num_opts=num_opts,
