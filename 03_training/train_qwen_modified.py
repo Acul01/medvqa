@@ -114,7 +114,7 @@ def parse_args():
     p.add_argument(
         "--use_reasoning",
         action="store_true",
-        help="Train on qwen_verify=True pseudo reasoning (JSON assistant target).",
+        help="Train on verified pseudo reasoning (qwen_verify=True or is_correct=True).",
     )
     p.add_argument(
         "--dataset",
@@ -244,7 +244,10 @@ def main():
             if is_pseudo_reasoning_verified(s.metadata)
             and pseudo_reasoning_raw_from_metadata(s.metadata)
         ]
-        print(f"Train: {len(train_samples)} / {train_total} (use_reasoning, qwen_verify=True)")
+        print(
+            f"Train: {len(train_samples)} / {train_total} "
+            f"(use_reasoning, qwen_verify/is_correct=True)"
+        )
         if not train_samples:
             raise ValueError("No verified reasoning samples after filtering.")
     else:

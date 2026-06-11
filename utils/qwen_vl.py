@@ -18,6 +18,8 @@ DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO = "_pseudo"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
 QWEN_VERIFY_FIELD = "qwen_verify"
+# Alias used by simple_qwen_verify.py and some *_verify MC exports
+QWEN_VERIFY_FIELD_ALIASES = ("is_correct", "pseudo_reasoning_test")
 LABEL_IGNORE_INDEX = -100
 
 # Cap vision resolution for stable token counts during batched training (512×28×28 patches).
@@ -62,13 +64,14 @@ def _parse_bool_field(value: Any) -> Optional[bool]:
 
 
 def qwen_verify_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[bool]:
-    """Return qwen_verify value (true/false) or None if not yet verified."""
+    """Return verify pass/fail (true/false) or None if not yet verified."""
     if not metadata:
         return None
-    v = _parse_bool_field(metadata.get(QWEN_VERIFY_FIELD))
-    if v is not None:
-        return v
-    return _parse_bool_field(metadata.get("pseudo_reasoning_test"))
+    for field in (QWEN_VERIFY_FIELD, *QWEN_VERIFY_FIELD_ALIASES):
+        v = _parse_bool_field(metadata.get(field))
+        if v is not None:
+            return v
+    return None
 
 
 def is_qwen_verify_done(metadata: Optional[Dict[str, Any]]) -> bool:
@@ -76,7 +79,7 @@ def is_qwen_verify_done(metadata: Optional[Dict[str, Any]]) -> bool:
 
 
 def is_pseudo_reasoning_verified(metadata: Optional[Dict[str, Any]]) -> bool:
-    """True when Qwen verify passed (qwen_verify=True; legacy: pseudo_reasoning_test=True)."""
+    """True when Qwen verify passed (qwen_verify or is_correct=True)."""
     return qwen_verify_from_metadata(metadata) is True
 
 
