@@ -306,7 +306,7 @@ def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
 
     img_np = np.array(image.convert("RGB"))
     masker = shap.maskers.Image(mask_type, img_np.shape)
-    explainer = shap.Explainer(score_fn, masker, output_names=["P(answer)"])
+    explainer = shap.Explainer(score_fn, masker)
     shap_values = explainer(img_np[np.newaxis], max_evals=max_evals, batch_size=4)
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
@@ -314,8 +314,8 @@ def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
     axes[0].axis("off")
     axes[0].set_title("Original")
 
-    sv = shap_values.values[0, :, :, :, 0]  # H x W x C
-    heatmap = sv.mean(axis=-1)              # H x W
+    sv = shap_values.values[0]  # H x W x C  (single output → no trailing dim)
+    heatmap = sv.mean(axis=-1) # H x W
     vmax = np.abs(heatmap).max() or 1.0
     axes[1].imshow(img_np, alpha=0.5)
     im = axes[1].imshow(heatmap, cmap="RdBu_r", vmin=-vmax, vmax=vmax, alpha=0.6)
