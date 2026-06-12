@@ -1,13 +1,24 @@
 """SHAP-based visual explanation for LLaVA and Qwen MC-VQA inference.
 
-Supports all json_order modes: answer_first, rationale_first, rationale_first_2stage.
-Visualizes which image regions drive the model's answer-token probability.
+Supports json_order modes: answer_only, answer_first, rationale_first, rationale_first_2stage.
+For finetuned Qwen checkpoints with a spatial filter layer, pass --spatial_filter to the
+model directory that contains spatial_filter.pt; the wrapper is loaded automatically.
 
-Usage:
+Usage (answer-only, compare two finetuned Qwen checkpoints):
     python 04_evaluation/shap_visualize.py \
-        --model llava \
+        --model qwen \
+        --model_path path/to/finetuned_qwen \
         --dataset slake \
-        --json_order answer_first \
+        --json_order answer_only \
+        --n_samples 5 \
+        --max_evals 300 \
+        --output_dir shap_outputs/
+
+    python 04_evaluation/shap_visualize.py \
+        --model qwen \
+        --model_path path/to/finetuned_qwen_spatial \
+        --dataset slake \
+        --json_order answer_only \
         --n_samples 5 \
         --max_evals 300 \
         --output_dir shap_outputs/
@@ -73,6 +84,16 @@ def load_qwen(model_path: str, device: torch.device):
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_path, torch_dtype=torch.float32, device_map="auto"
     )
+
+    # Auto-load spatial filter if checkpoint is present (mirrors inference_qwen.py logic)
+    spatial_filter_ckpt = Path(model_path) / "spatial_filter.pt"
+    if spatial_filter_ckpt.exists():
+        from utils.spatial_filter import load_spatial_filter_checkpoint
+        model = load_spatial_filter_checkpoint(model, str(spatial_filter_ckpt), bottleneck=64)
+        print(f"Spatial filter applied ({spatial_filter_ckpt})")
+    else:
+        print("No spatial_filter.pt found — running without spatial filter.")
+
     model.eval()
     processor = AutoProcessor.from_pretrained(model_path)
     configure_qwen_processor_pixels(processor)
@@ -152,6 +173,31 @@ def make_llava_twostage_scorer(model, processor, question: str, options: list[st
             conv = build_conversation(stage2_text)
             prompt = processor.apply_chat_template(conv, add_generation_prompt=True)
             inputs = processor(images=img, text=prompt, return_tensors="pt").to(device)
+            scores.append(_answer_token_prob(model, inputs, valid_answer_ids))
+        return np.array(scores)
+
+    return score_fn
+
+
+def make_qwen_answer_only_scorer(model, processor, question: str, options: list[str],
+                                  device: torch.device):
+    """Answer-only scorer using plain MC conversation (no JSON, no rationale)."""
+    from utils.qwen_vl import build_mc_conversation, prepare_qwen_inputs
+
+    answer_token_ids = get_answer_letter_token_ids(processor.tokenizer)
+    num_opts = len(options)
+    valid_answer_ids = {
+        tid: letter for tid, letter in answer_token_ids.items()
+        if letter in "ABCDEFGHIJ"[:num_opts]
+    }
+
+    def score_fn(images_np: np.ndarray) -> np.ndarray:
+        scores = []
+        for img_np in images_np:
+            img = Image.fromarray(img_np.astype(np.uint8))
+            conv = build_mc_conversation(question, options, image=img)
+            inputs = prepare_qwen_inputs(processor, conv, add_generation_prompt=True)
+            inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
             scores.append(_answer_token_prob(model, inputs, valid_answer_ids))
         return np.array(scores)
 
@@ -295,7 +341,7 @@ def parse_args():
     parser.add_argument("--dataset", required=True,
                         choices=["pathvqa", "slake", "vqarad", "medvqa2019"])
     parser.add_argument("--json_order", required=True,
-                        choices=["answer_first", "rationale_first", "rationale_first_2stage"])
+                        choices=["answer_only", "answer_first", "rationale_first", "rationale_first_2stage"])
     parser.add_argument("--split", default="test")
     parser.add_argument("--n_samples", type=int, default=5)
     parser.add_argument("--sample_offset", type=int, default=0,
@@ -336,7 +382,13 @@ def main():
         q, opts = sample.question, sample.mc_options
 
         # Build scorer
-        if args.json_order == "rationale_first_2stage":
+        if args.json_order == "answer_only":
+            if args.model == "llava":
+                # LLaVA answer-only reuses the answer_first JSON scorer with minimal prompt
+                score_fn = make_llava_scorer(model, processor, q, opts, "answer_first", device)
+            else:
+                score_fn = make_qwen_answer_only_scorer(model, processor, q, opts, device)
+        elif args.json_order == "rationale_first_2stage":
             print("  Generating stage-1 rationale …")
             if args.model == "llava":
                 rationale = generate_rationale_llava(
