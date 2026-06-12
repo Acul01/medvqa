@@ -737,7 +737,10 @@ python 04_evaluation/risk_coverage_entropy.py \
 
 - **`--risk_metric`:** `match` (1 − Exact Match pro Zeile), oder `bleu1`, `bleu4`, `rouge`, `bertscore` (nutzt gespeicherte Felder pro Sample).
 - **`--score_field`:** `entropy` (niedriger = sicherer), `agreement` oder `confidence` (höher = sicherer).
-- Ausgaben: `*_risk_coverage.csv`, `*_risk_coverage_curve.png`, `*_risk_coverage_summary.json` (enthält **AURC**, Coverage bei Ziel-Risk, Risk bei Ziel-Coverage).
+- **Ein Lauf** wertet automatisch `closed`, `open` und `overall` aus.
+- Ausgaben pro Typ: `*_closed_risk_coverage.csv`, `*_open_risk_coverage.csv`, `*_risk_coverage.csv` (overall) sowie passende PNG-Kurven.
+- Kombinierte Summary: `{stem}_risk_coverage_summary.json` mit nested `closed` / `open` / `overall` (jeweils **AURC**, Coverage bei Ziel-Risk, Risk bei Ziel-Coverage).
+- Terminal: kompakte **AURC-Tabelle** in der Reihenfolge `closed | open | overall`.
 
 **Logik:** Bei `entropy` werden Samples mit **kleiner/gleich Schwelle** beantwortet; bei `agreement`/`confidence` mit **größer/gleich Schwelle**.
 
@@ -783,7 +786,7 @@ Terminologie (für die Arbeit konsistent halten):
 - **Checkpoints:** `--output_dir` aus `03_training/train.py` / `03_training/train_med.py` (Standard unter `06_outputs/`)
 - **Inferenz:** unter `--results_dir` (Default `06_results/`): `*.json`, `*_eval.json`, `eval_runs_mc.csv`, `.csv`, optional `.xlsx`
 - **Eval (manuell):** `evaluate.py` wie oben, falls ihr nur nachträglich metrisieren wollt
-- **Selektive Vorhersage:** `risk_coverage_entropy.py`-Outputs (CSV, PNG, Summary-JSON)
+- **Selektive Vorhersage:** `risk_coverage_entropy.py`-Outputs (CSV/PNG pro Typ, kombinierte Summary-JSON, AURC-Tabelle)
 - **Thesis:** Kurven, Tabellen, ausgewählte Fehlerfälle und Grounding-Visualisierungen
 
 ---

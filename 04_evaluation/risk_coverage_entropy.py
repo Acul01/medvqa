@@ -18,6 +18,10 @@ import matplotlib.pyplot as plt
 from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
 from utils.paths import get_results_dir
 
+QUESTION_TYPES = ["closed", "open", "overall"]
+RISK_TARGETS = [0.01, 0.05, 0.10]
+COVERAGE_TARGETS = [0.20, 0.50, 0.80]
+
 
 def exact_match_letter(row: Dict) -> bool:
     gt = row.get("ground_truth_letter")
@@ -225,6 +229,78 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
     plt.close(fig)
 
 
+def artifact_base(stem: str, question_type: str) -> str:
+    if question_type == "overall":
+        return stem
+    return f"{stem}_{question_type}"
+
+
+def artifact_paths(out_dir: Path, stem: str, question_type: str) -> tuple[Path, Path]:
+    base = artifact_base(stem, question_type)
+    csv_path = out_dir / f"{base}_risk_coverage.csv"
+    plot_path = out_dir / f"{base}_risk_coverage_curve.png"
+    return csv_path, plot_path
+
+
+def empty_type_metrics(filtered_rows: int) -> Dict:
+    return {
+        "filtered_rows": filtered_rows,
+        "valid_samples": 0,
+        "num_thresholds": 0,
+        "aurc": 0.0,
+        **coverage_at_risk([], risk_targets=RISK_TARGETS),
+        **risk_at_coverage([], cov_targets=COVERAGE_TARGETS),
+    }
+
+
+def evaluate_question_type(
+    results: List[Dict],
+    question_type: str,
+    *,
+    risk_metric: str,
+    score_field: str,
+    max_entropy: float | None,
+    num_thresholds: int,
+) -> Dict:
+    filtered_results = filter_by_question_type(results, question_type=question_type)
+    if not filtered_results:
+        return {**empty_type_metrics(0), "curve": []}
+
+    samples = prepare_samples(
+        filtered_results,
+        risk_metric=risk_metric,
+        score_field=score_field,
+        max_entropy=max_entropy,
+    )
+    if not samples:
+        return {**empty_type_metrics(len(filtered_results)), "curve": []}
+
+    answer_when_higher = score_field in {"agreement", "confidence"}
+    curve = compute_curve(samples, num_thresholds=num_thresholds, answer_when_higher=answer_when_higher)
+    area = aurc_trapezoid(curve)
+    c_at_r = coverage_at_risk(curve, risk_targets=RISK_TARGETS)
+    r_at_c = risk_at_coverage(curve, cov_targets=COVERAGE_TARGETS)
+
+    return {
+        "filtered_rows": len(filtered_results),
+        "valid_samples": len(samples),
+        "num_thresholds": len(curve),
+        "aurc": area,
+        **c_at_r,
+        **r_at_c,
+        "curve": curve,
+    }
+
+
+def print_aurc_table(aurc_by_type: Dict[str, float]) -> None:
+    col_width = 12
+    headers = QUESTION_TYPES
+    values = [aurc_by_type[qtype] for qtype in headers]
+    print("\nAURC")
+    print("".join(h.ljust(col_width) for h in headers))
+    print("".join(f"{v:.6f}".ljust(col_width) for v in values))
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Entropy thresholding baseline for risk/coverage + AURC")
     parser.add_argument("--results_file", type=str, required=True, help="Path to results JSON")
@@ -250,13 +326,6 @@ def parse_args():
         choices=["entropy", "agreement", "confidence"],
         help="Field used for thresholding (entropy lower=more confident, agreement/confidence higher=more confident)",
     )
-    parser.add_argument(
-        "--question_type",
-        type=str,
-        default="overall",
-        choices=["open", "closed", "overall"],
-        help="Filter samples by question type before computing risk/coverage",
-    )
     return parser.parse_args()
 
 
@@ -267,70 +336,67 @@ def main():
         raise FileNotFoundError(f"Results file not found: {results_path}")
 
     results = load_results(results_path)
-    filtered_results = filter_by_question_type(results, question_type=args.question_type)
-    if not filtered_results:
-        raise ValueError(
-            f"No samples found for question_type='{args.question_type}' "
-            f"(total input rows: {len(results)})."
-        )
+    out_dir = Path(args.output_dir)
+    stem = results_path.stem
 
-    samples = prepare_samples(
-        filtered_results,
-        risk_metric=args.risk_metric,
-        score_field=args.score_field,
-        max_entropy=args.max_entropy,
-    )
-    if not samples:
+    type_results: Dict[str, Dict] = {}
+    aurc_by_type: Dict[str, float] = {}
+
+    for question_type in QUESTION_TYPES:
+        evaluation = evaluate_question_type(
+            results,
+            question_type,
+            risk_metric=args.risk_metric,
+            score_field=args.score_field,
+            max_entropy=args.max_entropy,
+            num_thresholds=args.num_thresholds,
+        )
+        curve = evaluation.pop("curve")
+        type_results[question_type] = evaluation
+        aurc_by_type[question_type] = evaluation["aurc"]
+
+        csv_path, plot_path = artifact_paths(out_dir, stem, question_type)
+        if curve:
+            save_curve_csv(curve, csv_path)
+            plot_curve(
+                curve,
+                plot_path,
+                title=f"Risk-Coverage Curve ({artifact_base(stem, question_type)}, {question_type})",
+            )
+            print(f"{question_type}: valid_samples={evaluation['valid_samples']}, AURC={evaluation['aurc']:.6f}")
+            print(f"  Saved: {csv_path}")
+            print(f"  Saved: {plot_path}")
+        else:
+            print(f"{question_type}: no valid samples (filtered_rows={evaluation['filtered_rows']})")
+
+    if type_results["overall"]["valid_samples"] == 0:
         raise ValueError(
-            f"No valid samples found for question_type='{args.question_type}' "
+            "No valid samples found for question_type='overall' "
             "with letter labels and numeric score values."
         )
 
-    answer_when_higher = args.score_field in {"agreement", "confidence"}
-    curve = compute_curve(samples, num_thresholds=args.num_thresholds, answer_when_higher=answer_when_higher)
-    area = aurc_trapezoid(curve)
-    c_at_r = coverage_at_risk(curve, risk_targets=[0.01, 0.05, 0.10])
-    r_at_c = risk_at_coverage(curve, cov_targets=[0.20, 0.50, 0.80])
-
-    out_dir = Path(args.output_dir)
-    base = results_path.stem
-    if args.question_type != "overall":
-        base = f"{base}_{args.question_type}"
-    csv_path = out_dir / f"{base}_risk_coverage.csv"
-    plot_path = out_dir / f"{base}_risk_coverage_curve.png"
-    summary_path = out_dir / f"{base}_risk_coverage_summary.json"
-
-    save_curve_csv(curve, csv_path)
-    plot_curve(
-        curve,
-        plot_path,
-        title=f"Risk-Coverage Curve ({base}, {args.question_type})",
-    )
-
+    summary_path = out_dir / f"{stem}_risk_coverage_summary.json"
     summary = {
         "results_file": str(results_path),
-        "question_type": args.question_type,
         "total_input_rows": len(results),
-        "filtered_rows": len(filtered_results),
-        "valid_samples": len(samples),
-        "num_thresholds": len(curve),
         "max_entropy_filter": args.max_entropy,
         "risk_metric": args.risk_metric,
         "score_field": args.score_field,
-        "aurc": area,
-        **c_at_r,
-        **r_at_c,
+        "counts": {
+            "closed_rows": type_results["closed"]["filtered_rows"],
+            "open_rows": type_results["open"]["filtered_rows"],
+            "overall_rows": type_results["overall"]["filtered_rows"],
+        },
+        "closed": type_results["closed"],
+        "open": type_results["open"],
+        "overall": type_results["overall"],
     }
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"Question type: {args.question_type}")
-    print(f"Filtered rows: {len(filtered_results)} / {len(results)}")
-    print(f"Valid samples: {len(samples)}")
-    print(f"AURC: {area:.6f}")
-    print(f"Saved: {csv_path}")
-    print(f"Saved: {plot_path}")
-    print(f"Saved: {summary_path}")
+    print(f"\nSaved: {summary_path}")
+    print_aurc_table(aurc_by_type)
 
 
 if __name__ == "__main__":
