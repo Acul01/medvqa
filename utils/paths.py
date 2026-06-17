@@ -20,11 +20,13 @@ _ENV_DATA = "MEDVQA_DATA_ROOT"
 _ENV_MC = "MEDVQA_MC_ROOT"
 _ENV_OUTPUTS = "MEDVQA_OUTPUTS_DIR"
 _ENV_RESULTS = "MEDVQA_RESULTS_DIR"
+_ENV_SOM = "MEDVQA_SOM_DIR"
 
 _DEFAULT_DATA = "02_data"
 _DEFAULT_MC = "02_data/data_mc_openai"
 _DEFAULT_OUTPUTS = "05_outputs"
 _DEFAULT_RESULTS = "06_results"
+_DEFAULT_SOM = "02_data/som"
 
 
 def get_data_root() -> str:
@@ -41,6 +43,10 @@ def get_outputs_root() -> str:
 
 def get_results_dir() -> str:
     return os.getenv(_ENV_RESULTS, _DEFAULT_RESULTS).strip() or _DEFAULT_RESULTS
+
+
+def get_som_dir() -> str:
+    return os.getenv(_ENV_SOM, _DEFAULT_SOM).strip() or _DEFAULT_SOM
 
 
 def get_train_output_dir_llava() -> str:

@@ -19,7 +19,8 @@ from transformers import AutoProcessor, LlavaForConditionalGeneration
 from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
-from utils.paths import get_data_root, get_mc_data_root, get_results_dir
+from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
+from utils.som import SomResolver
 from utils.save_results import clean_answer, save_results
 from utils.mc_eval import run_mc_evaluation
 
@@ -72,6 +73,18 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument(
+        "--use_som",
+        action="store_true",
+        default=False,
+        help="Replace images with pre-annotated SoM versions (run scripts/precompute_som.py first).",
+    )
+    parser.add_argument(
+        "--som_dir",
+        type=str,
+        default=get_som_dir(),
+        help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
     return parser.parse_args()
 
 
@@ -335,6 +348,13 @@ def main():
     if args.n_samples is not None:
         samples = samples[: args.n_samples]
     shuffle_assignment = _build_shuffle_assignment(samples, args.ablation_seed) if args.ablation_mode == "shuffle" else {}
+
+    som_resolver: SomResolver | None = None
+    if args.use_som:
+        som_resolver = SomResolver(args.som_dir)
+        som_resolver.load_dataset(args.dataset)
+        print(f"SoM enabled — images loaded from {args.som_dir}/{args.dataset}")
+
     fgr_crop_lookup = prepare_fgr_crop_lookup(
         args.ablation_mode,
         args.fgr_region_comparison_json,
@@ -387,6 +407,8 @@ def main():
                     skipped_fgr += 1
                     continue
                 effective_image_path = ablation.effective_image_path
+                if som_resolver is not None and args.ablation_mode == "none":
+                    effective_image_path = som_resolver.resolve_or_original(effective_image_path)
                 image = Image.open(effective_image_path).convert("RGB")
                 if args.ablation_mode == "black":
                     image = Image.new("RGB", image.size, color=(0, 0, 0))

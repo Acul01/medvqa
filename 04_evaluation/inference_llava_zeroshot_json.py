@@ -29,7 +29,8 @@ from utils.mc_json_zeroshot import (
     parse_mc_answer_rationale_json,
 )
 from utils.mc_vqa import parse_predicted_letter
-from utils.paths import get_data_root, get_mc_data_root, get_results_dir
+from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
+from utils.som import SomResolver
 from utils.save_results import clean_answer, save_results
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -79,6 +80,18 @@ def parse_args():
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument(
+        "--use_som",
+        action="store_true",
+        default=False,
+        help="Replace images with pre-annotated SoM versions (run scripts/precompute_som.py first).",
+    )
+    parser.add_argument(
+        "--som_dir",
+        type=str,
+        default=get_som_dir(),
+        help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
     return parser.parse_args()
 
 
@@ -103,18 +116,9 @@ def build_conversation(user_text: str) -> list[dict]:
     ]
 
 
-def _compute_generation_confidence(step_scores, generated_ids, tokenizer, *, prompt_length: int | None = None) -> float:
-    new_ids = generated_ids[prompt_length:] if prompt_length is not None else generated_ids
-    n = min(len(step_scores), int(new_ids.shape[0]))
-    special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
-    token_confidences = []
-    for step_logits, token_id in zip(step_scores[:n], new_ids[:n].tolist()):
-        if tokenizer.convert_ids_to_tokens(int(token_id)) in special_tokens:
-            continue
-        logits64 = step_logits[0].double()
-        probs = torch.exp(torch.log_softmax(logits64, dim=-1))
-        token_confidences.append(float(probs.max().item()))
-    return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
+def _mean_finite(values: list[float]) -> float:
+    finite = [v for v in values if math.isfinite(v)]
+    return sum(finite) / len(finite) if finite else float("nan")
 
 
 def _compute_agreement(letter_predictions: list[str | None]) -> float:
@@ -148,40 +152,35 @@ def _compute_first_token_entropy(model, inputs: dict) -> tuple[float, float, int
     return entropy, confidence, top_id
 
 
-def _compute_answer_token_entropy(
+def _compute_answer_token_stats(
     generation_output,
     generated_ids,
     *,
     num_opts: int,
     answer_letter_token_ids: dict[int, str],
-    predicted_letter: str | None,
     model,
     inputs: dict,
-    tokenizer,
-) -> tuple[float, float, dict, float]:
+) -> tuple[float, float]:
+    """Returns (entropy, confidence) at the answer token from raw (pre-processor) logits.
+
+    Both metrics are derived from the same logit vector so they are directly comparable.
+    Falls back to a forward pass on `inputs` when the answer token cannot be located.
+    """
     valid_answer_ids = {
         tid: letter
         for tid, letter in answer_letter_token_ids.items()
         if letter in "ABCDEFGHIJ"[:num_opts]
     }
     answer_step = find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
-    if answer_step is not None and generation_output.scores:
-        ans_logits = generation_output.scores[answer_step][0].double()
-        ans_log_probs = torch.log_softmax(ans_logits, dim=-1)
-        ans_probs = torch.exp(ans_log_probs)
-        entropy_val = -torch.where(
-            ans_probs > 0, ans_probs * ans_log_probs, torch.zeros_like(ans_log_probs)
-        ).sum().item()
-        confidence = float(ans_probs.max().item())
-        entropy_tokens = {predicted_letter or "?": entropy_val}
-        return entropy_val, confidence, entropy_tokens, entropy_val
-
-    entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs)
-    first_tok_text = tokenizer.decode(
-        [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-    ).strip() or f"tok_{first_tok_id}"
-    entropy_tokens = {first_tok_text: entropy_val}
-    return entropy_val, confidence, entropy_tokens, entropy_val
+    if answer_step is not None and generation_output.logits and answer_step < len(generation_output.logits):
+        logits = generation_output.logits[answer_step][0].double()
+        log_probs = torch.log_softmax(logits, dim=-1)
+        probs = torch.exp(log_probs)
+        entropy = -torch.where(probs > 0, probs * log_probs, torch.zeros_like(probs)).sum().item()
+        confidence = float(probs.max().item())
+        return entropy, confidence
+    entropy, confidence, _ = _compute_first_token_entropy(model, inputs)
+    return entropy, confidence
 
 
 def _prepare_llava_inputs(processor, image, user_text: str, device):
@@ -253,6 +252,12 @@ def main():
         else {}
     )
 
+    som_resolver: SomResolver | None = None
+    if args.use_som:
+        som_resolver = SomResolver(args.som_dir)
+        som_resolver.load_dataset(args.dataset)
+        print(f"SoM enabled — images loaded from {args.som_dir}/{args.dataset}")
+
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
         gen_kwargs.update({"do_sample": True, "temperature": args.temperature, "top_p": args.top_p})
@@ -286,6 +291,8 @@ def main():
 
             source_image_path = sample.image_path
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+            if som_resolver is not None and args.ablation_mode == "none":
+                effective_image_path = som_resolver.resolve_or_original(effective_image_path)
             image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
                 image = Image.new("RGB", image.size, color=(0, 0, 0))
@@ -306,7 +313,6 @@ def main():
                     **inputs,
                     **gen_kwargs,
                     return_dict_in_generate=True,
-                    output_scores=True,
                 )
                 generated_ids = generation_output.sequences[0][input_length:]
                 generated_text = clean_answer(
@@ -315,25 +321,15 @@ def main():
                 parsed = parse_mc_answer_rationale_json(generated_text, num_options=num_opts)
                 predicted_letter = parsed.predicted_letter
 
-                entropy_mean, confidence, entropy_tokens, _ = _compute_answer_token_entropy(
-                    generation_output,
-                    generated_ids,
-                    num_opts=num_opts,
-                    answer_letter_token_ids=answer_letter_token_ids,
-                    predicted_letter=predicted_letter,
-                    model=model,
-                    inputs=inputs,
-                    tokenizer=processor.tokenizer,
-                )
-
                 sampled_predicted_letters = []
+                agreement_entropies = []
                 agreement_confidences = []
                 for _ in range(agreement_samples):
                     sample_output = model.generate(
                         **inputs,
                         **agreement_gen_kwargs,
                         return_dict_in_generate=True,
-                        output_scores=True,
+                        output_logits=True,
                     )
                     sample_generated_ids = sample_output.sequences[0][input_length:]
                     sample_text = clean_answer(
@@ -341,18 +337,21 @@ def main():
                     )
                     sample_parsed = parse_mc_answer_rationale_json(sample_text, num_options=num_opts)
                     sampled_predicted_letters.append(sample_parsed.predicted_letter)
-                    if sample_output.scores:
-                        agreement_confidences.append(
-                            _compute_generation_confidence(
-                                sample_output.scores,
-                                sample_generated_ids,
-                                processor.tokenizer,
-                            )
-                        )
+                    ent, conf = _compute_answer_token_stats(
+                        sample_output,
+                        sample_generated_ids,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                        model=model,
+                        inputs=inputs,
+                    )
+                    agreement_entropies.append(ent)
+                    agreement_confidences.append(conf)
 
                 agreement = _compute_agreement(sampled_predicted_letters)
-                if agreement_confidences:
-                    confidence = sum(agreement_confidences) / len(agreement_confidences)
+                entropy_mean = _mean_finite(agreement_entropies)
+                confidence = _mean_finite(agreement_confidences)
+                entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
                     "image_path": effective_image_path,
@@ -396,19 +395,12 @@ def main():
                     **inputs2,
                     **gen_kwargs,
                     return_dict_in_generate=True,
-                    output_scores=True,
                 )
                 stage2_text = _decode_llava_new(processor, out2.sequences, len2)
                 predicted_letter = parse_predicted_letter(stage2_text, num_options=num_opts)
 
-                entropy_val, confidence, first_tok_id = _compute_first_token_entropy(model, inputs2)
-                first_tok_text = processor.tokenizer.decode(
-                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-                ).strip() or f"tok_{first_tok_id}"
-                entropy_tokens = {first_tok_text: entropy_val}
-                entropy_mean = entropy_val
-
                 sampled_predicted_letters = []
+                agreement_entropies = []
                 agreement_confidences = []
                 for _ in range(agreement_samples):
                     agr_out1 = model.generate(
@@ -428,24 +420,28 @@ def main():
                         **agr_inputs2,
                         **agreement_gen_kwargs,
                         return_dict_in_generate=True,
-                        output_scores=True,
+                        output_logits=True,
                     )
+                    agr_generated_ids = agr_out2.sequences[0][agr_len2:]
                     agr_stage2 = _decode_llava_new(processor, agr_out2.sequences, agr_len2)
                     sampled_predicted_letters.append(
                         parse_predicted_letter(agr_stage2, num_options=num_opts)
                     )
-                    if agr_out2.scores:
-                        agreement_confidences.append(
-                            _compute_generation_confidence(
-                                agr_out2.scores,
-                                agr_out2.sequences[0][agr_len2:],
-                                processor.tokenizer,
-                            )
-                        )
+                    ent, conf = _compute_answer_token_stats(
+                        agr_out2,
+                        agr_generated_ids,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                        model=model,
+                        inputs=agr_inputs2,
+                    )
+                    agreement_entropies.append(ent)
+                    agreement_confidences.append(conf)
 
                 agreement = _compute_agreement(sampled_predicted_letters)
-                if agreement_confidences:
-                    confidence = sum(agreement_confidences) / len(agreement_confidences)
+                entropy_mean = _mean_finite(agreement_entropies)
+                confidence = _mean_finite(agreement_confidences)
+                entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
                     "image_path": effective_image_path,

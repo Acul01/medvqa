@@ -30,7 +30,8 @@ from collections import Counter
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import format_mc_user_text
-from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_llava
+from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_llava, get_som_dir
+from utils.som import SomResolver
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -61,10 +62,12 @@ class LLaVATrainDataset(Dataset):
         processor,
         max_length=512,
         dataset="vqarad",
+        som_resolver: SomResolver | None = None,
     ):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
+        self.som_resolver = som_resolver
         # Ensure pad token is set
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
@@ -80,7 +83,12 @@ class LLaVATrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(sample.image_path).convert("RGB")
+        image_path = (
+            self.som_resolver.resolve_or_original(sample.image_path)
+            if self.som_resolver is not None
+            else sample.image_path
+        )
+        image = Image.open(image_path).convert("RGB")
 
         # ── Build conversation (user + assistant) ────────────────────────
         if not sample.mc_options:
@@ -229,6 +237,18 @@ def parse_args():
                         help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
                         help="W&B run name (auto-generated if not set)")
+    parser.add_argument(
+        "--use_som",
+        action="store_true",
+        default=False,
+        help="Replace images with pre-annotated SoM versions during training.",
+    )
+    parser.add_argument(
+        "--som_dir",
+        type=str,
+        default=get_som_dir(),
+        help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
 
     return parser.parse_args()
 
@@ -311,6 +331,15 @@ def main():
     # ── Load datasets ───────────────────────────────────────────────────
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     use_all = args.dataset == "all"
+
+    som_resolver: SomResolver | None = None
+    if args.use_som:
+        som_resolver = SomResolver(args.som_dir)
+        datasets_to_load = ["pathvqa", "slake", "vqarad", "medvqa2019"] if use_all else [args.dataset]
+        for ds in datasets_to_load:
+            som_resolver.load_dataset(ds)
+        print(f"SoM enabled — images loaded from {args.som_dir}")
+
     if use_all:
         # Source tag per sample: VQASample.dataset. VQA-Rad val uses test split (no validation in loader).
         print(f"Loading combined PathVQA+SLAKE+VQA-Rad {args.train_split} split...")
@@ -320,13 +349,14 @@ def main():
             processor,
             args.max_length,
             dataset=args.dataset,
+            som_resolver=som_resolver,
         )
         print(f"Train: {len(train_dataset)} samples ({dict(Counter(s.dataset for s in train_samples))})")
     else:
         print(f"Loading {args.dataset} {args.train_split} split...")
         train_samples = loader.load_dataset(args.dataset, split=args.train_split)
         train_dataset = LLaVATrainDataset(
-            train_samples, processor, args.max_length, dataset=args.dataset,
+            train_samples, processor, args.max_length, dataset=args.dataset, som_resolver=som_resolver,
         )
         print(f"Train: {len(train_dataset)} samples")
 
@@ -345,6 +375,7 @@ def main():
             processor,
             args.max_length,
             dataset=args.dataset,
+            som_resolver=som_resolver,
         )
         if use_all:
             print(f"Validation: {len(val_dataset)} samples ({dict(Counter(s.dataset for s in val_samples))})")

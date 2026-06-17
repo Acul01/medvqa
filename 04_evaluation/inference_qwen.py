@@ -17,7 +17,8 @@ from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_vqa import parse_predicted_letter
-from utils.paths import get_data_root, get_mc_data_root, get_results_dir
+from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
+from utils.som import SomResolver
 from utils.qwen_vl import (
     DEFAULT_MODEL_PATH,
     build_mc_conversation,
@@ -97,21 +98,19 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument(
+        "--use_som",
+        action="store_true",
+        default=False,
+        help="Replace images with pre-annotated SoM versions (run scripts/precompute_som.py first).",
+    )
+    parser.add_argument(
+        "--som_dir",
+        type=str,
+        default=get_som_dir(),
+        help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
     return parser.parse_args()
-
-
-def _compute_generation_confidence(step_scores, generated_ids, tokenizer, *, prompt_length: int | None = None) -> float:
-    new_ids = generated_ids[prompt_length:] if prompt_length is not None else generated_ids
-    n = min(len(step_scores), int(new_ids.shape[0]))
-    special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
-    token_confidences = []
-    for step_logits, token_id in zip(step_scores[:n], new_ids[:n].tolist()):
-        if tokenizer.convert_ids_to_tokens(int(token_id)) in special_tokens:
-            continue
-        logits64 = step_logits[0].double()
-        probs = torch.exp(torch.log_softmax(logits64, dim=-1))
-        token_confidences.append(float(probs.max().item()))
-    return sum(token_confidences) / len(token_confidences) if token_confidences else float("nan")
 
 
 def _compute_agreement(letter_predictions: list[str | None]) -> float:
@@ -168,22 +167,21 @@ def _mean_finite(values: list[float]) -> float:
     return sum(finite) / len(finite) if finite else float("nan")
 
 
-def _compute_sample_token_entropy(
+def _compute_answer_token_stats(
     step_logits,
     generated_ids: torch.Tensor,
     *,
     use_reasoning_json: bool,
     num_opts: int,
     answer_letter_token_ids: dict[int, str],
-) -> float:
-    """Per-sample token entropy using raw (pre-processor) logits.
+) -> tuple[float, float]:
+    """Returns (entropy, confidence) at the answer token from raw (pre-processor) logits.
 
-    step_logits should be generate()'s .logits (output_logits=True), NOT .scores.
-    .scores are post-temperature/top_p and collapse to near-zero entropy for
-    confident models; .logits reflect true model uncertainty.
+    Both metrics are derived from the same logit vector so they are directly comparable.
+    Uses output.logits (not output.scores) to avoid top-p collapsing the distribution.
     """
     if not step_logits:
-        return float("nan")
+        return float("nan"), float("nan")
     if use_reasoning_json:
         valid_answer_ids = {
             tid: letter
@@ -192,9 +190,16 @@ def _compute_sample_token_entropy(
         }
         answer_step = _find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
         if answer_step is None or answer_step >= len(step_logits):
-            return float("nan")
-        return _entropy_from_logits(step_logits[answer_step][0])
-    return _entropy_from_logits(step_logits[0][0])
+            return float("nan"), float("nan")
+        logits = step_logits[answer_step][0]
+    else:
+        logits = step_logits[0][0]
+    logits64 = logits.double()
+    log_probs = torch.log_softmax(logits64, dim=-1)
+    probs = torch.exp(log_probs)
+    entropy = -torch.where(probs > 0, probs * log_probs, torch.zeros_like(probs)).sum().item()
+    confidence = float(probs.max().item())
+    return entropy, confidence
 
 
 def main():
@@ -323,6 +328,12 @@ def main():
         _build_shuffle_assignment(samples, args.ablation_seed) if args.ablation_mode == "shuffle" else {}
     )
 
+    som_resolver: SomResolver | None = None
+    if args.use_som:
+        som_resolver = SomResolver(args.som_dir)
+        som_resolver.load_dataset(args.dataset)
+        print(f"SoM enabled — images loaded from {args.som_dir}/{args.dataset}")
+
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
         gen_kwargs.update({"do_sample": True, "temperature": args.temperature, "top_p": args.top_p})
@@ -350,6 +361,8 @@ def main():
 
             source_image_path = sample.image_path
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+            if som_resolver is not None and args.ablation_mode == "none":
+                effective_image_path = som_resolver.resolve_or_original(effective_image_path)
             image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
                 image = Image.new("RGB", image.size, color=(0, 0, 0))
@@ -379,7 +392,6 @@ def main():
                 **inputs,
                 **gen_kwargs,
                 return_dict_in_generate=True,
-                output_scores=True,
             )
             generated_ids = generation_output.sequences[0][input_length:]
             generated_text = clean_answer(
@@ -399,7 +411,6 @@ def main():
                     **inputs,
                     **agreement_gen_kwargs,
                     return_dict_in_generate=True,
-                    output_scores=True,
                     output_logits=True,
                 )
                 sample_generated_ids = sample_output.sequences[0][input_length:]
@@ -410,24 +421,16 @@ def main():
                     sample_text, num_options=num_opts, use_reasoning_json=args.use_reasoning_json
                 )
                 sampled_predicted_letters.append(sample_letter)
-                if sample_output.scores:
-                    agreement_confidences.append(
-                        _compute_generation_confidence(
-                            sample_output.scores,
-                            sample_generated_ids,
-                            processor.tokenizer,
-                        )
-                    )
                 if sample_output.logits:
-                    agreement_entropies.append(
-                        _compute_sample_token_entropy(
-                            sample_output.logits,
-                            sample_generated_ids,
-                            use_reasoning_json=args.use_reasoning_json,
-                            num_opts=num_opts,
-                            answer_letter_token_ids=answer_letter_token_ids,
-                        )
+                    ent, conf = _compute_answer_token_stats(
+                        sample_output.logits,
+                        sample_generated_ids,
+                        use_reasoning_json=args.use_reasoning_json,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
                     )
+                    agreement_entropies.append(ent)
+                    agreement_confidences.append(conf)
 
             agreement = _compute_agreement(sampled_predicted_letters)
             confidence = _mean_finite(agreement_confidences)

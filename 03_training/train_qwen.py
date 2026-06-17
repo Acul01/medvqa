@@ -17,7 +17,8 @@ from transformers.trainer_utils import set_seed
 
 from utils.ablation import FgrTrainLookup, load_fgr_supervised_train_lookup, normalize_ablation_image_key
 from utils.load_data import MedicalVQALoader, VQASample
-from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen
+from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen, get_som_dir
+from utils.som import SomResolver
 from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
     DEFAULT_MODEL_PATH,
@@ -47,6 +48,7 @@ class QwenMCTrainDataset(Dataset):
         use_reasoning: bool = False,
         fgr_lookup: FgrTrainLookup | None = None,
         data_root: str | None = None,
+        som_resolver: SomResolver | None = None,
     ):
         self.samples = samples
         self.processor = processor
@@ -54,17 +56,22 @@ class QwenMCTrainDataset(Dataset):
         self.use_reasoning = use_reasoning
         self.fgr_lookup = fgr_lookup
         self.data_root = data_root
+        self.som_resolver = som_resolver
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
     def _resolve_image_path(self, sample: VQASample) -> str:
-        if self.fgr_lookup is None:
-            return sample.image_path
-        key = (
-            normalize_ablation_image_key(sample.image_path, data_root=self.data_root),
-            sample.question.strip(),
-        )
-        return self.fgr_lookup.get(key, sample.image_path)
+        if self.fgr_lookup is not None:
+            key = (
+                normalize_ablation_image_key(sample.image_path, data_root=self.data_root),
+                sample.question.strip(),
+            )
+            path = self.fgr_lookup.get(key, sample.image_path)
+        else:
+            path = sample.image_path
+        if self.som_resolver is not None:
+            path = self.som_resolver.resolve_or_original(path)
+        return path
 
     def __len__(self):
         return len(self.samples)
@@ -164,6 +171,18 @@ def parse_args():
     )
     p.add_argument("--wandb_project", type=str, default="medvqa")
     p.add_argument("--wandb_run_name", type=str, default=None)
+    p.add_argument(
+        "--use_som",
+        action="store_true",
+        default=False,
+        help="Replace images with pre-annotated SoM versions during training.",
+    )
+    p.add_argument(
+        "--som_dir",
+        type=str,
+        default=get_som_dir(),
+        help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
     return p.parse_args()
 
 
@@ -274,6 +293,14 @@ def main():
     else:
         print(f"Train: {len(train_samples)} samples")
 
+    som_resolver: SomResolver | None = None
+    if args.use_som:
+        som_resolver = SomResolver(args.som_dir)
+        datasets_to_load = ["pathvqa", "slake", "vqarad", "medvqa2019"] if args.dataset == "all" else [args.dataset]
+        for ds in datasets_to_load:
+            som_resolver.load_dataset(ds)
+        print(f"SoM enabled — images loaded from {args.som_dir}")
+
     train_dataset = QwenMCTrainDataset(
         train_samples,
         processor,
@@ -281,6 +308,7 @@ def main():
         use_reasoning=args.use_reasoning,
         fgr_lookup=fgr_lookup,
         data_root=args.data_root,
+        som_resolver=som_resolver,
     )
     if use_all and not args.use_reasoning:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
@@ -307,6 +335,7 @@ def main():
             processor,
             args.max_length,
             data_root=args.data_root,
+            som_resolver=som_resolver,
         )
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
