@@ -337,8 +337,7 @@ class MedicalVQALoader:
         return list(self.dataset_configs.keys())
 
     def get_available_splits(self, dataset_name: str) -> List[str]:
-        if dataset_name not in self.dataset_configs:
-            raise ValueError(f"Unknown dataset: {dataset_name}")
+        dataset_name = self._normalize_dataset_name(dataset_name)
         return list(self.dataset_configs[dataset_name]["annotation_files"].keys())
 
     def load_all_splits(self, dataset_name: str) -> Dict[str, List[VQASample]]:

@@ -119,7 +119,8 @@ def _collect_unique_image_paths(
     splits: list[str] | None,
 ) -> list[str]:
     """Return deduplicated list of image paths for the given dataset + splits."""
-    available_splits = loader.get_available_splits(dataset_slug)
+    canonical = loader.dataset_name_mapping.get(dataset_slug.lower(), dataset_slug)
+    available_splits = loader.get_available_splits(canonical)
     use_splits = splits if splits else available_splits
     unknown = set(use_splits) - set(available_splits)
     if unknown:
