@@ -95,6 +95,11 @@ def parse_args():
         action="store_true",
         help="Emit assistant JSON {\"reasoning\",\"answer\"} (match train_qwen --use_reasoning)",
     )
+    parser.add_argument(
+        "--answer_first",
+        action="store_true",
+        help="Use answer-first JSON schema {\"answer\",\"reasoning\"} (match train_qwen --answer_first). Only effective with --use_reasoning_json.",
+    )
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -213,7 +218,10 @@ def main():
 
     model_short = model_short_name(args.model_path)
     ft_tag = "finetuned" if args.finetuned else "pretrained"
-    reason_tag = "reasoning_json" if args.use_reasoning_json else "answer_only"
+    if args.use_reasoning_json:
+        reason_tag = "reasoning_json_answer_first" if args.answer_first else "reasoning_json"
+    else:
+        reason_tag = "answer_only"
     run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_{reason_tag}_eval_mc"
     wandb.init(
         project=args.wandb_project,
@@ -372,6 +380,7 @@ def main():
                     sample.question,
                     sample.mc_options,
                     image=image,
+                    answer_first=args.answer_first,
                 )
                 if args.use_reasoning_json
                 else build_mc_conversation(

@@ -46,6 +46,7 @@ class QwenMCTrainDataset(Dataset):
         max_length=512,
         *,
         use_reasoning: bool = False,
+        answer_first: bool = False,
         fgr_lookup: FgrTrainLookup | None = None,
         data_root: str | None = None,
         som_resolver: SomResolver | None = None,
@@ -54,6 +55,7 @@ class QwenMCTrainDataset(Dataset):
         self.processor = processor
         self.max_length = max_length
         self.use_reasoning = use_reasoning
+        self.answer_first = answer_first
         self.fgr_lookup = fgr_lookup
         self.data_root = data_root
         self.som_resolver = som_resolver
@@ -93,6 +95,7 @@ class QwenMCTrainDataset(Dataset):
                 reasoning_raw=reasoning_raw,
                 answer=sample.answer,
                 image=image,
+                answer_first=self.answer_first,
             )
         else:
             conversation = build_mc_conversation(
@@ -126,6 +129,11 @@ def parse_args():
         "--use_reasoning",
         action="store_true",
         help="Train on verified pseudo reasoning (qwen_verify=True or is_correct=True).",
+    )
+    p.add_argument(
+        "--answer_first",
+        action="store_true",
+        help="Use answer-first JSON schema {answer, reasoning} instead of {reasoning, answer}. Only effective with --use_reasoning.",
     )
     p.add_argument(
         "--dataset",
@@ -204,7 +212,8 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
-    ft_tag = ("reasoning-" if args.use_reasoning else "") + ("lora" if args.use_lora else "full-ft")
+    reasoning_tag = ("reasoning-answer-first-" if args.answer_first else "reasoning-") if args.use_reasoning else ""
+    ft_tag = reasoning_tag + ("lora" if args.use_lora else "full-ft")
     model_short = model_short_name(args.model_path)
     wandb.init(
         project=args.wandb_project,
@@ -306,6 +315,7 @@ def main():
         processor,
         args.max_length,
         use_reasoning=args.use_reasoning,
+        answer_first=args.answer_first,
         fgr_lookup=fgr_lookup,
         data_root=args.data_root,
         som_resolver=som_resolver,
@@ -373,11 +383,11 @@ def main():
         processing_class=processor.tokenizer,
     )
 
-    loss_desc = (
-        "assistant JSON (reasoning + answer)"
-        if args.use_reasoning
-        else "assistant answer tokens only"
-    )
+    if args.use_reasoning:
+        order = "answer + reasoning" if args.answer_first else "reasoning + answer"
+        loss_desc = f"assistant JSON ({order})"
+    else:
+        loss_desc = "assistant answer tokens only"
     print(f"Starting Qwen2.5-VL training (loss on {loss_desc})...")
     result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 

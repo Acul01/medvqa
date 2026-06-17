@@ -32,6 +32,12 @@ MC_JSON_RESPONSE_INSTRUCTION = (
     "No text before or after the JSON."
 )
 
+MC_JSON_RESPONSE_INSTRUCTION_ANSWER_FIRST = (
+    "\n\nAnalyze the image and respond with ONLY valid JSON using this exact schema:\n"
+    '{"answer":"<single uppercase MC letter>","reasoning":"REGION: <anatomical region>\\nOBSERVATION: <what you observe in that region>\\nREASONING: <why this observation explains the correct answer>"}\n'
+    "No text before or after the JSON."
+)
+
 
 def configure_qwen_processor_pixels(processor: Any) -> None:
     """Limit image resolution so vision token counts stay stable across batches."""
@@ -136,9 +142,11 @@ def build_mc_reasoning_inference_conversation(
     options: List[str],
     *,
     image: Any = None,
+    answer_first: bool = False,
 ) -> List[dict]:
     """User turn: MC block + instructions to emit JSON reasoning+answer (inference — no gold reasoning)."""
-    full_question = format_mc_user_text(question, options) + MC_JSON_RESPONSE_INSTRUCTION
+    instruction = MC_JSON_RESPONSE_INSTRUCTION_ANSWER_FIRST if answer_first else MC_JSON_RESPONSE_INSTRUCTION
+    full_question = format_mc_user_text(question, options) + instruction
     image_content: dict = {"type": "image"}
     if image is not None:
         image_content["image"] = image
@@ -152,14 +160,19 @@ def build_mc_reasoning_conversation(
     reasoning_raw: str,
     answer: str,
     image: Any = None,
+    answer_first: bool = False,
 ) -> List[dict]:
-    """Training: user sees MC + reference pseudo reasoning; assistant learns JSON {\"reasoning\", \"answer\"}."""
+    """Training: user sees MC + reference pseudo reasoning; assistant learns JSON {\"reasoning\", \"answer\"} or {\"answer\", \"reasoning\"}."""
+    instruction = MC_JSON_RESPONSE_INSTRUCTION_ANSWER_FIRST if answer_first else MC_JSON_RESPONSE_INSTRUCTION
     mc = format_mc_user_text(question, options)
-    user_text = mc + MC_JSON_RESPONSE_INSTRUCTION
+    user_text = mc + instruction
     letter = _normalize_mc_letter(answer)
-    assistant_text = json.dumps(
-        {"reasoning": reasoning_raw.strip(), "answer": letter}, ensure_ascii=False
+    payload = (
+        {"answer": letter, "reasoning": reasoning_raw.strip()}
+        if answer_first
+        else {"reasoning": reasoning_raw.strip(), "answer": letter}
     )
+    assistant_text = json.dumps(payload, ensure_ascii=False)
 
     image_content: dict = {"type": "image"}
     if image is not None:
