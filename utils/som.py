@@ -149,20 +149,18 @@ class SomResolver:
         with open(manifest_path, "r", encoding="utf-8") as f:
             self._manifests[slug] = json.load(f)
 
-    def _slug_for_path(self, image_path: str) -> str | None:
-        """Return the dataset slug whose manifest contains this image filename."""
-        name = Path(image_path).name
-        for slug, manifest in self._manifests.items():
-            if name in manifest:
-                return slug
-        return None
+    @staticmethod
+    def _manifest_key(image_path: str) -> str:
+        """Derive the manifest key from an image path (last 2 path components)."""
+        p = Path(image_path)
+        return "/".join(p.parts[-2:])
 
     def resolve(self, image_path: str) -> Optional[Path]:
         """Return the SoM image Path for *image_path*, or None if unavailable."""
-        name = Path(image_path).name
-        for slug, manifest in self._manifests.items():
-            if name in manifest:
-                return self.som_dir / manifest[name]["som_path"]
+        key = self._manifest_key(image_path)
+        for manifest in self._manifests.values():
+            if key in manifest:
+                return self.som_dir / manifest[key]["som_path"]
         return None
 
     def resolve_or_original(self, image_path: str) -> str:
@@ -172,8 +170,8 @@ class SomResolver:
 
     def get_regions(self, image_path: str) -> list[dict]:
         """Return region metadata list for *image_path*, or [] if not found."""
-        name = Path(image_path).name
+        key = self._manifest_key(image_path)
         for manifest in self._manifests.values():
-            if name in manifest:
-                return manifest[name].get("regions", [])
+            if key in manifest:
+                return manifest[key].get("regions", [])
         return []

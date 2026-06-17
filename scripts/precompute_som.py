@@ -168,7 +168,9 @@ def _process_dataset(
 
     for img_path_str in tqdm(image_paths, desc=f"  Annotating {dataset_slug}"):
         img_path = Path(img_path_str)
-        filename = img_path.name
+        # Use last 2 path components as key to handle datasets where images share
+        # the same filename across subdirectories (e.g. SLAKE: xmlab0/source.jpg)
+        filename = "/".join(img_path.parts[-2:])
 
         if filename in manifest:
             skipped += 1
@@ -191,7 +193,9 @@ def _process_dataset(
                 min_mask_region_area=args.min_mask_area,
             )
 
-            out_name = img_path.stem + "_som.png"
+            # Preserve subdirectory structure to avoid name collisions
+            subdir = img_path.parent.name
+            out_name = f"{subdir}_{img_path.stem}_som.png"
             out_path = images_out_dir / out_name
             annotated.save(out_path, format="PNG")
 
