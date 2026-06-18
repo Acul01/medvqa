@@ -53,7 +53,7 @@ def annotate_image_with_som(
     """Overlay numbered bounding-box marks on *image* using SAM auto-segmentation.
 
     Returns:
-        annotated_image: PIL.Image with coloured bbox + number overlays.
+        annotated_image: PIL.Image with coloured free-form mask overlays + numbered labels.
         regions: list of dicts with keys "label" (str), "bbox" ([x,y,w,h]).
     """
     try:
@@ -91,20 +91,28 @@ def annotate_image_with_som(
     regions: list[dict] = []
     for idx, mask in enumerate(masks):
         label = str(idx + 1)
+        seg: np.ndarray = mask["segmentation"]  # bool array (H, W)
         x, y, w, h = (int(v) for v in mask["bbox"])
-        cx, cy = x + w // 2, y + h // 2
         r, g, b = _label_color(idx)
 
-        # Bounding box outline
-        draw.rectangle([x, y, x + w, y + h], outline=(r, g, b, 210), width=2)
+        # Paint free-form mask shape as semi-transparent colour fill
+        mask_rgba = np.zeros((*seg.shape, 4), dtype=np.uint8)
+        mask_rgba[seg] = [r, g, b, 100]
+        overlay = Image.alpha_composite(overlay, Image.fromarray(mask_rgba, mode="RGBA"))
 
-        # Numbered circle at region centre
+        # Redraw on updated overlay so label circle is always on top
+        draw = ImageDraw.Draw(overlay)
+
+        # Centroid from mask pixels for accurate label placement
+        ys, xs = np.where(seg)
+        cx, cy = int(xs.mean()), int(ys.mean())
+
+        # Numbered circle at centroid
         r_circle = 11
         draw.ellipse(
             [cx - r_circle, cy - r_circle, cx + r_circle, cy + r_circle],
-            fill=(r, g, b, 200),
+            fill=(r, g, b, 230),
         )
-        # Text: shift left ~3px per character so it stays centred
         tx = cx - 3 * len(label)
         draw.text((tx, cy - 7), label, fill=(255, 255, 255, 255))
 
