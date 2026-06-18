@@ -88,6 +88,16 @@ def annotate_image_with_som(
     overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
+    def _border(seg: np.ndarray, thickness: int = 2) -> np.ndarray:
+        """Return border pixels of a boolean mask via erosion."""
+        eroded = seg.copy()
+        for _ in range(thickness):
+            eroded[1:] &= eroded[:-1]
+            eroded[:-1] &= eroded[1:]
+            eroded[:, 1:] &= eroded[:, :-1]
+            eroded[:, :-1] &= eroded[:, 1:]
+        return seg & ~eroded
+
     regions: list[dict] = []
     for idx, mask in enumerate(masks):
         label = str(idx + 1)
@@ -95,9 +105,10 @@ def annotate_image_with_som(
         x, y, w, h = (int(v) for v in mask["bbox"])
         r, g, b = _label_color(idx)
 
-        # Paint free-form mask shape as semi-transparent colour fill
+        # Draw only the border pixels of the free-form mask (no fill)
+        border = _border(seg, thickness=2)
         mask_rgba = np.zeros((*seg.shape, 4), dtype=np.uint8)
-        mask_rgba[seg] = [r, g, b, 100]
+        mask_rgba[border] = [r, g, b, 230]
         overlay = Image.alpha_composite(overlay, Image.fromarray(mask_rgba, mode="RGBA"))
 
         # Redraw on updated overlay so label circle is always on top
