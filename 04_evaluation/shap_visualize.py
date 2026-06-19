@@ -297,6 +297,41 @@ def generate_rationale_qwen(model, processor, image: Image.Image,
 
 
 # ---------------------------------------------------------------------------
+# Generate final answer (for plot label)
+# ---------------------------------------------------------------------------
+
+def generate_answer_qwen(model, processor, image: Image.Image,
+                         question: str, options: list[str], device: torch.device) -> str:
+    from utils.qwen_vl import build_mc_conversation, prepare_qwen_inputs
+
+    conv = build_mc_conversation(question, options, image=image)
+    inputs = prepare_qwen_inputs(processor, conv, add_generation_prompt=True)
+    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+    input_length = inputs["input_ids"].shape[1]
+    with torch.no_grad():
+        out = model.generate(**inputs, max_new_tokens=10, do_sample=False,
+                             return_dict_in_generate=True)
+    generated_ids = out.sequences[0][input_length:]
+    return clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
+
+
+def generate_answer_llava(model, processor, image: Image.Image,
+                          question: str, options: list[str], device: torch.device) -> str:
+    from inference_llava_zeroshot_json import build_conversation, _decode_llava_new
+    from utils.mc_json_zeroshot import build_mc_json_user_text
+
+    user_text = build_mc_json_user_text(question, options, json_order="answer_first")
+    conv = build_conversation(user_text)
+    prompt = processor.apply_chat_template(conv, add_generation_prompt=True)
+    inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+    input_length = inputs["input_ids"].shape[1]
+    with torch.no_grad():
+        out = model.generate(**inputs, max_new_tokens=10, do_sample=False,
+                             return_dict_in_generate=True)
+    return _decode_llava_new(processor, out.sequences, input_length)
+
+
+# ---------------------------------------------------------------------------
 # SHAP explanation + plot
 # ---------------------------------------------------------------------------
 
@@ -407,10 +442,20 @@ def main():
             else:
                 score_fn = make_qwen_scorer(model, processor, q, opts, args.json_order, device)
 
+        # Generate prediction on the original (unmasked) image
+        if args.model == "qwen":
+            pred_raw = generate_answer_qwen(model, processor, image, q, opts, device)
+        else:
+            pred_raw = generate_answer_llava(model, processor, image, q, opts, device)
+        pred_letter = parse_predicted_letter(pred_raw, num_options=len(opts))
+        pred_text = opts[ord(pred_letter) - 65] if pred_letter else "?"
+        print(f"  Predicted: {pred_letter}) {pred_text}")
+
         # Build title string
         opts_str = "  ".join(f"{chr(65+i)}) {o}" for i, o in enumerate(opts))
         gt = sample.answer or "?"
-        title = f"Q: {q}\n{opts_str}\nGT: {gt}"
+        pred_display = f"{pred_letter}) {pred_text}" if pred_letter else pred_raw[:40]
+        title = f"Q: {q}\n{opts_str}\nGT: {gt}   Pred: {pred_display}"
 
         out_path = out_dir / f"sample_{args.sample_offset + idx:04d}.png"
         print(f"  Running SHAP ({args.max_evals} evals, mask={args.mask_type}) …")
