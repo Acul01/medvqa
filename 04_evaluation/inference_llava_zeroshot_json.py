@@ -127,6 +127,13 @@ def _compute_agreement(letter_predictions: list[str | None]) -> float:
     return max(counts.values()) / len(valid)
 
 
+def _majority_letter(letters: list[str | None]) -> str | None:
+    valid = [l for l in letters if l]
+    if not valid:
+        return None
+    return Counter(valid).most_common(1)[0][0]
+
+
 def _safe_div(a: int, b: int) -> float:
     return (a / b) if b else 0.0
 
@@ -297,21 +304,7 @@ def main():
                 )
                 inputs, input_length = _prepare_llava_inputs(processor, image, user_text, device)
 
-                generation_output = model.generate(
-                    **inputs,
-                    **gen_kwargs,
-                    return_dict_in_generate=True,
-                )
-                generated_ids = generation_output.sequences[0][input_length:]
-                generated_text = clean_answer(
-                    processor.decode(generated_ids, skip_special_tokens=True).strip()
-                )
-                parsed = parse_mc_answer_rationale_json(generated_text, num_options=num_opts)
-                predicted_letter = parsed.predicted_letter
-
-                sampled_predicted_letters = []
-                agreement_entropies = []
-                agreement_confidences = []
+                sample_results = []
                 for _ in range(agreement_samples):
                     sample_output = model.generate(
                         **inputs,
@@ -324,7 +317,6 @@ def main():
                         processor.decode(sample_generated_ids, skip_special_tokens=True).strip()
                     )
                     sample_parsed = parse_mc_answer_rationale_json(sample_text, num_options=num_opts)
-                    sampled_predicted_letters.append(sample_parsed.predicted_letter)
                     ent, conf = _compute_answer_token_stats(
                         sample_output,
                         sample_generated_ids,
@@ -333,12 +325,17 @@ def main():
                         model=model,
                         inputs=inputs,
                     )
-                    agreement_entropies.append(ent)
-                    agreement_confidences.append(conf)
+                    sample_results.append((sample_text, sample_parsed, ent, conf))
 
+                sampled_predicted_letters = [r[1].predicted_letter for r in sample_results]
+                predicted_letter = _majority_letter(sampled_predicted_letters)
+                matching = next(
+                    (r for r in reversed(sample_results) if r[1].predicted_letter == predicted_letter),
+                    sample_results[-1],
+                )
                 agreement = _compute_agreement(sampled_predicted_letters)
-                entropy_mean = _mean_finite(agreement_entropies)
-                confidence = _mean_finite(agreement_confidences)
+                entropy_mean = _mean_finite([r[2] for r in sample_results])
+                confidence = _mean_finite([r[3] for r in sample_results])
                 entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
@@ -351,7 +348,7 @@ def main():
                     "question_type": sample.question_type or "unknown",
                     "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
                     "ground_truth_letter": ground_truth_letter,
-                    "predicted_answer": generated_text,
+                    "predicted_answer": matching[0],
                     "predicted_letter": predicted_letter,
                     "is_correct": predicted_letter == ground_truth_letter,
                     "entropy_tokens": entropy_tokens,
@@ -360,8 +357,8 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": parsed.rationale_text,
-                    "predicted_json_parse_ok": parsed.json_parse_ok,
+                    "predicted_rationale_text": matching[1].rationale_text,
+                    "predicted_json_parse_ok": matching[1].json_parse_ok,
                     "zeroshot_json": True,
                 }
             else:
@@ -376,24 +373,8 @@ def main():
                 )
                 stage1_raw = _decode_llava_new(processor, out1.sequences, len1)
 
-                # Stage 2: JSON {rationale, answer} based on stage-1 reasoning
-                stage2_prompt = build_stage2_json_prompt(
-                    sample.question, sample.mc_options, stage1_raw
-                )
-                inputs2, len2 = _prepare_llava_inputs(processor, image, stage2_prompt, device)
-                out2 = model.generate(
-                    **inputs2,
-                    **gen_kwargs,
-                    return_dict_in_generate=True,
-                )
-                stage2_text = _decode_llava_new(processor, out2.sequences, len2)
-                parsed2 = parse_mc_answer_rationale_json(stage2_text, num_options=num_opts)
-                predicted_letter = parsed2.predicted_letter
-
-                # Agreement loop: stage 1 is greedy (deterministic), stage 2 sampled
-                sampled_predicted_letters = []
-                agreement_entropies = []
-                agreement_confidences = []
+                # Stage 2: N sampled JSON runs based on greedy stage-1 reasoning
+                sample_results = []
                 for _ in range(agreement_samples):
                     agr_stage2_prompt = build_stage2_json_prompt(
                         sample.question, sample.mc_options, stage1_raw
@@ -410,7 +391,6 @@ def main():
                     agr_generated_ids = agr_out2.sequences[0][agr_len2:]
                     agr_stage2 = _decode_llava_new(processor, agr_out2.sequences, agr_len2)
                     agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
-                    sampled_predicted_letters.append(agr_parsed2.predicted_letter)
                     ent, conf = _compute_answer_token_stats(
                         agr_out2,
                         agr_generated_ids,
@@ -419,12 +399,17 @@ def main():
                         model=model,
                         inputs=agr_inputs2,
                     )
-                    agreement_entropies.append(ent)
-                    agreement_confidences.append(conf)
+                    sample_results.append((agr_stage2, agr_parsed2, ent, conf))
 
+                sampled_predicted_letters = [r[1].predicted_letter for r in sample_results]
+                predicted_letter = _majority_letter(sampled_predicted_letters)
+                matching = next(
+                    (r for r in reversed(sample_results) if r[1].predicted_letter == predicted_letter),
+                    sample_results[-1],
+                )
                 agreement = _compute_agreement(sampled_predicted_letters)
-                entropy_mean = _mean_finite(agreement_entropies)
-                confidence = _mean_finite(agreement_confidences)
+                entropy_mean = _mean_finite([r[2] for r in sample_results])
+                confidence = _mean_finite([r[3] for r in sample_results])
                 entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
@@ -437,7 +422,7 @@ def main():
                     "question_type": sample.question_type or "unknown",
                     "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
                     "ground_truth_letter": ground_truth_letter,
-                    "predicted_answer": stage2_text,
+                    "predicted_answer": matching[0],
                     "predicted_letter": predicted_letter,
                     "is_correct": predicted_letter == ground_truth_letter,
                     "entropy_tokens": entropy_tokens,
@@ -446,9 +431,9 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": parsed2.rationale_text,
+                    "predicted_rationale_text": matching[1].rationale_text,
                     "stage1_raw": stage1_raw,
-                    "predicted_json_parse_ok": parsed2.json_parse_ok,
+                    "predicted_json_parse_ok": matching[1].json_parse_ok,
                     "zeroshot_json": False,
                     "two_stage_cot": True,
                 }

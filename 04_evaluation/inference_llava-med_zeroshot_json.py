@@ -118,6 +118,18 @@ def _compute_agreement(letter_predictions: list[str | None]) -> float:
     return max(counts.values()) / len(valid)
 
 
+def _mean_finite(values: list[float]) -> float:
+    finite = [v for v in values if math.isfinite(v)]
+    return sum(finite) / len(finite) if finite else float("nan")
+
+
+def _majority_letter(letters: list[str | None]) -> str | None:
+    valid = [l for l in letters if l]
+    if not valid:
+        return None
+    return Counter(valid).most_common(1)[0][0]
+
+
 def _safe_div(a: int, b: int) -> float:
     return (a / b) if b else 0.0
 
@@ -330,36 +342,7 @@ def main():
                     device=device,
                 )
 
-                generation_output = model.generate(
-                    input_ids,
-                    images=image_tensor,
-                    attention_mask=torch.ones_like(input_ids),
-                    **gen_kwargs,
-                    return_dict_in_generate=True,
-                    output_scores=True,
-                )
-                generated_ids = _generated_suffix(generation_output.sequences, input_ids)
-                generated_text = clean_answer(
-                    tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
-                )
-                parsed = parse_mc_answer_rationale_json(generated_text, num_options=num_opts)
-                predicted_letter = parsed.predicted_letter
-
-                entropy_mean, confidence, entropy_tokens, _ = _compute_answer_token_entropy(
-                    generation_output,
-                    generated_ids,
-                    num_opts=num_opts,
-                    answer_letter_token_ids=answer_letter_token_ids,
-                    predicted_letter=predicted_letter,
-                    model=model,
-                    input_ids=input_ids,
-                    image_tensor=image_tensor,
-                    device=device,
-                    tokenizer=tokenizer,
-                )
-
-                sampled_predicted_letters = []
-                agreement_confidences = []
+                sample_results = []
                 for _ in range(agreement_samples):
                     sample_output = model.generate(
                         input_ids,
@@ -374,19 +357,30 @@ def main():
                         tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip()
                     )
                     sample_parsed = parse_mc_answer_rationale_json(sample_text, num_options=num_opts)
-                    sampled_predicted_letters.append(sample_parsed.predicted_letter)
-                    if sample_output.scores:
-                        agreement_confidences.append(
-                            _compute_generation_confidence(
-                                sample_output.scores,
-                                sample_generated_ids,
-                                tokenizer,
-                            )
-                        )
+                    ent, conf, _, _ = _compute_answer_token_entropy(
+                        sample_output,
+                        sample_generated_ids,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                        predicted_letter=sample_parsed.predicted_letter,
+                        model=model,
+                        input_ids=input_ids,
+                        image_tensor=image_tensor,
+                        device=device,
+                        tokenizer=tokenizer,
+                    )
+                    sample_results.append((sample_text, sample_parsed, ent, conf))
 
+                sampled_predicted_letters = [r[1].predicted_letter for r in sample_results]
+                predicted_letter = _majority_letter(sampled_predicted_letters)
+                matching = next(
+                    (r for r in reversed(sample_results) if r[1].predicted_letter == predicted_letter),
+                    sample_results[-1],
+                )
                 agreement = _compute_agreement(sampled_predicted_letters)
-                if agreement_confidences:
-                    confidence = sum(agreement_confidences) / len(agreement_confidences)
+                entropy_mean = _mean_finite([r[2] for r in sample_results])
+                confidence = _mean_finite([r[3] for r in sample_results])
+                entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
                     "image_path": effective_image_path,
@@ -398,7 +392,7 @@ def main():
                     "question_type": sample.question_type or "unknown",
                     "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
                     "ground_truth_letter": ground_truth_letter,
-                    "predicted_answer": generated_text,
+                    "predicted_answer": matching[0],
                     "predicted_letter": predicted_letter,
                     "is_correct": predicted_letter == ground_truth_letter,
                     "entropy_tokens": entropy_tokens,
@@ -407,8 +401,8 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": parsed.rationale_text,
-                    "predicted_json_parse_ok": parsed.json_parse_ok,
+                    "predicted_rationale_text": matching[1].rationale_text,
+                    "predicted_json_parse_ok": matching[1].json_parse_ok,
                     "zeroshot_json": True,
                 }
             else:
@@ -433,35 +427,8 @@ def main():
                 )
                 stage1_raw = _decode_llava_med_new(tokenizer, out1.sequences, input_ids1)
 
-                # Stage 2: JSON {rationale, answer} based on stage-1 reasoning
-                stage2_prompt = build_stage2_json_prompt(
-                    sample.question, sample.mc_options, stage1_raw
-                )
-                input_ids2, image_tensor2, _ = _prepare_llava_med_inputs(
-                    stage2_prompt,
-                    image,
-                    conv_template=args.conv_template,
-                    tokenizer=tokenizer,
-                    image_processor=image_processor,
-                    model=model,
-                    device=device,
-                )
-                out2 = model.generate(
-                    input_ids2,
-                    images=image_tensor2,
-                    attention_mask=torch.ones_like(input_ids2),
-                    **gen_kwargs,
-                    return_dict_in_generate=True,
-                    output_scores=True,
-                )
-                stage2_raw = _decode_llava_med_new(tokenizer, out2.sequences, input_ids2)
-                parsed2 = parse_mc_answer_rationale_json(stage2_raw, num_options=num_opts)
-                predicted_letter = parsed2.predicted_letter
-
-                # Agreement loop: stage 1 greedy (deterministic), stage 2 sampled
-                sampled_predicted_letters = []
-                agreement_entropies = []
-                agreement_confidences = []
+                # Stage 2: N sampled JSON runs based on greedy stage-1 reasoning
+                sample_results = []
                 for _ in range(agreement_samples):
                     agr_stage2_prompt = build_stage2_json_prompt(
                         sample.question, sample.mc_options, stage1_raw
@@ -488,7 +455,6 @@ def main():
                         tokenizer.decode(agr_gen_ids, skip_special_tokens=True).strip()
                     )
                     agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
-                    sampled_predicted_letters.append(agr_parsed2.predicted_letter)
                     ent, conf, _, _ = _compute_answer_token_entropy(
                         agr_out2,
                         agr_gen_ids,
@@ -501,18 +467,17 @@ def main():
                         device=device,
                         tokenizer=tokenizer,
                     )
-                    agreement_entropies.append(ent)
-                    agreement_confidences.append(conf)
+                    sample_results.append((agr_stage2, agr_parsed2, ent, conf))
 
+                sampled_predicted_letters = [r[1].predicted_letter for r in sample_results]
+                predicted_letter = _majority_letter(sampled_predicted_letters)
+                matching = next(
+                    (r for r in reversed(sample_results) if r[1].predicted_letter == predicted_letter),
+                    sample_results[-1],
+                )
                 agreement = _compute_agreement(sampled_predicted_letters)
-                entropy_mean = (
-                    sum(v for v in agreement_entropies if math.isfinite(v)) / len(agreement_entropies)
-                    if agreement_entropies else math.nan
-                )
-                confidence = (
-                    sum(v for v in agreement_confidences if math.isfinite(v)) / len(agreement_confidences)
-                    if agreement_confidences else math.nan
-                )
+                entropy_mean = _mean_finite([r[2] for r in sample_results])
+                confidence = _mean_finite([r[3] for r in sample_results])
                 entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
@@ -525,7 +490,7 @@ def main():
                     "question_type": sample.question_type or "unknown",
                     "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
                     "ground_truth_letter": ground_truth_letter,
-                    "predicted_answer": stage2_raw,
+                    "predicted_answer": matching[0],
                     "predicted_letter": predicted_letter,
                     "is_correct": predicted_letter == ground_truth_letter,
                     "entropy_tokens": entropy_tokens,
@@ -534,9 +499,9 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": parsed2.rationale_text,
+                    "predicted_rationale_text": matching[1].rationale_text,
                     "stage1_raw": stage1_raw,
-                    "predicted_json_parse_ok": parsed2.json_parse_ok,
+                    "predicted_json_parse_ok": matching[1].json_parse_ok,
                     "zeroshot_json": False,
                     "two_stage_cot": True,
                 }
