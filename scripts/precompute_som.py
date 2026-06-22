@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=get_mc_data_root(),
     )
+    parser.add_argument(
+        "--n_samples",
+        type=int,
+        default=None,
+        help="Limit to the first N unique images per dataset (for quick testing).",
+    )
     return parser.parse_args()
 
 
@@ -150,6 +156,9 @@ def _process_dataset(
 
     image_paths = _collect_unique_image_paths(loader, dataset_slug, splits)
     print(f"  Unique images found: {len(image_paths)}")
+    if args.n_samples is not None:
+        image_paths = image_paths[: args.n_samples]
+        print(f"  Limited to n_samples={args.n_samples}")
 
     dataset_out_dir = som_dir / dataset_slug
     images_out_dir = dataset_out_dir / "images"
