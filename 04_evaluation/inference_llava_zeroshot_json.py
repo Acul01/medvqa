@@ -18,17 +18,15 @@ from utils.mc_eval import run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
-    DEFAULT_STAGE2_MAX_NEW_TOKENS,
     build_mc_json_user_text,
     build_stage1_rationale_prompt,
-    build_stage2_answer_prompt,
+    build_stage2_json_prompt,
     cast_json_single_shot,
     find_answer_token_step,
     get_answer_letter_token_ids,
     is_json_single_shot,
     parse_mc_answer_rationale_json,
 )
-from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
 from utils.som import SomResolver
 from utils.save_results import clean_answer, save_results
@@ -198,11 +196,7 @@ def _decode_llava_new(processor, sequences, input_length: int) -> str:
 def main():
     args = parse_args()
     if args.max_new_tokens is None:
-        args.max_new_tokens = (
-            DEFAULT_STAGE2_MAX_NEW_TOKENS
-            if args.json_order == "rationale_first_2stage"
-            else DEFAULT_JSON_MAX_NEW_TOKENS
-        )
+        args.max_new_tokens = DEFAULT_JSON_MAX_NEW_TOKENS
 
     model_short = _model_short_name(args.model_path)
     run_name = (
@@ -274,12 +268,6 @@ def main():
         "top_p": args.top_p,
     }
     stage1_gen_kwargs = {"max_new_tokens": args.rationale_max_new_tokens, "do_sample": False}
-    agreement_stage1_kwargs = {
-        "max_new_tokens": args.rationale_max_new_tokens,
-        "do_sample": True,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-    }
 
     answer_letter_token_ids = get_answer_letter_token_ids(processor.tokenizer)
 
@@ -377,6 +365,7 @@ def main():
                     "zeroshot_json": True,
                 }
             else:
+                # Stage 1: greedy reasoning (always do_sample=False)
                 stage1_text = build_stage1_rationale_prompt(sample.question, sample.mc_options)
                 inputs1, len1 = _prepare_llava_inputs(processor, image, stage1_text, device)
                 out1 = model.generate(
@@ -385,33 +374,29 @@ def main():
                     return_dict_in_generate=True,
                     output_scores=False,
                 )
-                rationale_text = _decode_llava_new(processor, out1.sequences, len1)
+                stage1_raw = _decode_llava_new(processor, out1.sequences, len1)
 
-                stage2_text_prompt = build_stage2_answer_prompt(
-                    sample.question, sample.mc_options, rationale_text
+                # Stage 2: JSON {rationale, answer} based on stage-1 reasoning
+                stage2_prompt = build_stage2_json_prompt(
+                    sample.question, sample.mc_options, stage1_raw
                 )
-                inputs2, len2 = _prepare_llava_inputs(processor, image, stage2_text_prompt, device)
+                inputs2, len2 = _prepare_llava_inputs(processor, image, stage2_prompt, device)
                 out2 = model.generate(
                     **inputs2,
                     **gen_kwargs,
                     return_dict_in_generate=True,
                 )
                 stage2_text = _decode_llava_new(processor, out2.sequences, len2)
-                predicted_letter = parse_predicted_letter(stage2_text, num_options=num_opts)
+                parsed2 = parse_mc_answer_rationale_json(stage2_text, num_options=num_opts)
+                predicted_letter = parsed2.predicted_letter
 
+                # Agreement loop: stage 1 is greedy (deterministic), stage 2 sampled
                 sampled_predicted_letters = []
                 agreement_entropies = []
                 agreement_confidences = []
                 for _ in range(agreement_samples):
-                    agr_out1 = model.generate(
-                        **inputs1,
-                        **agreement_stage1_kwargs,
-                        return_dict_in_generate=True,
-                        output_scores=False,
-                    )
-                    agr_rationale = _decode_llava_new(processor, agr_out1.sequences, len1)
-                    agr_stage2_prompt = build_stage2_answer_prompt(
-                        sample.question, sample.mc_options, agr_rationale
+                    agr_stage2_prompt = build_stage2_json_prompt(
+                        sample.question, sample.mc_options, stage1_raw
                     )
                     agr_inputs2, agr_len2 = _prepare_llava_inputs(
                         processor, image, agr_stage2_prompt, device
@@ -424,9 +409,8 @@ def main():
                     )
                     agr_generated_ids = agr_out2.sequences[0][agr_len2:]
                     agr_stage2 = _decode_llava_new(processor, agr_out2.sequences, agr_len2)
-                    sampled_predicted_letters.append(
-                        parse_predicted_letter(agr_stage2, num_options=num_opts)
-                    )
+                    agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
+                    sampled_predicted_letters.append(agr_parsed2.predicted_letter)
                     ent, conf = _compute_answer_token_stats(
                         agr_out2,
                         agr_generated_ids,
@@ -462,9 +446,9 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": rationale_text,
-                    "stage1_raw": rationale_text,
-                    "predicted_json_parse_ok": False,
+                    "predicted_rationale_text": parsed2.rationale_text,
+                    "stage1_raw": stage1_raw,
+                    "predicted_json_parse_ok": parsed2.json_parse_ok,
                     "zeroshot_json": False,
                     "two_stage_cot": True,
                 }

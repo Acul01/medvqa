@@ -70,6 +70,18 @@ def build_stage2_answer_prompt(question: str, options: List[str], rationale: str
     )
 
 
+def build_stage2_json_prompt(question: str, options: List[str], reasoning: str) -> str:
+    """Stage-2 prompt for 2-stage CoT: inject stage-1 reasoning, request JSON {rationale, answer}."""
+    return (
+        "You have analyzed this medical image and provided the following reasoning:\n"
+        f"{reasoning.strip()}\n\n"
+        "Based on this reasoning, answer the following multiple-choice question "
+        "and explain your conclusion.\n\n"
+        + format_mc_user_text(question, options)
+        + build_mc_json_instruction(json_order="rationale_first")
+    )
+
+
 def build_mc_json_instruction(*, json_order: JsonSingleShotOrder) -> str:
     """Return the JSON schema instruction suffix for the given field order."""
     return (
@@ -133,6 +145,19 @@ def build_qwen_stage2_conversation(
 ) -> List[dict]:
     return _qwen_image_conversation(
         build_stage2_answer_prompt(question, options, rationale), image=image
+    )
+
+
+def build_qwen_stage2_json_conversation(
+    question: str,
+    options: List[str],
+    *,
+    reasoning: str,
+    image: Any = None,
+) -> List[dict]:
+    """Stage-2 conversation for 2-stage CoT: inject stage-1 reasoning, request JSON output."""
+    return _qwen_image_conversation(
+        build_stage2_json_prompt(question, options, reasoning), image=image
     )
 
 

@@ -18,17 +18,15 @@ from utils.mc_eval import run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
-    DEFAULT_STAGE2_MAX_NEW_TOKENS,
     build_qwen_json_conversation,
     build_qwen_stage1_conversation,
-    build_qwen_stage2_conversation,
+    build_qwen_stage2_json_conversation,
     cast_json_single_shot,
     find_answer_token_step,
     get_answer_letter_token_ids,
     is_json_single_shot,
     parse_mc_answer_rationale_json,
 )
-from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
 from utils.som import SomResolver
 from utils.qwen_vl import (
@@ -179,11 +177,7 @@ def _decode_new_tokens(processor, sequences, input_length: int) -> str:
 def main():
     args = parse_args()
     if args.max_new_tokens is None:
-        args.max_new_tokens = (
-            DEFAULT_STAGE2_MAX_NEW_TOKENS
-            if args.json_order == "rationale_first_2stage"
-            else DEFAULT_JSON_MAX_NEW_TOKENS
-        )
+        args.max_new_tokens = DEFAULT_JSON_MAX_NEW_TOKENS
 
     model_short = model_short_name(args.model_path)
     run_name = (
@@ -250,12 +244,6 @@ def main():
         "top_p": args.top_p,
     }
     stage1_gen_kwargs = {"max_new_tokens": args.rationale_max_new_tokens, "do_sample": False}
-    agreement_stage1_kwargs = {
-        "max_new_tokens": args.rationale_max_new_tokens,
-        "do_sample": True,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-    }
 
     answer_letter_token_ids = get_answer_letter_token_ids(processor.tokenizer)
 
@@ -356,6 +344,7 @@ def main():
                     "zeroshot_json": True,
                 }
             else:
+                # Stage 1: greedy reasoning (always do_sample=False)
                 conv1 = build_qwen_stage1_conversation(
                     sample.question, sample.mc_options, image=image
                 )
@@ -369,12 +358,13 @@ def main():
                     return_dict_in_generate=True,
                     output_scores=False,
                 )
-                rationale_text = _decode_new_tokens(processor, out1.sequences, len1)
+                stage1_raw = _decode_new_tokens(processor, out1.sequences, len1)
 
-                conv2 = build_qwen_stage2_conversation(
+                # Stage 2: JSON {rationale, answer} based on stage-1 reasoning
+                conv2 = build_qwen_stage2_json_conversation(
                     sample.question,
                     sample.mc_options,
-                    rationale=rationale_text,
+                    reasoning=stage1_raw,
                     image=image,
                 )
                 inputs2 = _move_inputs_to_device(
@@ -387,23 +377,18 @@ def main():
                     return_dict_in_generate=True,
                 )
                 stage2_text = _decode_new_tokens(processor, out2.sequences, len2)
-                predicted_letter = parse_predicted_letter(stage2_text, num_options=num_opts)
+                parsed2 = parse_mc_answer_rationale_json(stage2_text, num_options=num_opts)
+                predicted_letter = parsed2.predicted_letter
 
+                # Agreement loop: stage 1 greedy (deterministic), stage 2 sampled
                 sampled_predicted_letters = []
                 agreement_entropies = []
                 agreement_confidences = []
                 for _ in range(agreement_samples):
-                    agr_out1 = model.generate(
-                        **inputs1,
-                        **agreement_stage1_kwargs,
-                        return_dict_in_generate=True,
-                        output_scores=False,
-                    )
-                    agr_rationale = _decode_new_tokens(processor, agr_out1.sequences, len1)
-                    agr_conv2 = build_qwen_stage2_conversation(
+                    agr_conv2 = build_qwen_stage2_json_conversation(
                         sample.question,
                         sample.mc_options,
-                        rationale=agr_rationale,
+                        reasoning=stage1_raw,
                         image=image,
                     )
                     agr_inputs2 = _move_inputs_to_device(
@@ -419,9 +404,8 @@ def main():
                     )
                     agr_generated_ids = agr_out2.sequences[0][agr_len2:]
                     agr_stage2 = _decode_new_tokens(processor, agr_out2.sequences, agr_len2)
-                    sampled_predicted_letters.append(
-                        parse_predicted_letter(agr_stage2, num_options=num_opts)
-                    )
+                    agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
+                    sampled_predicted_letters.append(agr_parsed2.predicted_letter)
                     ent, conf = _compute_answer_token_stats(
                         agr_out2,
                         agr_generated_ids,
@@ -457,9 +441,9 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": rationale_text,
-                    "stage1_raw": rationale_text,
-                    "predicted_json_parse_ok": False,
+                    "predicted_rationale_text": parsed2.rationale_text,
+                    "stage1_raw": stage1_raw,
+                    "predicted_json_parse_ok": parsed2.json_parse_ok,
                     "zeroshot_json": False,
                     "two_stage_cot": True,
                 }

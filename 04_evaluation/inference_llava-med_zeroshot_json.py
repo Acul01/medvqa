@@ -23,10 +23,9 @@ from utils.mc_eval import run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
-    DEFAULT_STAGE2_MAX_NEW_TOKENS,
     build_mc_json_user_text,
     build_stage1_rationale_prompt,
-    build_stage2_answer_prompt,
+    build_stage2_json_prompt,
     cast_json_single_shot,
     find_answer_token_step,
     get_answer_letter_token_ids,
@@ -34,7 +33,6 @@ from utils.mc_json_zeroshot import (
     normalize_generation_sequences,
     parse_mc_answer_rationale_json,
 )
-from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
 
@@ -244,11 +242,7 @@ def load_llava_med_pretrained(model_path: str, device: torch.device):
 def main():
     args = parse_args()
     if args.max_new_tokens is None:
-        args.max_new_tokens = (
-            DEFAULT_STAGE2_MAX_NEW_TOKENS
-            if args.json_order == "rationale_first_2stage"
-            else DEFAULT_JSON_MAX_NEW_TOKENS
-        )
+        args.max_new_tokens = DEFAULT_JSON_MAX_NEW_TOKENS
 
     model_short = _model_short_name(args.model_path)
     run_name = (
@@ -301,12 +295,6 @@ def main():
         "top_p": args.top_p,
     }
     stage1_gen_kwargs = {"max_new_tokens": args.rationale_max_new_tokens, "do_sample": False}
-    agreement_stage1_kwargs = {
-        "max_new_tokens": args.rationale_max_new_tokens,
-        "do_sample": True,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-    }
 
     answer_letter_token_ids = get_answer_letter_token_ids(tokenizer)
 
@@ -424,6 +412,7 @@ def main():
                     "zeroshot_json": True,
                 }
             else:
+                # Stage 1: greedy reasoning (always do_sample=False)
                 stage1_text = build_stage1_rationale_prompt(sample.question, sample.mc_options)
                 input_ids1, image_tensor1, _ = _prepare_llava_med_inputs(
                     stage1_text,
@@ -442,13 +431,14 @@ def main():
                     return_dict_in_generate=True,
                     output_scores=False,
                 )
-                rationale_text = _decode_llava_med_new(tokenizer, out1.sequences, input_ids1)
+                stage1_raw = _decode_llava_med_new(tokenizer, out1.sequences, input_ids1)
 
-                stage2_text = build_stage2_answer_prompt(
-                    sample.question, sample.mc_options, rationale_text
+                # Stage 2: JSON {rationale, answer} based on stage-1 reasoning
+                stage2_prompt = build_stage2_json_prompt(
+                    sample.question, sample.mc_options, stage1_raw
                 )
                 input_ids2, image_tensor2, _ = _prepare_llava_med_inputs(
-                    stage2_text,
+                    stage2_prompt,
                     image,
                     conv_template=args.conv_template,
                     tokenizer=tokenizer,
@@ -465,31 +455,16 @@ def main():
                     output_scores=True,
                 )
                 stage2_raw = _decode_llava_med_new(tokenizer, out2.sequences, input_ids2)
-                predicted_letter = parse_predicted_letter(stage2_raw, num_options=num_opts)
+                parsed2 = parse_mc_answer_rationale_json(stage2_raw, num_options=num_opts)
+                predicted_letter = parsed2.predicted_letter
 
-                entropy_val, confidence, first_tok_id = _compute_first_token_entropy(
-                    model, input_ids2, image_tensor2, device
-                )
-                first_tok_text = tokenizer.decode(
-                    [first_tok_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
-                ).strip() or f"tok_{first_tok_id}"
-                entropy_tokens = {first_tok_text: entropy_val}
-                entropy_mean = entropy_val
-
+                # Agreement loop: stage 1 greedy (deterministic), stage 2 sampled
                 sampled_predicted_letters = []
+                agreement_entropies = []
                 agreement_confidences = []
                 for _ in range(agreement_samples):
-                    agr_out1 = model.generate(
-                        input_ids1,
-                        images=image_tensor1,
-                        attention_mask=torch.ones_like(input_ids1),
-                        **agreement_stage1_kwargs,
-                        return_dict_in_generate=True,
-                        output_scores=False,
-                    )
-                    agr_rationale = _decode_llava_med_new(tokenizer, agr_out1.sequences, input_ids1)
-                    agr_stage2_prompt = build_stage2_answer_prompt(
-                        sample.question, sample.mc_options, agr_rationale
+                    agr_stage2_prompt = build_stage2_json_prompt(
+                        sample.question, sample.mc_options, stage1_raw
                     )
                     agr_ids2, agr_img2, _ = _prepare_llava_med_inputs(
                         agr_stage2_prompt,
@@ -508,23 +483,37 @@ def main():
                         return_dict_in_generate=True,
                         output_scores=True,
                     )
-                    agr_stage2 = _decode_llava_med_new(tokenizer, agr_out2.sequences, agr_ids2)
-                    sampled_predicted_letters.append(
-                        parse_predicted_letter(agr_stage2, num_options=num_opts)
+                    agr_gen_ids = _generated_suffix(agr_out2.sequences, agr_ids2)
+                    agr_stage2 = clean_answer(
+                        tokenizer.decode(agr_gen_ids, skip_special_tokens=True).strip()
                     )
-                    if agr_out2.scores:
-                        agr_gen_ids = _generated_suffix(agr_out2.sequences, agr_ids2)
-                        agreement_confidences.append(
-                            _compute_generation_confidence(
-                                agr_out2.scores,
-                                agr_gen_ids,
-                                tokenizer,
-                            )
-                        )
+                    agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
+                    sampled_predicted_letters.append(agr_parsed2.predicted_letter)
+                    ent, conf, _, _ = _compute_answer_token_entropy(
+                        agr_out2,
+                        agr_gen_ids,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                        predicted_letter=agr_parsed2.predicted_letter,
+                        model=model,
+                        input_ids=agr_ids2,
+                        image_tensor=agr_img2,
+                        device=device,
+                        tokenizer=tokenizer,
+                    )
+                    agreement_entropies.append(ent)
+                    agreement_confidences.append(conf)
 
                 agreement = _compute_agreement(sampled_predicted_letters)
-                if agreement_confidences:
-                    confidence = sum(agreement_confidences) / len(agreement_confidences)
+                entropy_mean = (
+                    sum(v for v in agreement_entropies if math.isfinite(v)) / len(agreement_entropies)
+                    if agreement_entropies else math.nan
+                )
+                confidence = (
+                    sum(v for v in agreement_confidences if math.isfinite(v)) / len(agreement_confidences)
+                    if agreement_confidences else math.nan
+                )
+                entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
                     "image_path": effective_image_path,
@@ -545,9 +534,9 @@ def main():
                     "confidence": confidence,
                     "agreement_samples": sampled_predicted_letters,
                     "json_order": args.json_order,
-                    "predicted_rationale_text": rationale_text,
-                    "stage1_raw": rationale_text,
-                    "predicted_json_parse_ok": False,
+                    "predicted_rationale_text": parsed2.rationale_text,
+                    "stage1_raw": stage1_raw,
+                    "predicted_json_parse_ok": parsed2.json_parse_ok,
                     "zeroshot_json": False,
                     "two_stage_cot": True,
                 }
