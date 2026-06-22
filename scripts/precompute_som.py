@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.load_data import MedicalVQALoader
 from utils.paths import get_data_root, get_mc_data_root, get_som_dir
-from utils.som import MANIFEST_FILENAME, annotate_image_with_som
+from utils.som import MANIFEST_FILENAME, annotate_image_with_som, save_region_mask
 
 DATASET_CHOICES = ["pathvqa", "slake", "vqarad", "medvqa2019", "all"]
 ALL_DATASETS = ["pathvqa", "slake", "vqarad", "medvqa2019"]
@@ -153,7 +153,9 @@ def _process_dataset(
 
     dataset_out_dir = som_dir / dataset_slug
     images_out_dir = dataset_out_dir / "images"
+    masks_out_dir = dataset_out_dir / "masks"
     images_out_dir.mkdir(parents=True, exist_ok=True)
+    masks_out_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = dataset_out_dir / MANIFEST_FILENAME
     if manifest_path.exists():
@@ -195,16 +197,32 @@ def _process_dataset(
 
             # Preserve subdirectory structure to avoid name collisions
             subdir = img_path.parent.name
-            out_name = f"{subdir}_{img_path.stem}_som.png"
+            base_name = f"{subdir}_{img_path.stem}"
+            out_name = f"{base_name}_som.png"
             out_path = images_out_dir / out_name
             annotated.save(out_path, format="PNG")
+
+            # Persist each region's mask individually so a later step can
+            # render an arbitrary subset of marks without re-running SAM.
+            region_entries = []
+            for region in regions:
+                mask_name = f"{base_name}_region{region['label']}.png"
+                mask_out_path = masks_out_dir / mask_name
+                save_region_mask(region["mask"], mask_out_path)
+                region_entries.append(
+                    {
+                        "label": region["label"],
+                        "bbox": region["bbox"],
+                        "mask_path": str(dataset_slug / Path("masks") / mask_name),
+                    }
+                )
 
             # Store path relative to som_dir so it's portable
             rel_som_path = str((dataset_slug / Path("images") / out_name))
             manifest[filename] = {
                 "som_path": rel_som_path,
                 "original_path": img_path_str,
-                "regions": regions,
+                "regions": region_entries,
             }
             processed += 1
 

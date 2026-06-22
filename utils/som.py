@@ -2,6 +2,10 @@
 
 Workflow:
 1. Run scripts/precompute_som.py to annotate all images of a dataset once.
+   This persists, per region: its bounding box and its pixel-level mask
+   (as an individual PNG) so that a later step can render a *subset* of
+   marks (e.g. only the regions relevant to a given question) without
+   re-running SAM.
 2. Pass --use_som to any training/inference script to swap original images
    for their precomputed SoM versions at runtime via SomResolver.
 """
@@ -12,7 +16,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageDraw
 
 
 # ── Colour palette for region marks ─────────────────────────────────────────
@@ -37,6 +42,76 @@ def _label_color(idx: int) -> tuple[int, int, int]:
     return _PALETTE[idx % len(_PALETTE)]
 
 
+def _mask_border(seg: np.ndarray, thickness: int = 2) -> np.ndarray:
+    """Return border pixels of a boolean mask via erosion."""
+    eroded = seg.copy()
+    for _ in range(thickness):
+        eroded[1:] &= eroded[:-1]
+        eroded[:-1] &= eroded[1:]
+        eroded[:, 1:] &= eroded[:, :-1]
+        eroded[:, :-1] &= eroded[:, 1:]
+    return seg & ~eroded
+
+
+# ── Per-region mask persistence ──────────────────────────────────────────────
+
+def save_region_mask(mask: np.ndarray, path: Path) -> None:
+    """Persist a boolean (H, W) mask as a binary PNG."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray((mask.astype(np.uint8) * 255)).convert("L").save(path, format="PNG")
+
+
+def load_region_mask(path: Path) -> np.ndarray:
+    """Load a boolean (H, W) mask previously saved with save_region_mask."""
+    return np.array(Image.open(path).convert("L")) > 127
+
+
+# ── Drawing ──────────────────────────────────────────────────────────────────
+
+def draw_region_marks(
+    image: Image.Image,
+    regions: list[dict],
+    *,
+    border_thickness: int = 2,
+    circle_radius: int = 11,
+) -> Image.Image:
+    """Draw numbered free-form mask borders for *regions* onto *image*.
+
+    Each region dict must have "label" (str) and "mask" (np.ndarray bool, H==image.height).
+    Color is assigned by position in the list, so callers should pass regions
+    in their original (precompute-time) order to keep colors stable across
+    full vs. filtered renders.
+    """
+    base = image.convert("RGB").convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    for idx, region in enumerate(regions):
+        label = region["label"]
+        seg: np.ndarray = region["mask"]
+        r, g, b = _label_color(idx)
+
+        border = _mask_border(seg, thickness=border_thickness)
+        mask_rgba = np.zeros((*seg.shape, 4), dtype=np.uint8)
+        mask_rgba[border] = [r, g, b, 230]
+        overlay = Image.alpha_composite(overlay, Image.fromarray(mask_rgba, mode="RGBA"))
+        draw = ImageDraw.Draw(overlay)
+
+        ys, xs = np.where(seg)
+        if len(xs) == 0:
+            continue
+        cx, cy = int(xs.mean()), int(ys.mean())
+
+        draw.ellipse(
+            [cx - circle_radius, cy - circle_radius, cx + circle_radius, cy + circle_radius],
+            fill=(r, g, b, 230),
+        )
+        tx = cx - 3 * len(label)
+        draw.text((tx, cy - 7), label, fill=(255, 255, 255, 255))
+
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
 # ── Core annotation function ─────────────────────────────────────────────────
 
 def annotate_image_with_som(
@@ -50,11 +125,13 @@ def annotate_image_with_som(
     stability_score_thresh: float = 0.95,
     min_mask_region_area: int = 400,
 ) -> tuple[Image.Image, list[dict]]:
-    """Overlay numbered bounding-box marks on *image* using SAM auto-segmentation.
+    """Segment *image* with SAM and overlay numbered free-form mask borders.
 
     Returns:
-        annotated_image: PIL.Image with coloured free-form mask overlays + numbered labels.
-        regions: list of dicts with keys "label" (str), "bbox" ([x,y,w,h]).
+        annotated_image: PIL.Image with all regions marked (preview/fallback image).
+        regions: list of dicts with keys "label" (str), "bbox" ([x,y,w,h]),
+                 "mask" (np.ndarray bool, H x W) — the raw per-region mask,
+                 for the caller to persist individually if desired.
     """
     try:
         from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
@@ -63,9 +140,6 @@ def annotate_image_with_som(
             "segment-anything is required for SoM annotation. "
             "Install with: pip install git+https://github.com/facebookresearch/segment-anything.git"
         ) from e
-
-    import numpy as np
-    from PIL import ImageDraw
 
     sam = sam_model_registry[sam_model_type](checkpoint=sam_checkpoint)
     sam.to(device)
@@ -84,52 +158,13 @@ def annotate_image_with_som(
     # Keep largest regions, up to max_marks
     masks = sorted(masks, key=lambda m: m["area"], reverse=True)[:max_marks]
 
-    annotated = img_rgb.copy().convert("RGBA")
-    overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    def _border(seg: np.ndarray, thickness: int = 2) -> np.ndarray:
-        """Return border pixels of a boolean mask via erosion."""
-        eroded = seg.copy()
-        for _ in range(thickness):
-            eroded[1:] &= eroded[:-1]
-            eroded[:-1] &= eroded[1:]
-            eroded[:, 1:] &= eroded[:, :-1]
-            eroded[:, :-1] &= eroded[:, 1:]
-        return seg & ~eroded
-
     regions: list[dict] = []
     for idx, mask in enumerate(masks):
         label = str(idx + 1)
-        seg: np.ndarray = mask["segmentation"]  # bool array (H, W)
         x, y, w, h = (int(v) for v in mask["bbox"])
-        r, g, b = _label_color(idx)
+        regions.append({"label": label, "bbox": [x, y, w, h], "mask": mask["segmentation"]})
 
-        # Draw only the border pixels of the free-form mask (no fill)
-        border = _border(seg, thickness=2)
-        mask_rgba = np.zeros((*seg.shape, 4), dtype=np.uint8)
-        mask_rgba[border] = [r, g, b, 230]
-        overlay = Image.alpha_composite(overlay, Image.fromarray(mask_rgba, mode="RGBA"))
-
-        # Redraw on updated overlay so label circle is always on top
-        draw = ImageDraw.Draw(overlay)
-
-        # Centroid from mask pixels for accurate label placement
-        ys, xs = np.where(seg)
-        cx, cy = int(xs.mean()), int(ys.mean())
-
-        # Numbered circle at centroid
-        r_circle = 11
-        draw.ellipse(
-            [cx - r_circle, cy - r_circle, cx + r_circle, cy + r_circle],
-            fill=(r, g, b, 230),
-        )
-        tx = cx - 3 * len(label)
-        draw.text((tx, cy - 7), label, fill=(255, 255, 255, 255))
-
-        regions.append({"label": label, "bbox": [x, y, w, h]})
-
-    annotated = Image.alpha_composite(annotated, overlay).convert("RGB")
+    annotated = draw_region_marks(img_rgb, regions)
     return annotated, regions
 
 
@@ -142,7 +177,8 @@ class SomResolver:
     """Resolves original image paths to pre-annotated SoM image paths.
 
     The manifest (written by precompute_som.py) maps the original image
-    filename stem+suffix → relative path of the SoM image inside som_dir.
+    filename stem+suffix → relative path of the SoM image inside som_dir,
+    plus per-region bbox + mask_path metadata.
 
     Usage:
         resolver = SomResolver(som_dir="02_data/som")
@@ -174,13 +210,17 @@ class SomResolver:
         p = Path(image_path)
         return "/".join(p.parts[-2:])
 
-    def resolve(self, image_path: str) -> Optional[Path]:
-        """Return the SoM image Path for *image_path*, or None if unavailable."""
+    def _entry(self, image_path: str) -> Optional[dict]:
         key = self._manifest_key(image_path)
         for manifest in self._manifests.values():
             if key in manifest:
-                return self.som_dir / manifest[key]["som_path"]
+                return manifest[key]
         return None
+
+    def resolve(self, image_path: str) -> Optional[Path]:
+        """Return the SoM preview image Path for *image_path*, or None if unavailable."""
+        entry = self._entry(image_path)
+        return self.som_dir / entry["som_path"] if entry else None
 
     def resolve_or_original(self, image_path: str) -> str:
         """Return SoM path as string if found, otherwise return *image_path* unchanged."""
@@ -188,9 +228,14 @@ class SomResolver:
         return str(resolved) if resolved is not None else image_path
 
     def get_regions(self, image_path: str) -> list[dict]:
-        """Return region metadata list for *image_path*, or [] if not found."""
-        key = self._manifest_key(image_path)
-        for manifest in self._manifests.values():
-            if key in manifest:
-                return manifest[key].get("regions", [])
-        return []
+        """Return region metadata (label, bbox, mask_path) for *image_path*, or [] if not found."""
+        entry = self._entry(image_path)
+        return entry.get("regions", []) if entry else []
+
+    def load_region_masks(self, image_path: str) -> list[dict]:
+        """Return regions with their boolean masks loaded into memory (key "mask")."""
+        loaded = []
+        for region in self.get_regions(image_path):
+            mask = load_region_mask(self.som_dir / region["mask_path"])
+            loaded.append({**region, "mask": mask})
+        return loaded

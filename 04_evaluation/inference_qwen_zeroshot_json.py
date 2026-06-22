@@ -422,6 +422,7 @@ def main():
                     "json_order": args.json_order,
                     "predicted_rationale_text": matching[1].rationale_text,
                     "stage1_raw": stage1_raw,
+                    "stage2_raw": matching[0],
                     "predicted_json_parse_ok": matching[1].json_parse_ok,
                     "zeroshot_json": False,
                     "two_stage_cot": True,
