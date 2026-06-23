@@ -101,6 +101,18 @@ def parse_args() -> argparse.Namespace:
         help="Minimum pixel area to keep a region (filters tiny artefacts).",
     )
     parser.add_argument(
+        "--pred_iou_thresh",
+        type=float,
+        default=0.88,
+        help="SAM predicted-IoU confidence threshold. Lower = more (less certain) regions kept.",
+    )
+    parser.add_argument(
+        "--stability_score_thresh",
+        type=float,
+        default=0.95,
+        help="SAM stability-score threshold. Lower = more (less stable) regions kept.",
+    )
+    parser.add_argument(
         "--data_root",
         type=str,
         default=get_data_root(),
@@ -201,6 +213,8 @@ def _process_dataset(
                 device=args.device,
                 max_marks=args.max_marks,
                 points_per_side=args.points_per_side,
+                pred_iou_thresh=args.pred_iou_thresh,
+                stability_score_thresh=args.stability_score_thresh,
                 min_mask_region_area=args.min_mask_area,
             )
 
