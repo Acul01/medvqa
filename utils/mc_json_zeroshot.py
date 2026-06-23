@@ -11,7 +11,7 @@ import torch
 
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 
-JsonOrder = Literal["answer_first", "rationale_first", "rationale_first_2stage"]
+JsonOrder = Literal["answer_first", "rationale_first", "rationale_first_2stage", "rationale_first_2stage_norat"]
 JsonSingleShotOrder = Literal["answer_first", "rationale_first"]
 
 DEFAULT_JSON_MAX_NEW_TOKENS = 256

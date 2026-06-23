@@ -25,6 +25,7 @@ from utils.mc_json_zeroshot import (
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
     build_mc_json_user_text,
     build_stage1_rationale_prompt,
+    build_stage2_answer_prompt,
     build_stage2_json_prompt,
     cast_json_single_shot,
     find_answer_token_step,
@@ -33,6 +34,7 @@ from utils.mc_json_zeroshot import (
     normalize_generation_sequences,
     parse_mc_answer_rationale_json,
 )
+from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.save_results import clean_answer, save_results
 
@@ -57,7 +59,7 @@ def parse_args():
         "--json_order",
         type=str,
         required=True,
-        choices=["answer_first", "rationale_first", "rationale_first_2stage"],
+        choices=["answer_first", "rationale_first", "rationale_first_2stage", "rationale_first_2stage_norat"],
         help="Output mode: JSON single-shot field order or 2-stage CoT",
     )
     parser.add_argument("--split", type=str, default="test")
@@ -427,85 +429,164 @@ def main():
                 )
                 stage1_raw = _decode_llava_med_new(tokenizer, out1.sequences, input_ids1)
 
-                # Stage 2: N sampled JSON runs based on greedy stage-1 reasoning
-                sample_results = []
-                for _ in range(agreement_samples):
-                    agr_stage2_prompt = build_stage2_json_prompt(
-                        sample.question, sample.mc_options, stage1_raw
-                    )
-                    agr_ids2, agr_img2, _ = _prepare_llava_med_inputs(
-                        agr_stage2_prompt,
-                        image,
-                        conv_template=args.conv_template,
-                        tokenizer=tokenizer,
-                        image_processor=image_processor,
-                        model=model,
-                        device=device,
-                    )
-                    agr_out2 = model.generate(
-                        agr_ids2,
-                        images=agr_img2,
-                        attention_mask=torch.ones_like(agr_ids2),
-                        **agreement_gen_kwargs,
-                        return_dict_in_generate=True,
-                        output_scores=True,
-                    )
-                    agr_gen_ids = _generated_suffix(agr_out2.sequences, agr_ids2)
-                    agr_stage2 = clean_answer(
-                        tokenizer.decode(agr_gen_ids, skip_special_tokens=True).strip()
-                    )
-                    agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
-                    ent, conf, _, _ = _compute_answer_token_entropy(
-                        agr_out2,
-                        agr_gen_ids,
-                        num_opts=num_opts,
-                        answer_letter_token_ids=answer_letter_token_ids,
-                        predicted_letter=agr_parsed2.predicted_letter,
-                        model=model,
-                        input_ids=agr_ids2,
-                        image_tensor=agr_img2,
-                        device=device,
-                        tokenizer=tokenizer,
-                    )
-                    sample_results.append((agr_stage2, agr_parsed2, ent, conf))
+                if args.json_order == "rationale_first_2stage_norat":
+                    # Stage 2: letter only (N samples)
+                    sample_results = []
+                    for _ in range(agreement_samples):
+                        agr_stage2_prompt = build_stage2_answer_prompt(
+                            sample.question, sample.mc_options, stage1_raw
+                        )
+                        agr_ids2, agr_img2, _ = _prepare_llava_med_inputs(
+                            agr_stage2_prompt,
+                            image,
+                            conv_template=args.conv_template,
+                            tokenizer=tokenizer,
+                            image_processor=image_processor,
+                            model=model,
+                            device=device,
+                        )
+                        agr_out2 = model.generate(
+                            agr_ids2,
+                            images=agr_img2,
+                            attention_mask=torch.ones_like(agr_ids2),
+                            **agreement_gen_kwargs,
+                            return_dict_in_generate=True,
+                            output_scores=True,
+                        )
+                        agr_gen_ids = _generated_suffix(agr_out2.sequences, agr_ids2)
+                        agr_stage2 = clean_answer(
+                            tokenizer.decode(agr_gen_ids, skip_special_tokens=True).strip()
+                        )
+                        agr_letter = parse_predicted_letter(agr_stage2, num_options=num_opts)
+                        ent, conf, _, _ = _compute_answer_token_entropy(
+                            agr_out2,
+                            agr_gen_ids,
+                            num_opts=num_opts,
+                            answer_letter_token_ids=answer_letter_token_ids,
+                            predicted_letter=agr_letter,
+                            model=model,
+                            input_ids=agr_ids2,
+                            image_tensor=agr_img2,
+                            device=device,
+                            tokenizer=tokenizer,
+                        )
+                        sample_results.append((agr_stage2, agr_letter, ent, conf))
 
-                sampled_predicted_letters = [r[1].predicted_letter for r in sample_results]
-                predicted_letter = _majority_letter(sampled_predicted_letters)
-                matching = next(
-                    (r for r in reversed(sample_results) if r[1].predicted_letter == predicted_letter),
-                    sample_results[-1],
-                )
-                agreement = _compute_agreement(sampled_predicted_letters)
-                entropy_mean = _mean_finite([r[2] for r in sample_results])
-                confidence = _mean_finite([r[3] for r in sample_results])
-                entropy_tokens = {predicted_letter or "?": entropy_mean}
+                    sampled_predicted_letters = [r[1] for r in sample_results]
+                    predicted_letter = _majority_letter(sampled_predicted_letters)
+                    matching = next(
+                        (r for r in reversed(sample_results) if r[1] == predicted_letter),
+                        sample_results[-1],
+                    )
+                    agreement = _compute_agreement(sampled_predicted_letters)
+                    entropy_mean = _mean_finite([r[2] for r in sample_results])
+                    confidence = _mean_finite([r[3] for r in sample_results])
+                    entropy_tokens = {predicted_letter or "?": entropy_mean}
 
-                row_out = {
-                    "image_path": effective_image_path,
-                    "source_image_path": source_image_path,
-                    "ablation_mode": args.ablation_mode,
-                    "question": sample.question,
-                    "options": sample.mc_options,
-                    "correct_index": sample.mc_correct_index,
-                    "question_type": sample.question_type or "unknown",
-                    "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
-                    "ground_truth_letter": ground_truth_letter,
-                    "predicted_answer": matching[0],
-                    "predicted_letter": predicted_letter,
-                    "is_correct": predicted_letter == ground_truth_letter,
-                    "entropy_tokens": entropy_tokens,
-                    "entropy": entropy_mean,
-                    "agreement": agreement,
-                    "confidence": confidence,
-                    "agreement_samples": sampled_predicted_letters,
-                    "json_order": args.json_order,
-                    "predicted_rationale_text": matching[1].rationale_text,
-                    "stage1_raw": stage1_raw,
-                    "stage2_raw": matching[0],
-                    "predicted_json_parse_ok": matching[1].json_parse_ok,
-                    "zeroshot_json": False,
-                    "two_stage_cot": True,
-                }
+                    row_out = {
+                        "image_path": effective_image_path,
+                        "source_image_path": source_image_path,
+                        "ablation_mode": args.ablation_mode,
+                        "question": sample.question,
+                        "options": sample.mc_options,
+                        "correct_index": sample.mc_correct_index,
+                        "question_type": sample.question_type or "unknown",
+                        "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
+                        "ground_truth_letter": ground_truth_letter,
+                        "predicted_answer": matching[0],
+                        "predicted_letter": predicted_letter,
+                        "is_correct": predicted_letter == ground_truth_letter,
+                        "entropy_tokens": entropy_tokens,
+                        "entropy": entropy_mean,
+                        "agreement": agreement,
+                        "confidence": confidence,
+                        "agreement_samples": sampled_predicted_letters,
+                        "json_order": args.json_order,
+                        "stage1_raw": stage1_raw,
+                        "stage2_raw": matching[0],
+                        "zeroshot_json": False,
+                        "two_stage_cot": True,
+                    }
+                else:
+                    # Stage 2: N sampled JSON runs based on greedy stage-1 reasoning
+                    sample_results = []
+                    for _ in range(agreement_samples):
+                        agr_stage2_prompt = build_stage2_json_prompt(
+                            sample.question, sample.mc_options, stage1_raw
+                        )
+                        agr_ids2, agr_img2, _ = _prepare_llava_med_inputs(
+                            agr_stage2_prompt,
+                            image,
+                            conv_template=args.conv_template,
+                            tokenizer=tokenizer,
+                            image_processor=image_processor,
+                            model=model,
+                            device=device,
+                        )
+                        agr_out2 = model.generate(
+                            agr_ids2,
+                            images=agr_img2,
+                            attention_mask=torch.ones_like(agr_ids2),
+                            **agreement_gen_kwargs,
+                            return_dict_in_generate=True,
+                            output_scores=True,
+                        )
+                        agr_gen_ids = _generated_suffix(agr_out2.sequences, agr_ids2)
+                        agr_stage2 = clean_answer(
+                            tokenizer.decode(agr_gen_ids, skip_special_tokens=True).strip()
+                        )
+                        agr_parsed2 = parse_mc_answer_rationale_json(agr_stage2, num_options=num_opts)
+                        ent, conf, _, _ = _compute_answer_token_entropy(
+                            agr_out2,
+                            agr_gen_ids,
+                            num_opts=num_opts,
+                            answer_letter_token_ids=answer_letter_token_ids,
+                            predicted_letter=agr_parsed2.predicted_letter,
+                            model=model,
+                            input_ids=agr_ids2,
+                            image_tensor=agr_img2,
+                            device=device,
+                            tokenizer=tokenizer,
+                        )
+                        sample_results.append((agr_stage2, agr_parsed2, ent, conf))
+
+                    sampled_predicted_letters = [r[1].predicted_letter for r in sample_results]
+                    predicted_letter = _majority_letter(sampled_predicted_letters)
+                    matching = next(
+                        (r for r in reversed(sample_results) if r[1].predicted_letter == predicted_letter),
+                        sample_results[-1],
+                    )
+                    agreement = _compute_agreement(sampled_predicted_letters)
+                    entropy_mean = _mean_finite([r[2] for r in sample_results])
+                    confidence = _mean_finite([r[3] for r in sample_results])
+                    entropy_tokens = {predicted_letter or "?": entropy_mean}
+
+                    row_out = {
+                        "image_path": effective_image_path,
+                        "source_image_path": source_image_path,
+                        "ablation_mode": args.ablation_mode,
+                        "question": sample.question,
+                        "options": sample.mc_options,
+                        "correct_index": sample.mc_correct_index,
+                        "question_type": sample.question_type or "unknown",
+                        "ground_truth_answer": (sample.metadata or {}).get("gt_answer_text", ""),
+                        "ground_truth_letter": ground_truth_letter,
+                        "predicted_answer": matching[0],
+                        "predicted_letter": predicted_letter,
+                        "is_correct": predicted_letter == ground_truth_letter,
+                        "entropy_tokens": entropy_tokens,
+                        "entropy": entropy_mean,
+                        "agreement": agreement,
+                        "confidence": confidence,
+                        "agreement_samples": sampled_predicted_letters,
+                        "json_order": args.json_order,
+                        "predicted_rationale_text": matching[1].rationale_text,
+                        "stage1_raw": stage1_raw,
+                        "stage2_raw": matching[0],
+                        "predicted_json_parse_ok": matching[1].json_parse_ok,
+                        "zeroshot_json": False,
+                        "two_stage_cot": True,
+                    }
 
             results.append(row_out)
 
