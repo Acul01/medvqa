@@ -232,10 +232,18 @@ class SomResolver:
         entry = self._entry(image_path)
         return entry.get("regions", []) if entry else []
 
-    def load_region_masks(self, image_path: str) -> list[dict]:
-        """Return regions with their boolean masks loaded into memory (key "mask")."""
+    def load_region_masks(
+        self, image_path: str, labels: Optional[set[str]] = None
+    ) -> list[dict]:
+        """Return regions with their boolean masks loaded into memory (key "mask").
+
+        If *labels* is given, only those regions are loaded from disk (avoids
+        reading masks that will be discarded, e.g. after question filtering).
+        """
         loaded = []
         for region in self.get_regions(image_path):
+            if labels is not None and region["label"] not in labels:
+                continue
             mask = load_region_mask(self.som_dir / region["mask_path"])
             loaded.append({**region, "mask": mask})
         return loaded

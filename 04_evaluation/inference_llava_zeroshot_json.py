@@ -29,6 +29,7 @@ from utils.mc_json_zeroshot import (
 )
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
 from utils.som import SomResolver
+from utils.som_filter import SomQuestionFilter
 from utils.save_results import clean_answer, save_results
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -89,6 +90,12 @@ def parse_args():
         type=str,
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
+    parser.add_argument(
+        "--som_top_k",
+        type=int,
+        default=5,
+        help="Number of SoM regions to keep per sample after BiomedCLIP question filtering.",
     )
     return parser.parse_args()
 
@@ -254,10 +261,12 @@ def main():
     )
 
     som_resolver: SomResolver | None = None
+    som_filter: SomQuestionFilter | None = None
     if args.use_som:
         som_resolver = SomResolver(args.som_dir)
         som_resolver.load_dataset(args.dataset)
-        print(f"SoM enabled — images loaded from {args.som_dir}/{args.dataset}")
+        som_filter = SomQuestionFilter(device=str(device))
+        print(f"SoM enabled — top_k={args.som_top_k} regions per question, from {args.som_dir}/{args.dataset}")
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
@@ -287,8 +296,11 @@ def main():
             source_image_path = sample.image_path
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
             if som_resolver is not None and args.ablation_mode == "none":
-                effective_image_path = som_resolver.resolve_or_original(effective_image_path)
-            image = Image.open(effective_image_path).convert("RGB")
+                image = som_filter.prepare_image_from_resolver(
+                    som_resolver, effective_image_path, sample.question, top_k=args.som_top_k
+                )
+            else:
+                image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
                 image = Image.new("RGB", image.size, color=(0, 0, 0))
 
