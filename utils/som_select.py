@@ -23,8 +23,9 @@ SEGMENT_SELECTION_PROMPT_TEMPLATE = (
 )
 
 SOM_ANSWER_HINT = (
-    "\n\nNote: numbered colored outlines mark the regions identified as relevant "
-    "to this question. Refer to these region numbers in your explanation where helpful."
+    "\n\nThe numbered colored outlines in the image mark the regions you identified "
+    "as relevant to this question. Base your answer on these marked regions and "
+    'explicitly cite their numbers in your explanation (e.g. "region 3 shows...").'
 )
 
 

@@ -376,6 +376,8 @@ def main():
             source_image_path = sample.image_path
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
             question_for_prompt = sample.question
+            som_selected_regions: list[str] = []
+            som_selection_response = ""
 
             if som_resolver is not None and args.ablation_mode == "none":
                 region_meta = som_resolver.get_regions(effective_image_path)
@@ -402,10 +404,11 @@ def main():
                     selection_text = clean_answer(
                         processor.decode(selection_generated_ids, skip_special_tokens=True).strip()
                     )
-                    selected_labels = parse_selected_labels(selection_text, valid_labels)
+                    som_selection_response = selection_text
+                    som_selected_regions = parse_selected_labels(selection_text, valid_labels)
 
-                    if selected_labels:
-                        selected_regions = [r for r in all_regions if r["label"] in selected_labels]
+                    if som_selected_regions:
+                        selected_regions = [r for r in all_regions if r["label"] in som_selected_regions]
                         image = draw_region_marks(original_image, selected_regions)
                         question_for_prompt = question_with_som_hint(sample.question)
                     else:
@@ -515,6 +518,8 @@ def main():
                     "agreement_samples": sampled_predicted_letters,
                     "entropy_samples": agreement_entropies,
                     "use_reasoning_json": args.use_reasoning_json,
+                    "som_selected_regions": som_selected_regions,
+                    "som_selection_response": som_selection_response,
                 }
             if args.use_reasoning_json:
                 row_out["predicted_reasoning_text"] = pred_reason_text
