@@ -18,12 +18,17 @@ from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
-from utils.som import SomResolver
-from utils.som_filter import SomQuestionFilter
+from utils.som import SomResolver, draw_region_marks
+from utils.som_select import (
+    DEFAULT_SELECTION_MAX_NEW_TOKENS,
+    parse_selected_labels,
+    question_with_som_hint,
+)
 from utils.qwen_vl import (
     DEFAULT_MODEL_PATH,
     build_mc_conversation,
     build_mc_reasoning_inference_conversation,
+    build_segment_selection_conversation,
     configure_qwen_processor_pixels,
     model_short_name,
     parse_mc_reasoning_json_output,
@@ -115,12 +120,6 @@ def parse_args():
         type=str,
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
-    )
-    parser.add_argument(
-        "--som_top_k",
-        type=int,
-        default=5,
-        help="Number of SoM regions to keep per sample after BiomedCLIP question filtering.",
     )
     return parser.parse_args()
 
@@ -344,12 +343,10 @@ def main():
     )
 
     som_resolver: SomResolver | None = None
-    som_filter: SomQuestionFilter | None = None
     if args.use_som:
         som_resolver = SomResolver(args.som_dir)
         som_resolver.load_dataset(args.dataset)
-        som_filter = SomQuestionFilter(device=str(device))
-        print(f"SoM enabled — top_k={args.som_top_k} regions per question, from {args.som_dir}/{args.dataset}")
+        print(f"SoM enabled — model selects relevant regions per question, from {args.som_dir}/{args.dataset}")
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
@@ -378,10 +375,43 @@ def main():
 
             source_image_path = sample.image_path
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+            question_for_prompt = sample.question
+
             if som_resolver is not None and args.ablation_mode == "none":
-                image = som_filter.prepare_image_from_resolver(
-                    som_resolver, effective_image_path, sample.question, top_k=args.som_top_k
-                )
+                region_meta = som_resolver.get_regions(effective_image_path)
+                original_image = Image.open(effective_image_path).convert("RGB")
+                if region_meta:
+                    all_regions = som_resolver.load_region_masks(effective_image_path)
+                    full_marked_image = draw_region_marks(original_image, all_regions)
+                    valid_labels = {r["label"] for r in region_meta}
+
+                    selection_conv = build_segment_selection_conversation(
+                        sample.question, full_marked_image
+                    )
+                    selection_inputs = _move_inputs_to_device(
+                        prepare_qwen_inputs(processor, selection_conv, add_generation_prompt=True),
+                        device,
+                    )
+                    selection_len = selection_inputs["input_ids"].shape[1]
+                    selection_out = model.generate(
+                        **selection_inputs,
+                        max_new_tokens=DEFAULT_SELECTION_MAX_NEW_TOKENS,
+                        do_sample=False,
+                    )
+                    selection_generated_ids = selection_out[0][selection_len:]
+                    selection_text = clean_answer(
+                        processor.decode(selection_generated_ids, skip_special_tokens=True).strip()
+                    )
+                    selected_labels = parse_selected_labels(selection_text, valid_labels)
+
+                    if selected_labels:
+                        selected_regions = [r for r in all_regions if r["label"] in selected_labels]
+                        image = draw_region_marks(original_image, selected_regions)
+                        question_for_prompt = question_with_som_hint(sample.question)
+                    else:
+                        image = original_image
+                else:
+                    image = original_image
             else:
                 image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
@@ -389,14 +419,14 @@ def main():
 
             conversation = (
                 build_mc_reasoning_inference_conversation(
-                    sample.question,
+                    question_for_prompt,
                     sample.mc_options,
                     image=image,
                     answer_first=args.answer_first,
                 )
                 if args.use_reasoning_json
                 else build_mc_conversation(
-                    sample.question,
+                    question_for_prompt,
                     sample.mc_options,
                     image=image,
                 )

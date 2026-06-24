@@ -292,6 +292,22 @@ def build_mc_conversation(
     return conversation
 
 
+def build_segment_selection_conversation(question: str, image: Any) -> List[dict]:
+    """User turn: image with numbered SoM regions + ask which ones are relevant."""
+    from utils.som_select import build_segment_selection_prompt
+
+    prompt_text = build_segment_selection_prompt(question)
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt_text},
+            ],
+        }
+    ]
+
+
 def mask_labels_assistant_only(processor, input_ids: torch.Tensor, conversation: List[dict]) -> torch.Tensor:
     """Mask user/prompt tokens; loss is computed only on the assistant answer."""
     labels = input_ids.clone()

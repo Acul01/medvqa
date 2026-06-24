@@ -30,8 +30,13 @@ from utils.mc_json_zeroshot import (
 )
 from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
-from utils.som import SomResolver
-from utils.som_filter import SomQuestionFilter
+from utils.som import SomResolver, draw_region_marks
+from utils.som_select import (
+    DEFAULT_SELECTION_MAX_NEW_TOKENS,
+    build_segment_selection_prompt,
+    parse_selected_labels,
+    question_with_som_hint,
+)
 from utils.save_results import clean_answer, save_results
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
@@ -92,12 +97,6 @@ def parse_args():
         type=str,
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
-    )
-    parser.add_argument(
-        "--som_top_k",
-        type=int,
-        default=5,
-        help="Number of SoM regions to keep per sample after BiomedCLIP question filtering.",
     )
     return parser.parse_args()
 
@@ -263,12 +262,10 @@ def main():
     )
 
     som_resolver: SomResolver | None = None
-    som_filter: SomQuestionFilter | None = None
     if args.use_som:
         som_resolver = SomResolver(args.som_dir)
         som_resolver.load_dataset(args.dataset)
-        som_filter = SomQuestionFilter(device=str(device))
-        print(f"SoM enabled — top_k={args.som_top_k} regions per question, from {args.som_dir}/{args.dataset}")
+        print(f"SoM enabled — model selects relevant regions per question, from {args.som_dir}/{args.dataset}")
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
@@ -297,10 +294,36 @@ def main():
 
             source_image_path = sample.image_path
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
+            question_for_prompt = sample.question
+
             if som_resolver is not None and args.ablation_mode == "none":
-                image = som_filter.prepare_image_from_resolver(
-                    som_resolver, effective_image_path, sample.question, top_k=args.som_top_k
-                )
+                region_meta = som_resolver.get_regions(effective_image_path)
+                original_image = Image.open(effective_image_path).convert("RGB")
+                if region_meta:
+                    all_regions = som_resolver.load_region_masks(effective_image_path)
+                    full_marked_image = draw_region_marks(original_image, all_regions)
+                    valid_labels = {r["label"] for r in region_meta}
+
+                    selection_text_prompt = build_segment_selection_prompt(sample.question)
+                    selection_inputs, selection_len = _prepare_llava_inputs(
+                        processor, full_marked_image, selection_text_prompt, device
+                    )
+                    selection_out = model.generate(
+                        **selection_inputs,
+                        max_new_tokens=DEFAULT_SELECTION_MAX_NEW_TOKENS,
+                        do_sample=False,
+                    )
+                    selection_text = _decode_llava_new(processor, selection_out, selection_len)
+                    selected_labels = parse_selected_labels(selection_text, valid_labels)
+
+                    if selected_labels:
+                        selected_regions = [r for r in all_regions if r["label"] in selected_labels]
+                        image = draw_region_marks(original_image, selected_regions)
+                        question_for_prompt = question_with_som_hint(sample.question)
+                    else:
+                        image = original_image
+                else:
+                    image = original_image
             else:
                 image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
@@ -312,7 +335,7 @@ def main():
             if is_json_single_shot(args.json_order):
                 json_order = cast_json_single_shot(args.json_order)
                 user_text = build_mc_json_user_text(
-                    sample.question,
+                    question_for_prompt,
                     sample.mc_options,
                     json_order=json_order,
                 )
@@ -377,7 +400,7 @@ def main():
                 }
             else:
                 # Stage 1: greedy reasoning (always do_sample=False)
-                stage1_text = build_stage1_rationale_prompt(sample.question, sample.mc_options)
+                stage1_text = build_stage1_rationale_prompt(question_for_prompt, sample.mc_options)
                 inputs1, len1 = _prepare_llava_inputs(processor, image, stage1_text, device)
                 out1 = model.generate(
                     **inputs1,
@@ -392,7 +415,7 @@ def main():
                     sample_results = []
                     for _ in range(agreement_samples):
                         agr_stage2_prompt = build_stage2_answer_prompt(
-                            sample.question, sample.mc_options, stage1_raw
+                            question_for_prompt, sample.mc_options, stage1_raw
                         )
                         agr_inputs2, agr_len2 = _prepare_llava_inputs(
                             processor, image, agr_stage2_prompt, device
@@ -456,7 +479,7 @@ def main():
                     sample_results = []
                     for _ in range(agreement_samples):
                         agr_stage2_prompt = build_stage2_json_prompt(
-                            sample.question, sample.mc_options, stage1_raw
+                            question_for_prompt, sample.mc_options, stage1_raw
                         )
                         agr_inputs2, agr_len2 = _prepare_llava_inputs(
                             processor, image, agr_stage2_prompt, device

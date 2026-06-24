@@ -20,8 +20,13 @@ from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
-from utils.som import SomResolver
-from utils.som_filter import SomQuestionFilter
+from utils.som import SomResolver, draw_region_marks
+from utils.som_select import (
+    DEFAULT_SELECTION_MAX_NEW_TOKENS,
+    build_segment_selection_prompt,
+    parse_selected_labels,
+    question_with_som_hint,
+)
 from utils.save_results import clean_answer, save_results
 from utils.mc_eval import run_mc_evaluation
 
@@ -85,12 +90,6 @@ def parse_args():
         type=str,
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
-    )
-    parser.add_argument(
-        "--som_top_k",
-        type=int,
-        default=5,
-        help="Number of SoM regions to keep per sample after BiomedCLIP question filtering.",
     )
     return parser.parse_args()
 
@@ -357,12 +356,10 @@ def main():
     shuffle_assignment = _build_shuffle_assignment(samples, args.ablation_seed) if args.ablation_mode == "shuffle" else {}
 
     som_resolver: SomResolver | None = None
-    som_filter: SomQuestionFilter | None = None
     if args.use_som:
         som_resolver = SomResolver(args.som_dir)
         som_resolver.load_dataset(args.dataset)
-        som_filter = SomQuestionFilter(device=str(device))
-        print(f"SoM enabled — top_k={args.som_top_k} regions per question, from {args.som_dir}/{args.dataset}")
+        print(f"SoM enabled — model selects relevant regions per question, from {args.som_dir}/{args.dataset}")
 
     fgr_crop_lookup = prepare_fgr_crop_lookup(
         args.ablation_mode,
@@ -416,10 +413,44 @@ def main():
                     skipped_fgr += 1
                     continue
                 effective_image_path = ablation.effective_image_path
+                question_for_prompt = sample.question
+
                 if som_resolver is not None and args.ablation_mode == "none":
-                    image = som_filter.prepare_image_from_resolver(
-                        som_resolver, effective_image_path, sample.question, top_k=args.som_top_k
-                    )
+                    region_meta = som_resolver.get_regions(effective_image_path)
+                    original_image = Image.open(effective_image_path).convert("RGB")
+                    if region_meta:
+                        all_regions = som_resolver.load_region_masks(effective_image_path)
+                        full_marked_image = draw_region_marks(original_image, all_regions)
+                        valid_labels = {r["label"] for r in region_meta}
+
+                        selection_prompt_text = build_segment_selection_prompt(sample.question)
+                        selection_conv = build_text_only_conversation(selection_prompt_text)
+                        selection_prompt = processor.apply_chat_template(
+                            selection_conv, add_generation_prompt=True
+                        )
+                        selection_inputs = processor(
+                            images=full_marked_image, text=selection_prompt, return_tensors="pt"
+                        ).to(device)
+                        selection_len = selection_inputs["input_ids"].shape[1]
+                        selection_out = model.generate(
+                            **selection_inputs,
+                            max_new_tokens=DEFAULT_SELECTION_MAX_NEW_TOKENS,
+                            do_sample=False,
+                        )
+                        selection_generated_ids = selection_out[0][selection_len:]
+                        selection_text = clean_answer(
+                            processor.decode(selection_generated_ids, skip_special_tokens=True).strip()
+                        )
+                        selected_labels = parse_selected_labels(selection_text, valid_labels)
+
+                        if selected_labels:
+                            selected_regions = [r for r in all_regions if r["label"] in selected_labels]
+                            image = draw_region_marks(original_image, selected_regions)
+                            question_for_prompt = question_with_som_hint(sample.question)
+                        else:
+                            image = original_image
+                    else:
+                        image = original_image
                 else:
                     image = Image.open(effective_image_path).convert("RGB")
                 if args.ablation_mode == "black":
@@ -438,7 +469,7 @@ def main():
                     if gradcam_effective:
                         gradcam_status = "failed"
                         gradcam_error = "unsupported_backend"
-                    reasoning_prompt = build_reasoning_prompt(sample.question)
+                    reasoning_prompt = build_reasoning_prompt(question_for_prompt)
                     reasoning_conv = build_text_only_conversation(reasoning_prompt)
                     reasoning_text = processor.apply_chat_template(reasoning_conv, add_generation_prompt=True)
                     reasoning_inputs = processor(images=image, text=reasoning_text, return_tensors="pt").to(device)
@@ -457,7 +488,7 @@ def main():
                     reasoning_observation = parsed_reasoning["observation"]
                     reasoning_explanation = parsed_reasoning["reasoning"]
                     final_user_prompt = build_final_prompt(
-                        sample.question,
+                        question_for_prompt,
                         sample.mc_options,
                         reasoning_region,
                         reasoning_observation,
@@ -465,7 +496,7 @@ def main():
                     )
                     conversation = build_text_only_conversation(final_user_prompt)
                 else:
-                    conversation = build_conversation(sample.question, sample.mc_options)
+                    conversation = build_conversation(question_for_prompt, sample.mc_options)
 
                 prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
                 inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
