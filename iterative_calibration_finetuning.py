@@ -44,6 +44,7 @@ from utils.qwen_vl import (
 from utils.save_results import clean_answer
 
 REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
 
 REQUIRED_ROW_FIELDS = (
     "image_path",
@@ -89,6 +90,22 @@ class CalibrationRecord:
     question_type: str
     ground_truth_letter: str | None = None
     original_row: dict[str, Any] = field(default_factory=dict)
+    # rationale-first mode ({"reasoning","answer"}): correct + highest confidence
+    rf_confidence: float = float("nan")
+    rf_entropy: float = float("nan")
+    rf_is_correct: bool = False
+    rf_rationale: str | None = None
+    rf_generated_answer: str = ""
+    rf_predicted_letter: str | None = None
+    # answer-first mode ({"answer","reasoning"}): correct + lowest entropy
+    af_confidence: float = float("nan")
+    af_entropy: float = float("nan")
+    af_is_correct: bool = False
+    af_rationale: str | None = None
+    af_generated_answer: str = ""
+    af_predicted_letter: str | None = None
+    # which prompting mode this sample was selected from (active_pseudo training)
+    selection_mode: str | None = None
 
     def to_inference_row(self) -> dict[str, Any]:
         """Serialize to inference-compatible JSON row."""
@@ -107,9 +124,31 @@ class CalibrationRecord:
                 "correct_index": self.correct_index,
                 "question_type": self.question_type,
                 "ground_truth_letter": self.ground_truth_letter,
+                "selection_mode": self.selection_mode,
+                "rationale_first": {
+                    "confidence": self.rf_confidence,
+                    "entropy": self.rf_entropy,
+                    "is_correct": self.rf_is_correct,
+                    "predicted_answer": self.rf_generated_answer,
+                    "predicted_reasoning_text": self.rf_rationale,
+                    "predicted_letter": self.rf_predicted_letter,
+                },
+                "answer_first": {
+                    "confidence": self.af_confidence,
+                    "entropy": self.af_entropy,
+                    "is_correct": self.af_is_correct,
+                    "predicted_answer": self.af_generated_answer,
+                    "predicted_reasoning_text": self.af_rationale,
+                    "predicted_letter": self.af_predicted_letter,
+                },
             }
         )
         return row
+
+
+def record_key(record: CalibrationRecord) -> tuple[str, str]:
+    """Stable identifier for deduplication across iterations."""
+    return (record.image_path, record.question.strip())
 
 
 def record_from_inference_row(row: dict[str, Any]) -> CalibrationRecord:
@@ -149,14 +188,37 @@ def record_from_inference_row(row: dict[str, Any]) -> CalibrationRecord:
         question_type=str(row.get("question_type", "unknown")),
         ground_truth_letter=str(gt_letter).strip().upper(),
         original_row=dict(row),
+        rf_confidence=float(row.get("rationale_first", {}).get("confidence", float("nan"))),
+        rf_entropy=float(row.get("rationale_first", {}).get("entropy", float("nan"))),
+        rf_is_correct=bool(row.get("rationale_first", {}).get("is_correct", False)),
+        rf_rationale=row.get("rationale_first", {}).get("predicted_reasoning_text"),
+        rf_generated_answer=str(row.get("rationale_first", {}).get("predicted_answer", "")),
+        rf_predicted_letter=row.get("rationale_first", {}).get("predicted_letter"),
+        af_confidence=float(row.get("answer_first", {}).get("confidence", float("nan"))),
+        af_entropy=float(row.get("answer_first", {}).get("entropy", float("nan"))),
+        af_is_correct=bool(row.get("answer_first", {}).get("is_correct", False)),
+        af_rationale=row.get("answer_first", {}).get("predicted_reasoning_text"),
+        af_generated_answer=str(row.get("answer_first", {}).get("predicted_answer", "")),
+        af_predicted_letter=row.get("answer_first", {}).get("predicted_letter"),
+        selection_mode=row.get("selection_mode"),
     )
+
+
+def training_rationale(record: CalibrationRecord) -> str | None:
+    """Return the pseudo rationale to use for training based on selection mode."""
+    if record.selection_mode == "rationale_first":
+        return record.rf_rationale
+    if record.selection_mode == "answer_first":
+        return record.af_rationale
+    return record.generated_rationale
 
 
 def record_to_vqa_sample(record: CalibrationRecord, *, dataset: str = "calibration") -> VQASample:
     """Convert a calibration record into a VQASample for Qwen training."""
     metadata = dict(record.original_row)
-    if record.generated_rationale:
-        metadata["pseudo_reasoning_raw"] = record.generated_rationale
+    rationale = training_rationale(record)
+    if rationale:
+        metadata["pseudo_reasoning_raw"] = rationale
         metadata["qwen_verify"] = True
 
     return VQASample(
@@ -181,8 +243,50 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--output_dir", type=str, default=str(Path(get_outputs_root()) / "iter_calib"))
     parser.add_argument("--dataset", type=str, default="unknown", help="Dataset name for logging only")
-    parser.add_argument("--selection_ratio", type=float, required=True)
-    parser.add_argument("--random_ratio", type=float, default=0.20)
+    parser.add_argument(
+        "--selection_strategy",
+        type=str,
+        default="active_pseudo",
+        choices=["active_pseudo", "miscalibration"],
+        help="Sample selection: active_pseudo (confident correct pseudo-labels) or miscalibration (original spec)",
+    )
+    parser.add_argument(
+        "--selection_ratio",
+        type=float,
+        default=0.10,
+        help="Fraction of pool for miscalibration strategy (ignored for active_pseudo)",
+    )
+    parser.add_argument(
+        "--random_ratio",
+        type=float,
+        default=0.20,
+        help="Random fraction within miscalibration selection (ignored for active_pseudo)",
+    )
+    parser.add_argument("--seed_size", type=int, default=100, help="Initial pseudo seed set size (active_pseudo)")
+    parser.add_argument(
+        "--seed_rationale_first",
+        type=int,
+        default=50,
+        help="Seed samples from rationale-first (correct, highest confidence)",
+    )
+    parser.add_argument(
+        "--seed_answer_first",
+        type=int,
+        default=50,
+        help="Seed samples from answer-first (correct, lowest entropy)",
+    )
+    parser.add_argument(
+        "--select_rationale_first",
+        type=int,
+        default=50,
+        help="Per-iteration selection from rationale-first (correct, highest confidence)",
+    )
+    parser.add_argument(
+        "--select_answer_first",
+        type=int,
+        default=50,
+        help="Per-iteration selection from answer-first (correct, lowest entropy)",
+    )
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--lambda_cal", type=float, required=True)
     parser.add_argument("--batch_size", type=int, required=True)
@@ -191,7 +295,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_train_epochs", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--agreement_samples", type=int, default=5)
-    parser.add_argument("--max_new_tokens", type=int, default=8)
+    parser.add_argument("--max_new_tokens", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["float32", "float16", "bfloat16"])
@@ -281,7 +385,6 @@ def load_qwen_model_and_processor(
     base_model: str | None = None,
 ) -> tuple[Any, Any, torch.device]:
     """Load Qwen2.5-VL model and processor with LoRA/spatial-filter support."""
-    inference_mod = _inference_qwen_module()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     resolved_path = os.path.abspath(model_path)
@@ -345,6 +448,181 @@ def load_qwen_model_and_processor(
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
     return model, processor, device
+
+
+def _infer_single_mode(
+    record: CalibrationRecord,
+    *,
+    model: Any,
+    processor: Any,
+    device: torch.device,
+    inference_mod: Any,
+    answer_letter_token_ids: dict[int, str],
+    answer_first: bool,
+    agreement_samples: int,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> dict[str, Any]:
+    """Run one MC reasoning inference pass (rationale-first or answer-first)."""
+    from utils.qwen_vl import build_mc_reasoning_inference_conversation
+
+    sample = record_to_vqa_sample(record)
+    image = Image.open(sample.image_path).convert("RGB")
+    conversation = build_mc_reasoning_inference_conversation(
+        sample.question,
+        sample.mc_options or [],
+        image=image,
+        answer_first=answer_first,
+    )
+    inputs = prepare_qwen_inputs(processor, conversation, add_generation_prompt=True)
+    inputs = _move_inputs_to_device(inputs, device)
+    input_length = inputs["input_ids"].shape[1]
+
+    gen_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False}
+    agreement_gen_kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": True,
+        "temperature": temperature,
+        "top_p": top_p,
+    }
+
+    generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True)
+    generated_ids = generation_output.sequences[0][input_length:]
+    generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
+    num_opts = len(sample.mc_options or [])
+    predicted_letter, pred_reason_text, _ = inference_mod.decode_mc_prediction(
+        generated_text,
+        num_options=num_opts,
+        use_reasoning_json=True,
+    )
+
+    agreement_confidences: list[float] = []
+    agreement_entropies: list[float] = []
+    for _ in range(agreement_samples):
+        sample_output = model.generate(
+            **inputs,
+            **agreement_gen_kwargs,
+            return_dict_in_generate=True,
+            output_logits=True,
+        )
+        sample_generated_ids = sample_output.sequences[0][input_length:]
+        if sample_output.logits:
+            entropy, confidence = compute_confidence_entropy(
+                sample_output.logits,
+                sample_generated_ids,
+                use_reasoning_json=True,
+                num_opts=num_opts,
+                answer_letter_token_ids=answer_letter_token_ids,
+            )
+            agreement_entropies.append(entropy)
+            agreement_confidences.append(confidence)
+
+    confidence = inference_mod._mean_finite(agreement_confidences)
+    entropy = inference_mod._mean_finite(agreement_entropies)
+    ground_truth_letter = sample.answer
+    is_correct = predicted_letter == ground_truth_letter
+
+    return {
+        "confidence": confidence,
+        "entropy": entropy,
+        "is_correct": is_correct,
+        "rationale": pred_reason_text,
+        "generated_answer": generated_text,
+        "predicted_letter": predicted_letter,
+        "ground_truth_letter": ground_truth_letter,
+    }
+
+
+def run_dual_mode_inference(
+    records: list[CalibrationRecord],
+    *,
+    model_path: str,
+    dtype: str,
+    agreement_samples: int,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    output_path: Path | None = None,
+) -> list[CalibrationRecord]:
+    """Run rationale-first and answer-first inference; populate rf_* and af_* fields."""
+    inference_mod = _inference_qwen_module()
+    model, processor, device = load_qwen_model_and_processor(model_path, dtype=dtype)
+    model.eval()
+
+    answer_letter_token_ids = inference_mod._get_answer_letter_token_ids(processor.tokenizer)
+    agreement_samples = max(1, agreement_samples)
+
+    updated: list[CalibrationRecord] = []
+    with torch.no_grad():
+        for record in records:
+            rf = _infer_single_mode(
+                record,
+                model=model,
+                processor=processor,
+                device=device,
+                inference_mod=inference_mod,
+                answer_letter_token_ids=answer_letter_token_ids,
+                answer_first=False,
+                agreement_samples=agreement_samples,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+            af = _infer_single_mode(
+                record,
+                model=model,
+                processor=processor,
+                device=device,
+                inference_mod=inference_mod,
+                answer_letter_token_ids=answer_letter_token_ids,
+                answer_first=True,
+                agreement_samples=agreement_samples,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+
+            updated.append(
+                CalibrationRecord(
+                    image_path=record.image_path,
+                    question=record.question,
+                    ground_truth_answer=record.ground_truth_answer,
+                    generated_answer=af["generated_answer"],
+                    generated_rationale=af["rationale"],
+                    confidence=af["confidence"],
+                    entropy=af["entropy"],
+                    is_correct=af["is_correct"],
+                    options=record.options,
+                    correct_index=record.correct_index,
+                    question_type=record.question_type,
+                    ground_truth_letter=rf["ground_truth_letter"],
+                    original_row=record.original_row,
+                    rf_confidence=rf["confidence"],
+                    rf_entropy=rf["entropy"],
+                    rf_is_correct=rf["is_correct"],
+                    rf_rationale=rf["rationale"],
+                    rf_generated_answer=rf["generated_answer"],
+                    rf_predicted_letter=rf["predicted_letter"],
+                    af_confidence=af["confidence"],
+                    af_entropy=af["entropy"],
+                    af_is_correct=af["is_correct"],
+                    af_rationale=af["rationale"],
+                    af_generated_answer=af["generated_answer"],
+                    af_predicted_letter=af["predicted_letter"],
+                    selection_mode=record.selection_mode,
+                )
+            )
+
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump([item.to_inference_row() for item in updated], handle, indent=2, ensure_ascii=False)
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return updated
 
 
 def run_inference(
@@ -561,6 +839,151 @@ def sample_calibration_dataset(
     return selected, stats
 
 
+def _tag_selected_record(record: CalibrationRecord, mode: str) -> CalibrationRecord:
+    """Return a copy tagged with selection_mode for answer-first training."""
+    rationale = record.rf_rationale if mode == "rationale_first" else record.af_rationale
+    generated = record.rf_generated_answer if mode == "rationale_first" else record.af_generated_answer
+    confidence = record.rf_confidence if mode == "rationale_first" else record.af_confidence
+    entropy = record.rf_entropy if mode == "rationale_first" else record.af_entropy
+    return CalibrationRecord(
+        image_path=record.image_path,
+        question=record.question,
+        ground_truth_answer=record.ground_truth_answer,
+        generated_answer=generated,
+        generated_rationale=rationale,
+        confidence=confidence,
+        entropy=entropy,
+        is_correct=True,
+        options=record.options,
+        correct_index=record.correct_index,
+        question_type=record.question_type,
+        ground_truth_letter=record.ground_truth_letter,
+        original_row=record.original_row,
+        rf_confidence=record.rf_confidence,
+        rf_entropy=record.rf_entropy,
+        rf_is_correct=record.rf_is_correct,
+        rf_rationale=record.rf_rationale,
+        rf_generated_answer=record.rf_generated_answer,
+        rf_predicted_letter=record.rf_predicted_letter,
+        af_confidence=record.af_confidence,
+        af_entropy=record.af_entropy,
+        af_is_correct=record.af_is_correct,
+        af_rationale=record.af_rationale,
+        af_generated_answer=record.af_generated_answer,
+        af_predicted_letter=record.af_predicted_letter,
+        selection_mode=mode,
+    )
+
+
+def _select_active_mode(
+    records: list[CalibrationRecord],
+    *,
+    mode: str,
+    count: int,
+    exclude_keys: set[tuple[str, str]],
+) -> list[CalibrationRecord]:
+    """Select top-k correct pseudo samples for one prompting mode."""
+    if mode == "rationale_first":
+        candidates = [
+            record
+            for record in records
+            if record.rf_is_correct and math.isfinite(record.rf_confidence)
+        ]
+        candidates.sort(key=lambda record: record.rf_confidence, reverse=True)
+    elif mode == "answer_first":
+        candidates = [
+            record
+            for record in records
+            if record.af_is_correct and math.isfinite(record.af_entropy)
+        ]
+        candidates.sort(key=lambda record: record.af_entropy)
+    else:
+        raise ValueError(f"Unknown mode {mode!r}")
+
+    selected: list[CalibrationRecord] = []
+    for record in candidates:
+        key = record_key(record)
+        if key in exclude_keys:
+            continue
+        selected.append(_tag_selected_record(record, mode))
+        exclude_keys.add(key)
+        if len(selected) >= count:
+            break
+    return selected
+
+
+def build_seed_set(
+    unseen: list[CalibrationRecord],
+    *,
+    seed_rationale_first: int,
+    seed_answer_first: int,
+) -> tuple[list[CalibrationRecord], list[CalibrationRecord], dict[str, Any]]:
+    """Build initial pseudo seed set: correct + highest confidence (RF) and lowest entropy (AF)."""
+    exclude_keys: set[tuple[str, str]] = set()
+    rf_selected = _select_active_mode(
+        unseen,
+        mode="rationale_first",
+        count=seed_rationale_first,
+        exclude_keys=exclude_keys,
+    )
+    af_selected = _select_active_mode(
+        unseen,
+        mode="answer_first",
+        count=seed_answer_first,
+        exclude_keys=exclude_keys,
+    )
+    selected = rf_selected + af_selected
+    selected_keys = {record_key(record) for record in selected}
+    remaining = [record for record in unseen if record_key(record) not in selected_keys]
+
+    stats = {
+        "n_selected": len(selected),
+        "n_rationale_first": len(rf_selected),
+        "n_answer_first": len(af_selected),
+        "n_unseen_remaining": len(remaining),
+        "fraction_rationale_first": len(rf_selected) / len(selected) if selected else 0.0,
+        "fraction_answer_first": len(af_selected) / len(selected) if selected else 0.0,
+        "strategy": "active_pseudo_seed",
+    }
+    return selected, remaining, stats
+
+
+def sample_active_calibration(
+    unseen: list[CalibrationRecord],
+    *,
+    select_rationale_first: int,
+    select_answer_first: int,
+) -> tuple[list[CalibrationRecord], list[CalibrationRecord], dict[str, Any]]:
+    """Select per-iteration pseudo samples from unseen pool (both modes, correct only)."""
+    exclude_keys: set[tuple[str, str]] = set()
+    rf_selected = _select_active_mode(
+        unseen,
+        mode="rationale_first",
+        count=select_rationale_first,
+        exclude_keys=exclude_keys,
+    )
+    af_selected = _select_active_mode(
+        unseen,
+        mode="answer_first",
+        count=select_answer_first,
+        exclude_keys=exclude_keys,
+    )
+    selected = rf_selected + af_selected
+    selected_keys = {record_key(record) for record in selected}
+    remaining = [record for record in unseen if record_key(record) not in selected_keys]
+
+    stats = {
+        "n_selected": len(selected),
+        "n_rationale_first": len(rf_selected),
+        "n_answer_first": len(af_selected),
+        "n_unseen_remaining": len(remaining),
+        "fraction_rationale_first": len(rf_selected) / len(selected) if selected else 0.0,
+        "fraction_answer_first": len(af_selected) / len(selected) if selected else 0.0,
+        "strategy": "active_pseudo",
+    }
+    return selected, remaining, stats
+
+
 @dataclass
 class CalibrationVLDataCollator(QwenVLDataCollator):
     """Extend Qwen collator to batch calibration targets."""
@@ -602,11 +1025,12 @@ class CalibrationTrainDataset(Dataset):
         sample = record_to_vqa_sample(record, dataset=self.dataset_name)
         image = Image.open(sample.image_path).convert("RGB")
 
-        if self.use_reasoning and record.generated_rationale:
+        rationale = training_rationale(record)
+        if self.use_reasoning and rationale:
             conversation = build_mc_reasoning_conversation(
                 sample.question,
                 sample.mc_options or [],
-                reasoning_raw=record.generated_rationale,
+                reasoning_raw=rationale,
                 answer=sample.answer,
                 image=image,
                 answer_first=self.answer_first,
@@ -789,18 +1213,43 @@ def evaluate_iteration(
 ) -> dict[str, Any]:
     """Evaluate holdout accuracy, AURC, and ECE after an iteration."""
     holdout_path = output_dir / "holdout_inference.json"
-    refreshed = run_inference(
-        holdout,
-        model_path=model_path,
-        dtype=args.dtype,
-        use_reasoning=args.use_reasoning,
-        answer_first=args.answer_first,
-        agreement_samples=args.agreement_samples,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        output_path=holdout_path,
+    max_tokens = args.max_new_tokens or (
+        DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+        if args.selection_strategy == "active_pseudo" or args.use_reasoning
+        else 8
     )
+
+    if args.selection_strategy == "active_pseudo":
+        refreshed = run_dual_mode_inference(
+            holdout,
+            model_path=model_path,
+            dtype=args.dtype,
+            agreement_samples=args.agreement_samples,
+            max_new_tokens=max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            output_path=holdout_path,
+        )
+        # Primary eval metrics from answer-first pass (matches training schema)
+        for record in refreshed:
+            record.confidence = record.af_confidence
+            record.entropy = record.af_entropy
+            record.is_correct = record.af_is_correct
+            record.generated_answer = record.af_generated_answer
+            record.generated_rationale = record.af_rationale
+    else:
+        refreshed = run_inference(
+            holdout,
+            model_path=model_path,
+            dtype=args.dtype,
+            use_reasoning=args.use_reasoning,
+            answer_first=args.answer_first,
+            agreement_samples=args.agreement_samples,
+            max_new_tokens=max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            output_path=holdout_path,
+        )
 
     metrics = run_mc_evaluation(holdout_path, metrics_output_path=output_dir / "holdout_eval.json")
     accuracy = float(metrics["overall"]["accuracy"])
@@ -840,6 +1289,26 @@ def main() -> None:
     args = parse_args()
     set_seed(args.seed)
 
+    if args.selection_strategy == "active_pseudo":
+        args.use_reasoning = True
+        args.answer_first = True
+        if args.seed_rationale_first + args.seed_answer_first != args.seed_size:
+            print(
+                f"Warning: seed_rationale_first ({args.seed_rationale_first}) + "
+                f"seed_answer_first ({args.seed_answer_first}) != seed_size ({args.seed_size})"
+            )
+        if args.select_rationale_first + args.select_answer_first != args.seed_size:
+            print(
+                f"Warning: select_rationale_first ({args.select_rationale_first}) + "
+                f"select_answer_first ({args.select_answer_first}) != seed_size ({args.seed_size})"
+            )
+
+    max_tokens = args.max_new_tokens or (
+        DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+        if args.selection_strategy == "active_pseudo" or args.use_reasoning
+        else 8
+    )
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -858,53 +1327,85 @@ def main() -> None:
         project=args.wandb_project,
         name=run_name,
         config=vars(args),
-        tags=["iterative_calibration", args.dataset],
+        tags=["iterative_calibration", args.dataset, args.selection_strategy],
     )
 
     current_model_path = args.model_path
     history: list[dict[str, Any]] = []
+    unseen: list[CalibrationRecord] = list(pool)
 
     for iteration in range(args.iterations):
         iter_dir = output_dir / f"iter_{iteration}"
         iter_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n=== Iteration {iteration} ===")
+        print(f"\n=== Iteration {iteration} ({args.selection_strategy}) ===")
 
-        if iteration > 0:
-            print("Running inference on active-learning pool...")
-            pool = run_inference(
-                pool,
+        if args.selection_strategy == "active_pseudo":
+            print(f"Running dual-mode inference on {len(unseen)} unseen samples...")
+            unseen = run_dual_mode_inference(
+                unseen,
                 model_path=current_model_path,
                 dtype=args.dtype,
-                use_reasoning=args.use_reasoning,
-                answer_first=args.answer_first,
                 agreement_samples=args.agreement_samples,
-                max_new_tokens=args.max_new_tokens,
+                max_new_tokens=max_tokens,
                 temperature=args.temperature,
                 top_p=args.top_p,
-                output_path=iter_dir / "pool_inference.json",
+                output_path=iter_dir / "unseen_inference.json",
             )
 
-        calibration_diag = identify_calibration_errors(pool)
-        selected, selection_stats = sample_calibration_dataset(
-            pool,
-            selection_ratio=args.selection_ratio,
-            random_ratio=args.random_ratio,
-            seed=args.seed,
-            iteration=iteration,
-        )
+            if iteration == 0:
+                selected, unseen, selection_stats = build_seed_set(
+                    unseen,
+                    seed_rationale_first=args.seed_rationale_first,
+                    seed_answer_first=args.seed_answer_first,
+                )
+            else:
+                selected, unseen, selection_stats = sample_active_calibration(
+                    unseen,
+                    select_rationale_first=args.select_rationale_first,
+                    select_answer_first=args.select_answer_first,
+                )
+            calibration_diag = identify_calibration_errors(unseen)
+        else:
+            if iteration > 0:
+                print("Running inference on active-learning pool...")
+                pool = run_inference(
+                    pool,
+                    model_path=current_model_path,
+                    dtype=args.dtype,
+                    use_reasoning=args.use_reasoning,
+                    answer_first=args.answer_first,
+                    agreement_samples=args.agreement_samples,
+                    max_new_tokens=max_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    output_path=iter_dir / "pool_inference.json",
+                )
+
+            calibration_diag = identify_calibration_errors(pool)
+            selected, selection_stats = sample_calibration_dataset(
+                pool,
+                selection_ratio=args.selection_ratio,
+                random_ratio=args.random_ratio,
+                seed=args.seed,
+                iteration=iteration,
+            )
+
         with open(iter_dir / "selected_samples.json", "w", encoding="utf-8") as handle:
             json.dump([record.to_inference_row() for record in selected], handle, indent=2, ensure_ascii=False)
 
         train_metrics = {"answer_loss": 0.0, "calibration_loss": 0.0, "train_loss": 0.0}
         if not args.skip_train:
-            print(f"Training on {len(selected)} selected samples...")
-            train_metrics = train_iteration(
-                selected,
-                model_path=current_model_path,
-                output_dir=iter_dir,
-                args=args,
-            )
-            current_model_path = str(iter_dir)
+            if not selected:
+                print("Warning: no samples selected; skipping training.")
+            else:
+                print(f"Training on {len(selected)} selected samples...")
+                train_metrics = train_iteration(
+                    selected,
+                    model_path=current_model_path,
+                    output_dir=iter_dir,
+                    args=args,
+                )
+                current_model_path = str(iter_dir)
         else:
             print("Skipping training (--skip_train).")
 
@@ -916,8 +1417,9 @@ def main() -> None:
             args=args,
         )
 
-        iteration_metrics = {
+        iteration_metrics: dict[str, Any] = {
             "iteration": iteration,
+            "selection_strategy": args.selection_strategy,
             "model_path": current_model_path,
             "accuracy": eval_metrics["accuracy"],
             "answer_loss": train_metrics["answer_loss"],
@@ -926,12 +1428,26 @@ def main() -> None:
             "aurc": eval_metrics["aurc"],
             "ece": eval_metrics["ece"],
             "n_selected": selection_stats["n_selected"],
-            "fraction_correct_high_entropy": selection_stats["fraction_correct_high_entropy"],
-            "fraction_wrong_high_confidence": selection_stats["fraction_wrong_high_confidence"],
-            "fraction_random": selection_stats["fraction_random"],
             "selection_stats": selection_stats,
             "calibration_diagnostics": calibration_diag,
         }
+
+        if args.selection_strategy == "active_pseudo":
+            iteration_metrics.update(
+                {
+                    "n_unseen_remaining": selection_stats.get("n_unseen_remaining", len(unseen)),
+                    "fraction_rationale_first": selection_stats.get("fraction_rationale_first", 0.0),
+                    "fraction_answer_first": selection_stats.get("fraction_answer_first", 0.0),
+                }
+            )
+        else:
+            iteration_metrics.update(
+                {
+                    "fraction_correct_high_entropy": selection_stats["fraction_correct_high_entropy"],
+                    "fraction_wrong_high_confidence": selection_stats["fraction_wrong_high_confidence"],
+                    "fraction_random": selection_stats["fraction_random"],
+                }
+            )
 
         with open(iter_dir / "metrics.json", "w", encoding="utf-8") as handle:
             json.dump(iteration_metrics, handle, indent=2, ensure_ascii=False)
@@ -949,12 +1465,16 @@ def main() -> None:
         )
         print(json.dumps(iteration_metrics, indent=2))
 
-    summary = {"iterations": args.iterations, "history": history}
+        if args.selection_strategy == "active_pseudo" and not unseen:
+            print("Unseen pool exhausted; stopping early.")
+            break
+
+    summary = {"iterations": args.iterations, "selection_strategy": args.selection_strategy, "history": history}
     with open(output_dir / "summary.json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
 
     wandb.finish()
-    print(f"\nCompleted {args.iterations} iteration(s). Summary: {output_dir / 'summary.json'}")
+    print(f"\nCompleted. Summary: {output_dir / 'summary.json'}")
 
 
 if __name__ == "__main__":
