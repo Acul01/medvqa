@@ -70,7 +70,7 @@ def save_results(
 
     df = pd.DataFrame(results)
     df_export = df.copy()
-    for col in ("entropy_tokens", "options"):
+    for col in ("entropy_tokens", "entropy_tokens_all", "options"):
         if col in df_export.columns:
             df_export[col] = df_export[col].apply(
                 lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v

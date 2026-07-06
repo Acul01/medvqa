@@ -500,7 +500,7 @@ PYTHONPATH=. python 04_evaluation/inference_qwen.py \
 - bei `crop_unsupervised` / `crop_supervised`: zusätzlich `fgr_crop_path` (effektives Crop-Bild; `image_path` ist gleich gesetzt)
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - **Qwen:** `entropy` und `confidence` sind Mittel über `--agreement_samples` (Default 5) stochastische Läufe; `predicted_answer` / `predicted_letter` kommen vom greedy Hauptlauf. Zusätzlich `entropy_samples` (K Einzelwerte pro Zeile).
-- **Qwen** mit `--use_reasoning_json`: `use_reasoning_json`, `predicted_reasoning_text`, `predicted_json_parse_ok` zusätzlich zu `predicted_answer` / `predicted_letter`
+- **Qwen** mit `--use_reasoning_json`: `use_reasoning_json`, `predicted_reasoning_text`, `predicted_json_parse_ok`, `entropy_tokens_all` (tokenweise Entropy über die gesamte JSON-Generierung des greedy Hauptlaufs), `entropy_sequence_mean` (Mittel darüber) zusätzlich zu `predicted_answer` / `predicted_letter`. Scalar `entropy` bleibt Antwort-Token-Entropy, Mean über K Agreement-Samples.
 - optional 2-stage Felder: `reasoning_raw`, `reasoning_region`, `reasoning_observation`, `reasoning_explanation`, `reasoning_parse_mode` (`best_effort`)
 - optionale Strict-Decoding-Felder: `stage2_decoding_mode`, `stage2_option_probs`
 - optionale GradCAM-Felder: `use_gradcam`, `gradcam_status`, `gradcam_error`, `gradcam_overlay_path`, `gradcam_heatmap_path`
@@ -512,7 +512,7 @@ Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veral
 
 **Qwen2.5-VL:** `inference_qwen.py` — MC-Inferenz mit Entropie, Agreement, Confidence und Ablationen (`black`/`shuffle`); **ohne** 2-Stage-Reasoning und GradCAM.
 
-**Unsicherheit (Qwen):** `--agreement_samples K` (Default 5) steuert `agreement`, `confidence` und `entropy` gemeinsam — letztere beiden sind arithmetische Mittel über K stochastische Generierungen (`temperature`/`top_p`). Answer-only: Token-Entropy am ersten generierten Token; mit `--use_reasoning_json`: am Antwort-Buchstaben-Token im JSON. Der greedy Hauptlauf liefert nur `predicted_*`. Im Reasoning-Modus können Einzel-Token-Entropien weiterhin sehr klein sein (spitze Verteilung nach dem Reasoning).
+**Unsicherheit (Qwen):** `--agreement_samples K` (Default 5) steuert `agreement`, `confidence` und scalar `entropy` gemeinsam — letztere beiden sind arithmetische Mittel über K stochastische Generierungen (`temperature`/`top_p`). Answer-only: Token-Entropy am ersten generierten Token; mit `--use_reasoning_json`: scalar `entropy` am Antwort-Buchstaben-Token im JSON. Der greedy Hauptlauf liefert `predicted_*`; mit `--use_reasoning_json` zusätzlich `entropy_tokens_all` (Entropy pro generiertem Token der JSON-Antwort) und `entropy_sequence_mean`.
 
 Mit **`--use_reasoning_json`** erfolgt denselben **JSON-Assistenz-Contract** wie bei `train_qwen.py --use_reasoning`: Antwort nur als `{\"reasoning\":\"...\",\"answer\":\"<Buchstabe>\"}` (siehe `utils/qwen_vl.py` → `MC_JSON_RESPONSE_INSTRUCTION`). **`--max_new_tokens`** sollte erhöht bleiben (Default bei gesetztem Flag: 320); manuell setzbar wenn längere Reasonings erwartet werden. Pro Zeile zusätzliche Felder: `predicted_reasoning_text`, `predicted_json_parse_ok`, sowie `predicted_answer` (Rohtext).
 

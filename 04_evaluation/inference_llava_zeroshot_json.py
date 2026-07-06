@@ -374,8 +374,9 @@ def main():
                     sample_results[-1],
                 )
                 agreement = _compute_agreement(sampled_predicted_letters)
-                entropy_mean = _mean_finite([r[2] for r in sample_results])
-                confidence = _mean_finite([r[3] for r in sample_results])
+                majority_results = [r for r in sample_results if r[1].predicted_letter == predicted_letter]
+                entropy_mean = _mean_finite([r[2] for r in majority_results])
+                confidence = _mean_finite([r[3] for r in majority_results])
                 entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                 row_out = {
@@ -451,8 +452,9 @@ def main():
                         sample_results[-1],
                     )
                     agreement = _compute_agreement(sampled_predicted_letters)
-                    entropy_mean = _mean_finite([r[2] for r in sample_results])
-                    confidence = _mean_finite([r[3] for r in sample_results])
+                    majority_results = [r for r in sample_results if r[1] == predicted_letter]
+                    entropy_mean = _mean_finite([r[2] for r in majority_results])
+                    confidence = _mean_finite([r[3] for r in majority_results])
                     entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                     row_out = {
@@ -517,8 +519,9 @@ def main():
                         sample_results[-1],
                     )
                     agreement = _compute_agreement(sampled_predicted_letters)
-                    entropy_mean = _mean_finite([r[2] for r in sample_results])
-                    confidence = _mean_finite([r[3] for r in sample_results])
+                    majority_results = [r for r in sample_results if r[1].predicted_letter == predicted_letter]
+                    entropy_mean = _mean_finite([r[2] for r in majority_results])
+                    confidence = _mean_finite([r[3] for r in majority_results])
                     entropy_tokens = {predicted_letter or "?": entropy_mean}
 
                     row_out = {

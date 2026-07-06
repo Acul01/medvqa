@@ -213,6 +213,49 @@ def _compute_answer_token_stats(
     return entropy, confidence
 
 
+def _compute_token_entropies_from_logits(
+    step_logits,
+    generated_ids: torch.Tensor,
+    tokenizer,
+) -> tuple[dict[str, float], float]:
+    """Per generated token: Shannon entropy from raw logits (greedy main run)."""
+    n = min(len(step_logits), int(generated_ids.shape[0]))
+    if n == 0:
+        return {}, float("nan")
+
+    special_tokens = set(getattr(tokenizer, "all_special_tokens", []))
+    entropy_tokens: dict[str, float] = {}
+    entropies: list[float] = []
+
+    for step_logits_i, token_id in zip(step_logits[:n], generated_ids[:n].tolist()):
+        token_id = int(token_id)
+        if tokenizer.convert_ids_to_tokens(token_id) in special_tokens:
+            continue
+
+        entropy = _entropy_from_logits(step_logits_i[0])
+        entropies.append(entropy)
+
+        token_text = tokenizer.decode(
+            [token_id],
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        ).strip()
+        if not token_text:
+            continue
+
+        if token_text in entropy_tokens:
+            dup_idx = 2
+            candidate = f"{token_text}#{dup_idx}"
+            while candidate in entropy_tokens:
+                dup_idx += 1
+                candidate = f"{token_text}#{dup_idx}"
+            token_text = candidate
+        entropy_tokens[token_text] = entropy
+
+    sequence_mean = sum(entropies) / len(entropies) if entropies else float("nan")
+    return entropy_tokens, sequence_mean
+
+
 def main():
     args = parse_args()
     if args.max_new_tokens is None:
@@ -442,11 +485,14 @@ def main():
             inputs = _move_inputs_to_device(inputs, device)
             input_length = inputs["input_ids"].shape[1]
 
-            generation_output = model.generate(
-                **inputs,
+            main_gen_kwargs = {
                 **gen_kwargs,
-                return_dict_in_generate=True,
-            )
+                "return_dict_in_generate": True,
+            }
+            if args.use_reasoning_json:
+                main_gen_kwargs["output_logits"] = True
+
+            generation_output = model.generate(**inputs, **main_gen_kwargs)
             generated_ids = generation_output.sequences[0][input_length:]
             generated_text = clean_answer(
                 processor.decode(generated_ids, skip_special_tokens=True).strip()
@@ -456,6 +502,15 @@ def main():
                 generated_text, num_options=num_opts, use_reasoning_json=args.use_reasoning_json
             )
             ground_truth_letter = sample.answer
+
+            entropy_tokens_all: dict[str, float] = {}
+            entropy_sequence_mean = float("nan")
+            if args.use_reasoning_json and getattr(generation_output, "logits", None):
+                entropy_tokens_all, entropy_sequence_mean = _compute_token_entropies_from_logits(
+                    generation_output.logits,
+                    generated_ids,
+                    processor.tokenizer,
+                )
 
             sampled_predicted_letters = []
             agreement_confidences = []
@@ -524,6 +579,8 @@ def main():
             if args.use_reasoning_json:
                 row_out["predicted_reasoning_text"] = pred_reason_text
                 row_out["predicted_json_parse_ok"] = json_ok
+                row_out["entropy_tokens_all"] = entropy_tokens_all
+                row_out["entropy_sequence_mean"] = entropy_sequence_mean
             results.append(row_out)
 
     total = len(results)
