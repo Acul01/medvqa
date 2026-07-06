@@ -163,7 +163,7 @@ def compute_ece(
     n_bins: int = 15,
 ) -> float | None:
     """Expected Calibration Error via uniform binning over [0, 1]."""
-    if len(confidences) != len(correctness) or len(confidences) < n_bins:
+    if len(confidences) != len(correctness):
         return None
 
     pairs = [
@@ -171,15 +171,20 @@ def compute_ece(
         for conf, corr in zip(confidences, correctness)
         if isinstance(conf, (int, float)) and not math.isnan(conf)
     ]
-    if len(pairs) < n_bins:
+    if len(pairs) < 2:
         return None
 
+    effective_bins = min(n_bins, len(pairs))
     total = len(pairs)
     ece = 0.0
-    for bin_idx in range(n_bins):
-        low = bin_idx / n_bins
-        high = (bin_idx + 1) / n_bins
-        bucket = [(conf, corr) for conf, corr in pairs if low <= conf < high or (bin_idx == n_bins - 1 and conf == 1.0)]
+    for bin_idx in range(effective_bins):
+        low = bin_idx / effective_bins
+        high = (bin_idx + 1) / effective_bins
+        bucket = [
+            (conf, corr)
+            for conf, corr in pairs
+            if low <= conf < high or (bin_idx == effective_bins - 1 and conf == 1.0)
+        ]
         if not bucket:
             continue
         avg_conf = sum(conf for conf, _ in bucket) / len(bucket)

@@ -15,6 +15,7 @@ from typing import Any
 import torch
 import wandb
 from PIL import Image
+from tqdm import tqdm
 from torch.utils.data import Dataset
 from transformers import (
     AutoProcessor,
@@ -27,7 +28,7 @@ from transformers.trainer_utils import set_seed
 from calibration_losses import build_losses, compute_ece
 from utils.load_data import MedicalVQALoader, VQASample
 from utils.mc_eval import run_mc_evaluation
-from utils.mc_vqa import correct_index_to_letter
+from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_outputs_root
 from utils.qwen_vl import (
     DEFAULT_MODEL_PATH,
@@ -41,7 +42,7 @@ from utils.qwen_vl import (
     resolve_processor_path,
     squeeze_batch_dim,
 )
-from utils.save_results import clean_answer
+from utils.save_results import clean_answer, save_results
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
@@ -109,6 +110,7 @@ class CalibrationRecord:
 
     def to_inference_row(self) -> dict[str, Any]:
         """Serialize to inference-compatible JSON row."""
+        predicted_letter = self._resolved_predicted_letter()
         row = dict(self.original_row)
         row.update(
             {
@@ -116,6 +118,7 @@ class CalibrationRecord:
                 "question": self.question,
                 "ground_truth_answer": self.ground_truth_answer,
                 "predicted_answer": self.generated_answer,
+                "predicted_letter": predicted_letter,
                 "predicted_reasoning_text": self.generated_rationale,
                 "confidence": self.confidence,
                 "entropy": self.entropy,
@@ -144,6 +147,15 @@ class CalibrationRecord:
             }
         )
         return row
+
+    def _resolved_predicted_letter(self) -> str | None:
+        """Best-effort predicted letter for MC eval exports."""
+        for letter in (self.af_predicted_letter, self.rf_predicted_letter):
+            if isinstance(letter, str) and letter.strip():
+                return letter.strip().upper()
+        if self.generated_answer:
+            return parse_predicted_letter(self.generated_answer, num_options=len(self.options))
+        return None
 
 
 def record_key(record: CalibrationRecord) -> tuple[str, str]:
@@ -524,7 +536,12 @@ def _infer_single_mode(
         "top_p": top_p,
     }
 
-    generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True)
+    generation_output = model.generate(
+        **inputs,
+        **gen_kwargs,
+        return_dict_in_generate=True,
+        output_logits=True,
+    )
     generated_ids = generation_output.sequences[0][input_length:]
     generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
     num_opts = len(sample.mc_options or [])
@@ -557,6 +574,18 @@ def _infer_single_mode(
 
     confidence = inference_mod._mean_finite(agreement_confidences)
     entropy = inference_mod._mean_finite(agreement_entropies)
+    if (not math.isfinite(confidence) or not math.isfinite(entropy)) and generation_output.logits:
+        greedy_entropy, greedy_confidence = compute_confidence_entropy(
+            generation_output.logits,
+            generated_ids,
+            use_reasoning_json=True,
+            num_opts=num_opts,
+            answer_letter_token_ids=answer_letter_token_ids,
+        )
+        if not math.isfinite(confidence):
+            confidence = greedy_confidence
+        if not math.isfinite(entropy):
+            entropy = greedy_entropy
     ground_truth_letter = sample.answer
     is_correct = predicted_letter == ground_truth_letter
 
@@ -592,7 +621,7 @@ def run_dual_mode_inference(
 
     updated: list[CalibrationRecord] = []
     with torch.no_grad():
-        for record in records:
+        for record in tqdm(records, desc="Dual-mode inference", unit="sample"):
             rf = _infer_single_mode(
                 record,
                 model=model,
@@ -694,7 +723,7 @@ def run_inference(
 
     updated: list[CalibrationRecord] = []
     with torch.no_grad():
-        for record in records:
+        for record in tqdm(records, desc="Inference", unit="sample"):
             sample = record_to_vqa_sample(record)
             image = Image.open(sample.image_path).convert("RGB")
             conversation = (
@@ -715,7 +744,12 @@ def run_inference(
             inputs = _move_inputs_to_device(inputs, device)
             input_length = inputs["input_ids"].shape[1]
 
-            generation_output = model.generate(**inputs, **gen_kwargs, return_dict_in_generate=True)
+            generation_output = model.generate(
+                **inputs,
+                **gen_kwargs,
+                return_dict_in_generate=True,
+                output_logits=True,
+            )
             generated_ids = generation_output.sequences[0][input_length:]
             generated_text = clean_answer(
                 processor.decode(generated_ids, skip_special_tokens=True).strip()
@@ -750,6 +784,18 @@ def run_inference(
 
             confidence = inference_mod._mean_finite(agreement_confidences)
             entropy = inference_mod._mean_finite(agreement_entropies)
+            if (not math.isfinite(confidence) or not math.isfinite(entropy)) and generation_output.logits:
+                greedy_entropy, greedy_confidence = compute_confidence_entropy(
+                    generation_output.logits,
+                    generated_ids,
+                    use_reasoning_json=use_reasoning,
+                    num_opts=num_opts,
+                    answer_letter_token_ids=answer_letter_token_ids,
+                )
+                if not math.isfinite(confidence):
+                    confidence = greedy_confidence
+                if not math.isfinite(entropy):
+                    entropy = greedy_entropy
             ground_truth_letter = sample.answer
             is_correct = predicted_letter == ground_truth_letter
 
@@ -767,6 +813,14 @@ def run_inference(
                 question_type=record.question_type,
                 ground_truth_letter=ground_truth_letter,
                 original_row=record.original_row,
+                rf_predicted_letter=predicted_letter if use_reasoning and not answer_first else None,
+                af_predicted_letter=predicted_letter if use_reasoning and answer_first else predicted_letter,
+                rf_confidence=confidence,
+                rf_entropy=entropy,
+                rf_is_correct=is_correct,
+                af_confidence=confidence,
+                af_entropy=entropy,
+                af_is_correct=is_correct,
             )
             updated.append(refreshed)
 
@@ -1241,15 +1295,161 @@ def train_iteration(
     }
 
 
+def _apply_primary_eval_view(record: CalibrationRecord, *, primary: str = "answer_first") -> None:
+    """Set top-level eval fields from the chosen prompting mode (in-place)."""
+    if primary == "rationale_first":
+        record.confidence = record.rf_confidence
+        record.entropy = record.rf_entropy
+        record.is_correct = record.rf_is_correct
+        record.generated_answer = record.rf_generated_answer
+        record.generated_rationale = record.rf_rationale
+    else:
+        record.confidence = record.af_confidence
+        record.entropy = record.af_entropy
+        record.is_correct = record.af_is_correct
+        record.generated_answer = record.af_generated_answer
+        record.generated_rationale = record.af_rationale
+
+
+def _mode_metric_rows(records: list[CalibrationRecord], mode: str) -> list[dict[str, Any]]:
+    """Build inference rows using one dual-mode pass for AURC / breakdown metrics."""
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        row = record.to_inference_row()
+        if mode == "rationale_first":
+            row["predicted_answer"] = record.rf_generated_answer
+            row["predicted_letter"] = record.rf_predicted_letter
+            row["predicted_reasoning_text"] = record.rf_rationale
+            row["confidence"] = record.rf_confidence
+            row["entropy"] = record.rf_entropy
+            row["is_correct"] = record.rf_is_correct
+        else:
+            row["predicted_answer"] = record.af_generated_answer
+            row["predicted_letter"] = record.af_predicted_letter
+            row["predicted_reasoning_text"] = record.af_rationale
+            row["confidence"] = record.af_confidence
+            row["entropy"] = record.af_entropy
+            row["is_correct"] = record.af_is_correct
+        rows.append(row)
+    return rows
+
+
+def _accuracy_from_rows(rows: list[dict[str, Any]]) -> float:
+    correct = 0
+    total = 0
+    for row in rows:
+        gt = row.get("ground_truth_letter")
+        if not isinstance(gt, str) or not gt.strip():
+            idx = row.get("correct_index")
+            if isinstance(idx, int) and idx >= 0:
+                gt = correct_index_to_letter(idx)
+            else:
+                continue
+        pred = row.get("predicted_letter")
+        if not isinstance(pred, str) or not pred.strip():
+            options = row.get("options")
+            n = len(options) if isinstance(options, list) else 5
+            pred = parse_predicted_letter(str(row.get("predicted_answer", "")), num_options=n)
+        total += 1
+        if pred == str(gt).strip().upper():
+            correct += 1
+    return correct / total if total else 0.0
+
+
+def _mean_finite_field(rows: list[dict[str, Any]], field: str) -> float | None:
+    values = [
+        float(row[field])
+        for row in rows
+        if isinstance(row.get(field), (int, float)) and math.isfinite(float(row[field]))
+    ]
+    return sum(values) / len(values) if values else None
+
+
+def _count_finite_entropy(rows: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if isinstance(row.get("entropy"), (int, float)) and math.isfinite(float(row["entropy"]))
+    )
+
+
+def _print_holdout_eval_summary(
+    *,
+    iteration: int,
+    args: argparse.Namespace,
+    model_path: str,
+    holdout_path: Path,
+    metrics: dict[str, Any],
+    refreshed: list[CalibrationRecord],
+    aurc_primary: float,
+    aurc_by_mode: dict[str, float],
+    ece: float | None,
+) -> None:
+    """Print a readable holdout evaluation summary."""
+    eval_rows = [record.to_inference_row() for record in refreshed]
+    n_valid_entropy = _count_finite_entropy(eval_rows)
+
+    print("\n" + "=" * 72)
+    print(f"Holdout Evaluation — iteration {iteration}")
+    print("=" * 72)
+    print(f"Dataset:           {args.dataset}")
+    print(f"Model checkpoint:  {model_path}")
+    print(f"Holdout samples:   {len(refreshed)}")
+    print(f"Results JSON:      {holdout_path}")
+    print(f"Valid entropy rows:{n_valid_entropy}/{len(refreshed)}")
+    print("-" * 72)
+    print(f"Primary ({'answer-first' if args.selection_strategy == 'active_pseudo' else 'configured'})")
+    print(f"  Accuracy:        {metrics['overall']['accuracy']:.4f}")
+    overall_entropy = metrics["overall"].get("entropy")
+    overall_conf = metrics["overall"].get("confidence")
+    if isinstance(overall_entropy, (int, float)) and math.isfinite(float(overall_entropy)):
+        print(f"  Mean entropy:    {float(overall_entropy):.6f}")
+    else:
+        print("  Mean entropy:    N/A")
+    if isinstance(overall_conf, (int, float)) and math.isfinite(float(overall_conf)):
+        print(f"  Mean confidence: {float(overall_conf):.6f}")
+    else:
+        print("  Mean confidence: N/A")
+    print(f"  AURC:            {aurc_primary:.6f}")
+    print(f"  ECE:             {ece:.6f}" if ece is not None else "  ECE:             N/A")
+
+    if args.selection_strategy == "active_pseudo":
+        rf_rows = _mode_metric_rows(refreshed, "rationale_first")
+        af_rows = _mode_metric_rows(refreshed, "answer_first")
+        print("-" * 72)
+        print("Dual-mode breakdown")
+        print(f"  Rationale-first accuracy: {_accuracy_from_rows(rf_rows):.4f}")
+        rf_entropy = _mean_finite_field(rf_rows, "entropy")
+        rf_conf = _mean_finite_field(rf_rows, "confidence")
+        print(
+            f"  Rationale-first entropy/conf: "
+            f"{rf_entropy:.6f} / {rf_conf:.6f}"
+            if rf_entropy is not None and rf_conf is not None
+            else "  Rationale-first entropy/conf: N/A"
+        )
+        print(f"  Rationale-first AURC:     {aurc_by_mode.get('rationale_first', float('nan')):.6f}")
+        print(f"  Answer-first accuracy:    {_accuracy_from_rows(af_rows):.4f}")
+        af_entropy = _mean_finite_field(af_rows, "entropy")
+        af_conf = _mean_finite_field(af_rows, "confidence")
+        print(
+            f"  Answer-first entropy/conf: "
+            f"{af_entropy:.6f} / {af_conf:.6f}"
+            if af_entropy is not None and af_conf is not None
+            else "  Answer-first entropy/conf: N/A"
+        )
+        print(f"  Answer-first AURC:        {aurc_by_mode.get('answer_first', float('nan')):.6f}")
+    print("=" * 72)
+
+
 def evaluate_iteration(
     holdout: list[CalibrationRecord],
     *,
     model_path: str,
     output_dir: Path,
     args: argparse.Namespace,
+    iteration: int,
 ) -> dict[str, Any]:
     """Evaluate holdout accuracy, AURC, and ECE after an iteration."""
-    holdout_path = output_dir / "holdout_inference.json"
     max_tokens = args.max_new_tokens or (
         DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
         if args.selection_strategy == "active_pseudo" or args.use_reasoning
@@ -1265,15 +1465,10 @@ def evaluate_iteration(
             max_new_tokens=max_tokens,
             temperature=args.temperature,
             top_p=args.top_p,
-            output_path=holdout_path,
+            output_path=None,
         )
-        # Primary eval metrics from answer-first pass (matches training schema)
         for record in refreshed:
-            record.confidence = record.af_confidence
-            record.entropy = record.af_entropy
-            record.is_correct = record.af_is_correct
-            record.generated_answer = record.af_generated_answer
-            record.generated_rationale = record.af_rationale
+            _apply_primary_eval_view(record, primary="answer_first")
     else:
         refreshed = run_inference(
             holdout,
@@ -1285,16 +1480,26 @@ def evaluate_iteration(
             max_new_tokens=max_tokens,
             temperature=args.temperature,
             top_p=args.top_p,
-            output_path=holdout_path,
+            output_path=None,
         )
+
+    eval_rows = [record.to_inference_row() for record in refreshed]
+    holdout_path = save_results(
+        eval_rows,
+        model_path=model_path,
+        dataset=args.dataset,
+        n_samples=len(refreshed),
+        results_dir=output_dir,
+        name_suffix=f"holdout_iter{iteration}",
+    )
 
     metrics = run_mc_evaluation(holdout_path, metrics_output_path=output_dir / "holdout_eval.json")
     accuracy = float(metrics["overall"]["accuracy"])
 
     risk_mod = _risk_coverage_module()
-    inference_rows = [record.to_inference_row() for record in refreshed]
+    primary_rows = [record.to_inference_row() for record in refreshed]
     aurc_eval = risk_mod.evaluate_question_type(
-        inference_rows,
+        primary_rows,
         "overall",
         risk_metric="match",
         score_field="entropy",
@@ -1303,15 +1508,47 @@ def evaluate_iteration(
     )
     aurc = float(aurc_eval["aurc"])
 
+    aurc_by_mode: dict[str, float] = {}
+    if args.selection_strategy == "active_pseudo":
+        for mode in ("rationale_first", "answer_first"):
+            mode_rows = _mode_metric_rows(refreshed, mode)
+            mode_eval = risk_mod.evaluate_question_type(
+                mode_rows,
+                "overall",
+                risk_metric="match",
+                score_field="entropy",
+                max_entropy=None,
+                num_thresholds=200,
+            )
+            aurc_by_mode[mode] = float(mode_eval["aurc"])
+
     confidences = [record.confidence for record in refreshed if math.isfinite(record.confidence)]
     correctness = [record.is_correct for record in refreshed if math.isfinite(record.confidence)]
     ece = compute_ece(confidences, correctness)
 
+    _print_holdout_eval_summary(
+        iteration=iteration,
+        args=args,
+        model_path=model_path,
+        holdout_path=holdout_path,
+        metrics=metrics,
+        refreshed=refreshed,
+        aurc_primary=aurc,
+        aurc_by_mode=aurc_by_mode,
+        ece=ece,
+    )
+
     return {
         "accuracy": accuracy,
         "aurc": aurc,
+        "aurc_rationale_first": aurc_by_mode.get("rationale_first"),
+        "aurc_answer_first": aurc_by_mode.get("answer_first"),
         "ece": ece,
         "n_holdout": len(refreshed),
+        "n_valid_entropy": _count_finite_entropy(primary_rows),
+        "holdout_results_path": str(holdout_path),
+        "mean_confidence": _mean_finite_field(primary_rows, "confidence"),
+        "mean_entropy": _mean_finite_field(primary_rows, "entropy"),
     }
 
 
@@ -1456,6 +1693,7 @@ def main() -> None:
             model_path=current_model_path,
             output_dir=iter_dir,
             args=args,
+            iteration=iteration,
         )
 
         iteration_metrics: dict[str, Any] = {
@@ -1467,7 +1705,14 @@ def main() -> None:
             "calibration_loss": train_metrics["calibration_loss"],
             "train_loss": train_metrics["train_loss"],
             "aurc": eval_metrics["aurc"],
+            "aurc_rationale_first": eval_metrics.get("aurc_rationale_first"),
+            "aurc_answer_first": eval_metrics.get("aurc_answer_first"),
             "ece": eval_metrics["ece"],
+            "n_holdout": eval_metrics.get("n_holdout"),
+            "n_valid_entropy": eval_metrics.get("n_valid_entropy"),
+            "mean_confidence": eval_metrics.get("mean_confidence"),
+            "mean_entropy": eval_metrics.get("mean_entropy"),
+            "holdout_results_path": eval_metrics.get("holdout_results_path"),
             "n_selected": selection_stats["n_selected"],
             "selection_stats": selection_stats,
             "calibration_diagnostics": calibration_diag,
