@@ -47,6 +47,14 @@ from utils.save_results import clean_answer, save_results
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
 
+HOLDOUT_RECORDS_FILE = "holdout_records.json"
+UNSEEN_POOL_FILE = "unseen_pool.json"
+ACTIVE_POOL_FILE = "active_pool.json"
+RUN_STATE_FILE = "run_state.json"
+PARTIAL_INFERENCE_FILE = "unseen_inference_partial.json"
+POOL_PARTIAL_INFERENCE_FILE = "pool_inference_partial.json"
+RUN_STATE_VERSION = 1
+
 REQUIRED_ROW_FIELDS = (
     "image_path",
     "question",
@@ -216,6 +224,174 @@ def record_from_inference_row(row: dict[str, Any]) -> CalibrationRecord:
     )
 
 
+def save_records_json(path: Path, records: list[CalibrationRecord]) -> None:
+    """Persist calibration records as inference-compatible JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump([record.to_inference_row() for record in records], handle, indent=2, ensure_ascii=False)
+
+
+def load_records_json(path: Path) -> list[CalibrationRecord]:
+    """Load calibration records from a JSON file."""
+    with open(path, encoding="utf-8") as handle:
+        rows = json.load(handle)
+    if not isinstance(rows, list):
+        raise ValueError(f"Expected a JSON list in {path}")
+    return [record_from_inference_row(row) for row in rows]
+
+
+def _args_state_summary(args: argparse.Namespace) -> dict[str, Any]:
+    """Store resume-critical CLI settings in run_state.json."""
+    return {
+        "input_json": args.input_json,
+        "model_path": args.model_path,
+        "selection_strategy": args.selection_strategy,
+        "dataset": args.dataset,
+        "data_root": args.data_root,
+        "seed": args.seed,
+        "iterations": args.iterations,
+        "holdout_ratio": args.holdout_ratio,
+        "seed_size": args.seed_size,
+        "seed_rationale_first": args.seed_rationale_first,
+        "seed_answer_first": args.seed_answer_first,
+        "select_rationale_first": args.select_rationale_first,
+        "select_answer_first": args.select_answer_first,
+    }
+
+
+def save_run_state(
+    output_dir: Path,
+    *,
+    next_iteration: int,
+    current_model_path: str,
+    args: argparse.Namespace,
+) -> None:
+    """Persist run progress so a later job can resume with --resume_from."""
+    state = {
+        "version": RUN_STATE_VERSION,
+        "next_iteration": next_iteration,
+        "current_model_path": current_model_path,
+        "selection_strategy": args.selection_strategy,
+        "args": _args_state_summary(args),
+    }
+    path = output_dir / RUN_STATE_FILE
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, ensure_ascii=False)
+
+
+def load_run_state(output_dir: Path) -> dict[str, Any]:
+    """Load run_state.json from a previous run."""
+    path = output_dir / RUN_STATE_FILE
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No {RUN_STATE_FILE} in {output_dir}. Pass --output_dir for a fresh run, "
+            f"or --resume_from with an existing output directory."
+        )
+    with open(path, encoding="utf-8") as handle:
+        state = json.load(handle)
+    return state
+
+
+def bootstrap_run_state(output_dir: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Create run_state.json from checkpoint artifacts when missing (legacy runs)."""
+    state_path = output_dir / RUN_STATE_FILE
+    if state_path.exists():
+        return load_run_state(output_dir)
+
+    holdout_path = output_dir / HOLDOUT_RECORDS_FILE
+    if not holdout_path.exists():
+        raise FileNotFoundError(
+            f"Cannot resume {output_dir}: missing {RUN_STATE_FILE} and {HOLDOUT_RECORDS_FILE}. "
+            "Runs started before resume support cannot be continued; start a new run with the same "
+            f"--output_dir after pulling the resume update."
+        )
+
+    next_iteration = 0
+    current_model_path = args.model_path
+    for iteration in range(args.iterations):
+        iter_dir = output_dir / f"iter_{iteration}"
+        if not _iteration_complete(iter_dir):
+            break
+        with open(iter_dir / "metrics.json", encoding="utf-8") as handle:
+            completed_metrics = json.load(handle)
+        current_model_path = completed_metrics.get("model_path", current_model_path)
+        next_iteration = iteration + 1
+
+    state = {
+        "version": RUN_STATE_VERSION,
+        "next_iteration": next_iteration,
+        "current_model_path": current_model_path,
+        "selection_strategy": args.selection_strategy,
+        "args": _args_state_summary(args),
+    }
+    with open(state_path, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, ensure_ascii=False)
+    print(f"Bootstrapped {RUN_STATE_FILE} (next_iteration={next_iteration})")
+    return state
+
+
+def _validate_resume_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
+    """Warn when resumed CLI settings diverge from the saved run."""
+    saved = state.get("args", {})
+    checks = (
+        "input_json",
+        "selection_strategy",
+        "dataset",
+        "seed",
+        "iterations",
+    )
+    for key in checks:
+        if key in saved and getattr(args, key, None) != saved[key]:
+            print(
+                f"Warning: --{key}={getattr(args, key)!r} differs from saved "
+                f"{saved[key]!r} in {RUN_STATE_FILE}"
+            )
+
+
+def _load_metrics_history(output_dir: Path) -> list[dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    path = output_dir / "metrics_history.jsonl"
+    if not path.exists():
+        return history
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                history.append(json.loads(line))
+    return history
+
+
+def _iteration_complete(iter_dir: Path) -> bool:
+    return (iter_dir / "metrics.json").exists()
+
+
+def _has_trained_model(iter_dir: Path) -> bool:
+    if (iter_dir / "model.safetensors").exists() or (iter_dir / "pytorch_model.bin").exists():
+        return True
+    return any(iter_dir.glob("model-*.safetensors"))
+
+
+def _record_has_dual_inference(record: CalibrationRecord) -> bool:
+    return math.isfinite(record.rf_confidence) and math.isfinite(record.af_confidence)
+
+
+def _record_has_single_inference(record: CalibrationRecord) -> bool:
+    return math.isfinite(record.confidence) and math.isfinite(record.entropy)
+
+
+def _load_train_metrics(iter_dir: Path) -> dict[str, float]:
+    path = iter_dir / "train_metrics.json"
+    if not path.exists():
+        return {"answer_loss": 0.0, "calibration_loss": 0.0, "train_loss": 0.0}
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return {
+        "answer_loss": float(payload.get("answer_loss", 0.0)),
+        "calibration_loss": float(payload.get("calibration_loss", 0.0)),
+        "train_loss": float(payload.get("train_loss", 0.0)),
+    }
+
+
 def training_rationale(record: CalibrationRecord) -> str | None:
     """Return the pseudo rationale to use for training based on selection mode."""
     if record.selection_mode == "rationale_first":
@@ -328,6 +504,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_pool_samples", type=int, default=None, help="Debug cap on pool size")
     parser.add_argument("--max_holdout_samples", type=int, default=None, help="Debug cap on holdout size")
     parser.add_argument("--skip_train", action="store_true", help="Run selection/eval only (debug)")
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Resume an interrupted run from this output_dir (must contain run_state.json)",
+    )
+    parser.add_argument(
+        "--checkpoint_every",
+        type=int,
+        default=25,
+        help="Save partial inference checkpoint every N samples (enables resume within an iteration)",
+    )
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
     return parser.parse_args()
@@ -610,6 +798,8 @@ def run_dual_mode_inference(
     temperature: float,
     top_p: float,
     output_path: Path | None = None,
+    checkpoint_path: Path | None = None,
+    checkpoint_every: int = 25,
 ) -> list[CalibrationRecord]:
     """Run rationale-first and answer-first inference; populate rf_* and af_* fields."""
     inference_mod = _inference_qwen_module()
@@ -619,9 +809,29 @@ def run_dual_mode_inference(
     answer_letter_token_ids = inference_mod._get_answer_letter_token_ids(processor.tokenizer)
     agreement_samples = max(1, agreement_samples)
 
+    done_by_key: dict[tuple[str, str], CalibrationRecord] = {}
+    if checkpoint_path is not None and checkpoint_path.exists():
+        partial_records = load_records_json(checkpoint_path)
+        done_by_key = {
+            record_key(record): record
+            for record in partial_records
+            if _record_has_dual_inference(record)
+        }
+        if done_by_key:
+            print(
+                f"Resuming dual-mode inference from {checkpoint_path.name}: "
+                f"{len(done_by_key)}/{len(records)} samples already done."
+            )
+
     updated: list[CalibrationRecord] = []
+    pending_since_checkpoint = 0
     with torch.no_grad():
         for record in tqdm(records, desc="Dual-mode inference", unit="sample"):
+            key = record_key(record)
+            if key in done_by_key:
+                updated.append(done_by_key[key])
+                continue
+
             rf = _infer_single_mode(
                 record,
                 model=model,
@@ -649,41 +859,50 @@ def run_dual_mode_inference(
                 top_p=top_p,
             )
 
-            updated.append(
-                CalibrationRecord(
-                    image_path=record.image_path,
-                    question=record.question,
-                    ground_truth_answer=record.ground_truth_answer,
-                    generated_answer=af["generated_answer"],
-                    generated_rationale=af["rationale"],
-                    confidence=af["confidence"],
-                    entropy=af["entropy"],
-                    is_correct=af["is_correct"],
-                    options=record.options,
-                    correct_index=record.correct_index,
-                    question_type=record.question_type,
-                    ground_truth_letter=rf["ground_truth_letter"],
-                    original_row=record.original_row,
-                    rf_confidence=rf["confidence"],
-                    rf_entropy=rf["entropy"],
-                    rf_is_correct=rf["is_correct"],
-                    rf_rationale=rf["rationale"],
-                    rf_generated_answer=rf["generated_answer"],
-                    rf_predicted_letter=rf["predicted_letter"],
-                    af_confidence=af["confidence"],
-                    af_entropy=af["entropy"],
-                    af_is_correct=af["is_correct"],
-                    af_rationale=af["rationale"],
-                    af_generated_answer=af["generated_answer"],
-                    af_predicted_letter=af["predicted_letter"],
-                    selection_mode=record.selection_mode,
-                )
+            new_record = CalibrationRecord(
+                image_path=record.image_path,
+                question=record.question,
+                ground_truth_answer=record.ground_truth_answer,
+                generated_answer=af["generated_answer"],
+                generated_rationale=af["rationale"],
+                confidence=af["confidence"],
+                entropy=af["entropy"],
+                is_correct=af["is_correct"],
+                options=record.options,
+                correct_index=record.correct_index,
+                question_type=record.question_type,
+                ground_truth_letter=rf["ground_truth_letter"],
+                original_row=record.original_row,
+                rf_confidence=rf["confidence"],
+                rf_entropy=rf["entropy"],
+                rf_is_correct=rf["is_correct"],
+                rf_rationale=rf["rationale"],
+                rf_generated_answer=rf["generated_answer"],
+                rf_predicted_letter=rf["predicted_letter"],
+                af_confidence=af["confidence"],
+                af_entropy=af["entropy"],
+                af_is_correct=af["is_correct"],
+                af_rationale=af["rationale"],
+                af_generated_answer=af["generated_answer"],
+                af_predicted_letter=af["predicted_letter"],
+                selection_mode=record.selection_mode,
             )
+            updated.append(new_record)
+            done_by_key[key] = new_record
+            pending_since_checkpoint += 1
+
+            if (
+                checkpoint_path is not None
+                and checkpoint_every > 0
+                and pending_since_checkpoint >= checkpoint_every
+            ):
+                save_records_json(checkpoint_path, updated)
+                pending_since_checkpoint = 0
 
     if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump([item.to_inference_row() for item in updated], handle, indent=2, ensure_ascii=False)
+        save_records_json(output_path, updated)
+        if checkpoint_path is not None and checkpoint_path.exists():
+            checkpoint_path.unlink()
 
     del model
     if torch.cuda.is_available():
@@ -703,6 +922,8 @@ def run_inference(
     temperature: float,
     top_p: float,
     output_path: Path | None = None,
+    checkpoint_path: Path | None = None,
+    checkpoint_every: int = 25,
 ) -> list[CalibrationRecord]:
     """Run MC inference on records and refresh generated outputs and uncertainty."""
     inference_mod = _inference_qwen_module()
@@ -721,9 +942,29 @@ def run_inference(
     }
     gen_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False}
 
+    done_by_key: dict[tuple[str, str], CalibrationRecord] = {}
+    if checkpoint_path is not None and checkpoint_path.exists():
+        partial_records = load_records_json(checkpoint_path)
+        done_by_key = {
+            record_key(record): record
+            for record in partial_records
+            if _record_has_single_inference(record)
+        }
+        if done_by_key:
+            print(
+                f"Resuming inference from {checkpoint_path.name}: "
+                f"{len(done_by_key)}/{len(records)} samples already done."
+            )
+
     updated: list[CalibrationRecord] = []
+    pending_since_checkpoint = 0
     with torch.no_grad():
         for record in tqdm(records, desc="Inference", unit="sample"):
+            key = record_key(record)
+            if key in done_by_key:
+                updated.append(done_by_key[key])
+                continue
+
             sample = record_to_vqa_sample(record)
             image = Image.open(sample.image_path).convert("RGB")
             conversation = (
@@ -823,11 +1064,21 @@ def run_inference(
                 af_is_correct=is_correct,
             )
             updated.append(refreshed)
+            done_by_key[key] = refreshed
+            pending_since_checkpoint += 1
+
+            if (
+                checkpoint_path is not None
+                and checkpoint_every > 0
+                and pending_since_checkpoint >= checkpoint_every
+            ):
+                save_records_json(checkpoint_path, updated)
+                pending_since_checkpoint = 0
 
     if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump([item.to_inference_row() for item in updated], handle, indent=2, ensure_ascii=False)
+        save_records_json(output_path, updated)
+        if checkpoint_path is not None and checkpoint_path.exists():
+            checkpoint_path.unlink()
 
     del model
     if torch.cuda.is_available():
@@ -1583,22 +1834,69 @@ def main() -> None:
         else 8
     )
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if args.resume_from:
+        output_dir = Path(args.resume_from)
+        if not output_dir.is_dir():
+            raise FileNotFoundError(f"--resume_from directory not found: {output_dir}")
+        state = bootstrap_run_state(output_dir, args)
+        _validate_resume_args(args, state)
+        if state.get("selection_strategy") != args.selection_strategy:
+            raise ValueError(
+                f"selection_strategy mismatch: saved={state.get('selection_strategy')!r}, "
+                f"cli={args.selection_strategy!r}"
+            )
 
-    records = load_dataset(
-        args.input_json,
-        data_root=args.data_root,
-        dataset=args.dataset,
-    )
-    if args.max_pool_samples is not None or args.max_holdout_samples is not None:
-        records = records[: (args.max_pool_samples or 0) + (args.max_holdout_samples or 0)]
+        holdout = load_records_json(output_dir / HOLDOUT_RECORDS_FILE)
+        history = _load_metrics_history(output_dir)
+        current_model_path = state["current_model_path"]
+        start_iteration = int(state["next_iteration"])
 
-    pool, holdout = split_dataset(records, holdout_ratio=args.holdout_ratio, seed=args.seed)
-    if args.max_pool_samples is not None:
-        pool = pool[: args.max_pool_samples]
-    if args.max_holdout_samples is not None:
-        holdout = holdout[: args.max_holdout_samples]
+        if args.selection_strategy == "active_pseudo":
+            unseen = load_records_json(output_dir / UNSEEN_POOL_FILE)
+            pool: list[CalibrationRecord] = []
+        else:
+            pool_path = output_dir / ACTIVE_POOL_FILE
+            pool = load_records_json(pool_path) if pool_path.exists() else []
+            unseen = []
+        print(
+            f"Resuming from {output_dir} at iteration {start_iteration} "
+            f"(model={current_model_path})"
+        )
+    else:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        records = load_dataset(
+            args.input_json,
+            data_root=args.data_root,
+            dataset=args.dataset,
+        )
+        if args.max_pool_samples is not None or args.max_holdout_samples is not None:
+            records = records[: (args.max_pool_samples or 0) + (args.max_holdout_samples or 0)]
+
+        pool, holdout = split_dataset(records, holdout_ratio=args.holdout_ratio, seed=args.seed)
+        if args.max_pool_samples is not None:
+            pool = pool[: args.max_pool_samples]
+        if args.max_holdout_samples is not None:
+            holdout = holdout[: args.max_holdout_samples]
+
+        save_records_json(output_dir / HOLDOUT_RECORDS_FILE, holdout)
+        if args.selection_strategy == "active_pseudo":
+            unseen = list(pool)
+            save_records_json(output_dir / UNSEEN_POOL_FILE, unseen)
+        else:
+            unseen = []
+            save_records_json(output_dir / ACTIVE_POOL_FILE, pool)
+
+        current_model_path = args.model_path
+        history = []
+        start_iteration = 0
+        save_run_state(
+            output_dir,
+            next_iteration=0,
+            current_model_path=current_model_path,
+            args=args,
+        )
 
     run_name = args.wandb_run_name or f"{model_short_name(args.model_path)}_{args.dataset}_iter_calib"
     wandb.init(
@@ -1606,75 +1904,159 @@ def main() -> None:
         name=run_name,
         config=vars(args),
         tags=["iterative_calibration", args.dataset, args.selection_strategy],
+        resume="allow" if args.resume_from else None,
     )
 
-    current_model_path = args.model_path
-    history: list[dict[str, Any]] = []
-    unseen: list[CalibrationRecord] = list(pool)
-
-    for iteration in range(args.iterations):
+    for iteration in range(start_iteration, args.iterations):
         iter_dir = output_dir / f"iter_{iteration}"
         iter_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n=== Iteration {iteration} ({args.selection_strategy}) ===")
 
-        if args.selection_strategy == "active_pseudo":
-            print(f"Running dual-mode inference on {len(unseen)} unseen samples...")
-            unseen = run_dual_mode_inference(
-                unseen,
-                model_path=current_model_path,
-                dtype=args.dtype,
-                agreement_samples=args.agreement_samples,
-                max_new_tokens=max_tokens,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                output_path=iter_dir / "unseen_inference.json",
-            )
-
-            if iteration == 0:
-                selected, unseen, selection_stats = build_seed_set(
-                    unseen,
-                    seed_rationale_first=args.seed_rationale_first,
-                    seed_answer_first=args.seed_answer_first,
-                )
+        if _iteration_complete(iter_dir):
+            with open(iter_dir / "metrics.json", encoding="utf-8") as handle:
+                completed_metrics = json.load(handle)
+            current_model_path = completed_metrics.get("model_path", current_model_path)
+            if args.selection_strategy == "active_pseudo":
+                unseen = load_records_json(output_dir / UNSEEN_POOL_FILE)
             else:
-                selected, unseen, selection_stats = sample_active_calibration(
+                pool_path = output_dir / ACTIVE_POOL_FILE
+                if pool_path.exists():
+                    pool = load_records_json(pool_path)
+            print(f"Skipping completed iteration {iteration}")
+            continue
+
+        selected: list[CalibrationRecord] = []
+        selection_stats: dict[str, Any] = {}
+        calibration_diag: dict[str, Any] = {}
+
+        if args.selection_strategy == "active_pseudo":
+            inferred_path = iter_dir / "unseen_inference.json"
+            selected_path = iter_dir / "selected_samples.json"
+
+            if inferred_path.exists():
+                unseen = load_records_json(inferred_path)
+                print(f"Loaded completed pool inference ({len(unseen)} samples).")
+            else:
+                print(f"Running dual-mode inference on {len(unseen)} unseen samples...")
+                unseen = run_dual_mode_inference(
                     unseen,
-                    select_rationale_first=args.select_rationale_first,
-                    select_answer_first=args.select_answer_first,
-                )
-            calibration_diag = identify_calibration_errors(unseen)
-        else:
-            if iteration > 0:
-                print("Running inference on active-learning pool...")
-                pool = run_inference(
-                    pool,
                     model_path=current_model_path,
                     dtype=args.dtype,
-                    use_reasoning=args.use_reasoning,
-                    answer_first=args.answer_first,
                     agreement_samples=args.agreement_samples,
                     max_new_tokens=max_tokens,
                     temperature=args.temperature,
                     top_p=args.top_p,
-                    output_path=iter_dir / "pool_inference.json",
+                    output_path=inferred_path,
+                    checkpoint_path=iter_dir / PARTIAL_INFERENCE_FILE,
+                    checkpoint_every=args.checkpoint_every,
+                )
+                save_run_state(
+                    output_dir,
+                    next_iteration=iteration,
+                    current_model_path=current_model_path,
+                    args=args,
                 )
 
-            calibration_diag = identify_calibration_errors(pool)
-            selected, selection_stats = sample_calibration_dataset(
-                pool,
-                selection_ratio=args.selection_ratio,
-                random_ratio=args.random_ratio,
-                seed=args.seed,
-                iteration=iteration,
-            )
+            if selected_path.exists():
+                selected = load_records_json(selected_path)
+                unseen = load_records_json(output_dir / UNSEEN_POOL_FILE)
+                stats_path = iter_dir / "selection_stats.json"
+                if stats_path.exists():
+                    with open(stats_path, encoding="utf-8") as handle:
+                        selection_stats = json.load(handle)
+                calibration_diag = identify_calibration_errors(unseen)
+                print(f"Loaded selection ({len(selected)} samples, {len(unseen)} unseen remaining).")
+            else:
+                if iteration == 0:
+                    selected, unseen, selection_stats = build_seed_set(
+                        unseen,
+                        seed_rationale_first=args.seed_rationale_first,
+                        seed_answer_first=args.seed_answer_first,
+                    )
+                else:
+                    selected, unseen, selection_stats = sample_active_calibration(
+                        unseen,
+                        select_rationale_first=args.select_rationale_first,
+                        select_answer_first=args.select_answer_first,
+                    )
+                calibration_diag = identify_calibration_errors(unseen)
+                save_records_json(selected_path, selected)
+                save_records_json(output_dir / UNSEEN_POOL_FILE, unseen)
+                with open(iter_dir / "selection_stats.json", "w", encoding="utf-8") as handle:
+                    json.dump(selection_stats, handle, indent=2, ensure_ascii=False)
+                save_run_state(
+                    output_dir,
+                    next_iteration=iteration,
+                    current_model_path=current_model_path,
+                    args=args,
+                )
+        else:
+            pool_inference_path = iter_dir / "pool_inference.json"
+            selected_path = iter_dir / "selected_samples.json"
 
-        with open(iter_dir / "selected_samples.json", "w", encoding="utf-8") as handle:
-            json.dump([record.to_inference_row() for record in selected], handle, indent=2, ensure_ascii=False)
+            if iteration > 0:
+                if pool_inference_path.exists():
+                    pool = load_records_json(pool_inference_path)
+                    print(f"Loaded completed pool inference ({len(pool)} samples).")
+                else:
+                    print("Running inference on active-learning pool...")
+                    pool = run_inference(
+                        pool,
+                        model_path=current_model_path,
+                        dtype=args.dtype,
+                        use_reasoning=args.use_reasoning,
+                        answer_first=args.answer_first,
+                        agreement_samples=args.agreement_samples,
+                        max_new_tokens=max_tokens,
+                        temperature=args.temperature,
+                        top_p=args.top_p,
+                        output_path=pool_inference_path,
+                        checkpoint_path=iter_dir / POOL_PARTIAL_INFERENCE_FILE,
+                        checkpoint_every=args.checkpoint_every,
+                    )
+                    save_records_json(output_dir / ACTIVE_POOL_FILE, pool)
+                    save_run_state(
+                        output_dir,
+                        next_iteration=iteration,
+                        current_model_path=current_model_path,
+                        args=args,
+                    )
+
+            calibration_diag = identify_calibration_errors(pool)
+
+            if selected_path.exists():
+                selected = load_records_json(selected_path)
+                stats_path = iter_dir / "selection_stats.json"
+                if stats_path.exists():
+                    with open(stats_path, encoding="utf-8") as handle:
+                        selection_stats = json.load(handle)
+                print(f"Loaded selection ({len(selected)} samples).")
+            else:
+                selected, selection_stats = sample_calibration_dataset(
+                    pool,
+                    selection_ratio=args.selection_ratio,
+                    random_ratio=args.random_ratio,
+                    seed=args.seed,
+                    iteration=iteration,
+                )
+                save_records_json(selected_path, selected)
+                with open(iter_dir / "selection_stats.json", "w", encoding="utf-8") as handle:
+                    json.dump(selection_stats, handle, indent=2, ensure_ascii=False)
+                save_run_state(
+                    output_dir,
+                    next_iteration=iteration,
+                    current_model_path=current_model_path,
+                    args=args,
+                )
 
         train_metrics = {"answer_loss": 0.0, "calibration_loss": 0.0, "train_loss": 0.0}
         if not args.skip_train:
             if not selected:
                 print("Warning: no samples selected; skipping training.")
+            elif _has_trained_model(iter_dir):
+                print(f"Using existing trained model in {iter_dir}")
+                current_model_path = str(iter_dir)
+                train_metrics = _load_train_metrics(iter_dir)
             else:
                 print(f"Training on {len(selected)} selected samples...")
                 train_metrics = train_iteration(
@@ -1684,6 +2066,14 @@ def main() -> None:
                     args=args,
                 )
                 current_model_path = str(iter_dir)
+                with open(iter_dir / "train_metrics.json", "w", encoding="utf-8") as handle:
+                    json.dump(train_metrics, handle, indent=2, ensure_ascii=False)
+                save_run_state(
+                    output_dir,
+                    next_iteration=iteration,
+                    current_model_path=current_model_path,
+                    args=args,
+                )
         else:
             print("Skipping training (--skip_train).")
 
@@ -1739,6 +2129,13 @@ def main() -> None:
             json.dump(iteration_metrics, handle, indent=2, ensure_ascii=False)
         _append_jsonl(output_dir / "metrics_history.jsonl", iteration_metrics)
         history.append(iteration_metrics)
+
+        save_run_state(
+            output_dir,
+            next_iteration=iteration + 1,
+            current_model_path=current_model_path,
+            args=args,
+        )
 
         wandb.log(
             {
