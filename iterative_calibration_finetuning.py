@@ -8,7 +8,7 @@ import json
 import math
 import os
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,7 @@ from transformers import (
 from transformers.trainer_utils import set_seed
 
 from calibration_losses import build_losses, compute_ece
-from utils.load_data import VQASample
+from utils.load_data import MedicalVQALoader, VQASample
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_vqa import correct_index_to_letter
 from utils.paths import get_data_root, get_mc_data_root, get_outputs_root
@@ -242,7 +242,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input_json", type=str, required=True, help="Pre-built inference JSON")
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--output_dir", type=str, default=str(Path(get_outputs_root()) / "iter_calib"))
-    parser.add_argument("--dataset", type=str, default="unknown", help="Dataset name for logging only")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="unknown",
+        help="Dataset slug (pathvqa, slake, vqarad, medvqa2019) for image path resolution and logging",
+    )
     parser.add_argument(
         "--selection_strategy",
         type=str,
@@ -316,8 +321,31 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_dataset(path: str | Path) -> list[CalibrationRecord]:
-    """Load and validate a pre-built inference JSON dataset."""
+def resolve_record_image_paths(
+    records: list[CalibrationRecord],
+    *,
+    data_root: str,
+    dataset: str,
+) -> list[CalibrationRecord]:
+    """Resolve MC-style relative image paths via MedicalVQALoader (same as train/inference scripts)."""
+    loader = MedicalVQALoader(data_root=data_root, mc_data_root=None)
+    canonical = loader._normalize_dataset_name(dataset)
+    config = loader.dataset_configs[canonical]
+
+    resolved: list[CalibrationRecord] = []
+    for record in records:
+        image_path = str(loader._resolve_image_path(canonical, config, record.image_path))
+        resolved.append(replace(record, image_path=image_path))
+    return resolved
+
+
+def load_dataset(
+    path: str | Path,
+    *,
+    data_root: str | None = None,
+    dataset: str | None = None,
+) -> list[CalibrationRecord]:
+    """Load and validate a pre-built inference or MC JSON dataset."""
     json_path = Path(path)
     if not json_path.exists():
         raise FileNotFoundError(f"Input JSON not found: {json_path}")
@@ -331,6 +359,15 @@ def load_dataset(path: str | Path) -> list[CalibrationRecord]:
     records = [record_from_inference_row(row) for row in payload]
     if not records:
         raise ValueError("input_json contains no samples.")
+
+    if dataset and dataset.strip().lower() != "unknown":
+        root = data_root if data_root is not None else get_data_root()
+        records = resolve_record_image_paths(records, data_root=root, dataset=dataset)
+    elif not os.path.isabs(records[0].image_path) and not Path(records[0].image_path).exists():
+        print(
+            "Warning: relative image_path without --dataset; paths are used as-is. "
+            "Pass --dataset vqarad (or set --data_root) to resolve MC-style paths."
+        )
     return records
 
 
@@ -1312,7 +1349,11 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    records = load_dataset(args.input_json)
+    records = load_dataset(
+        args.input_json,
+        data_root=args.data_root,
+        dataset=args.dataset,
+    )
     if args.max_pool_samples is not None or args.max_holdout_samples is not None:
         records = records[: (args.max_pool_samples or 0) + (args.max_holdout_samples or 0)]
 
