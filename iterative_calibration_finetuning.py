@@ -256,6 +256,8 @@ def _args_state_summary(args: argparse.Namespace) -> dict[str, Any]:
         "seed_answer_first": args.seed_answer_first,
         "select_rationale_first": args.select_rationale_first,
         "select_answer_first": args.select_answer_first,
+        "n_wrong_low_entropy": args.n_wrong_low_entropy,
+        "n_correct_high_entropy": args.n_correct_high_entropy,
     }
 
 
@@ -439,9 +441,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--selection_strategy",
         type=str,
-        default="active_pseudo",
-        choices=["active_pseudo", "miscalibration"],
-        help="Sample selection: active_pseudo (confident correct pseudo-labels) or miscalibration (original spec)",
+        default="entropy_calibration",
+        choices=["entropy_calibration", "active_pseudo", "miscalibration"],
+        help=(
+            "Sample selection: entropy_calibration (50%% wrong+low entropy, 50%% correct+high entropy), "
+            "active_pseudo (confident correct pseudo-labels), or miscalibration (ratio-based)"
+        ),
     )
     parser.add_argument(
         "--selection_ratio",
@@ -480,11 +485,28 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="Per-iteration selection from answer-first (correct, lowest entropy)",
     )
+    parser.add_argument(
+        "--n_wrong_low_entropy",
+        type=int,
+        default=50,
+        help="entropy_calibration: overconfident wrong samples (lowest entropy)",
+    )
+    parser.add_argument(
+        "--n_correct_high_entropy",
+        type=int,
+        default=50,
+        help="entropy_calibration: underconfident correct samples (highest entropy)",
+    )
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--lambda_cal", type=float, required=True)
     parser.add_argument("--batch_size", type=int, required=True)
     parser.add_argument("--learning_rate", type=float, required=True)
-    parser.add_argument("--holdout_ratio", type=float, default=0.20)
+    parser.add_argument(
+        "--holdout_ratio",
+        type=float,
+        default=0.20,
+        help="Fraction held out for evaluation; 0 skips holdout eval and uses full dataset as pool",
+    )
     parser.add_argument("--num_train_epochs", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--agreement_samples", type=int, default=5)
@@ -578,8 +600,11 @@ def split_dataset(
     seed: int,
 ) -> tuple[list[CalibrationRecord], list[CalibrationRecord]]:
     """Split records into active-learning pool and holdout evaluation set."""
-    if not 0.0 < holdout_ratio < 1.0:
-        raise ValueError("holdout_ratio must be between 0 and 1.")
+    if not 0.0 <= holdout_ratio < 1.0:
+        raise ValueError("holdout_ratio must be in [0, 1).")
+
+    if holdout_ratio == 0.0:
+        return list(records), []
 
     indices = list(range(len(records)))
     rng = random.Random(seed)
@@ -1181,6 +1206,43 @@ def sample_calibration_dataset(
     return selected, stats
 
 
+def select_entropy_calibration(
+    unseen: list[CalibrationRecord],
+    *,
+    n_wrong_low_entropy: int,
+    n_correct_high_entropy: int,
+) -> tuple[list[CalibrationRecord], list[CalibrationRecord], dict[str, Any]]:
+    """Select miscalibrated samples: wrong+low entropy and correct+high entropy."""
+    wrong_sorted = sorted(
+        [record for record in unseen if not record.is_correct and math.isfinite(record.entropy)],
+        key=lambda record: record.entropy,
+    )
+    correct_sorted = sorted(
+        [record for record in unseen if record.is_correct and math.isfinite(record.entropy)],
+        key=lambda record: record.entropy,
+        reverse=True,
+    )
+
+    wrong_selected = wrong_sorted[:n_wrong_low_entropy]
+    correct_selected = correct_sorted[:n_correct_high_entropy]
+    selected = wrong_selected + correct_selected
+
+    selected_keys = {record_key(record) for record in selected}
+    remaining = [record for record in unseen if record_key(record) not in selected_keys]
+
+    n_selected = len(selected)
+    stats = {
+        "n_selected": n_selected,
+        "n_wrong_low_entropy": len(wrong_selected),
+        "n_correct_high_entropy": len(correct_selected),
+        "n_unseen_remaining": len(remaining),
+        "fraction_wrong_low_entropy": len(wrong_selected) / n_selected if n_selected else 0.0,
+        "fraction_correct_high_entropy": len(correct_selected) / n_selected if n_selected else 0.0,
+        "strategy": "entropy_calibration",
+    }
+    return selected, remaining, stats
+
+
 def _tag_selected_record(record: CalibrationRecord, mode: str) -> CalibrationRecord:
     """Return a copy tagged with selection_mode for answer-first training."""
     rationale = record.rf_rationale if mode == "rationale_first" else record.af_rationale
@@ -1649,7 +1711,7 @@ def _print_holdout_eval_summary(
     print(f"Results JSON:      {holdout_path}")
     print(f"Valid entropy rows:{n_valid_entropy}/{len(refreshed)}")
     print("-" * 72)
-    print(f"Primary ({'answer-first' if args.selection_strategy == 'active_pseudo' else 'configured'})")
+    print(f"Primary ({'answer-first' if args.selection_strategy in ('active_pseudo', 'entropy_calibration') else 'configured'})")
     print(f"  Accuracy:        {metrics['overall']['accuracy']:.4f}")
     overall_entropy = metrics["overall"].get("entropy")
     overall_conf = metrics["overall"].get("confidence")
@@ -1703,7 +1765,7 @@ def evaluate_iteration(
     """Evaluate holdout accuracy, AURC, and ECE after an iteration."""
     max_tokens = args.max_new_tokens or (
         DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
-        if args.selection_strategy == "active_pseudo" or args.use_reasoning
+        if args.selection_strategy in ("active_pseudo", "entropy_calibration") or args.use_reasoning
         else 8
     )
 
@@ -1814,9 +1876,13 @@ def main() -> None:
     args = parse_args()
     set_seed(args.seed)
 
-    if args.selection_strategy == "active_pseudo":
+    uses_unseen_pool = args.selection_strategy in ("active_pseudo", "entropy_calibration")
+
+    if args.selection_strategy in ("active_pseudo", "entropy_calibration"):
         args.use_reasoning = True
         args.answer_first = True
+
+    if args.selection_strategy == "active_pseudo":
         if args.seed_rationale_first + args.seed_answer_first != args.seed_size:
             print(
                 f"Warning: seed_rationale_first ({args.seed_rationale_first}) + "
@@ -1830,7 +1896,7 @@ def main() -> None:
 
     max_tokens = args.max_new_tokens or (
         DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
-        if args.selection_strategy == "active_pseudo" or args.use_reasoning
+        if uses_unseen_pool or args.use_reasoning
         else 8
     )
 
@@ -1851,7 +1917,7 @@ def main() -> None:
         current_model_path = state["current_model_path"]
         start_iteration = int(state["next_iteration"])
 
-        if args.selection_strategy == "active_pseudo":
+        if uses_unseen_pool:
             unseen = load_records_json(output_dir / UNSEEN_POOL_FILE)
             pool: list[CalibrationRecord] = []
         else:
@@ -1881,7 +1947,7 @@ def main() -> None:
             holdout = holdout[: args.max_holdout_samples]
 
         save_records_json(output_dir / HOLDOUT_RECORDS_FILE, holdout)
-        if args.selection_strategy == "active_pseudo":
+        if uses_unseen_pool:
             unseen = list(pool)
             save_records_json(output_dir / UNSEEN_POOL_FILE, unseen)
         else:
@@ -1916,7 +1982,7 @@ def main() -> None:
             with open(iter_dir / "metrics.json", encoding="utf-8") as handle:
                 completed_metrics = json.load(handle)
             current_model_path = completed_metrics.get("model_path", current_model_path)
-            if args.selection_strategy == "active_pseudo":
+            if uses_unseen_pool:
                 unseen = load_records_json(output_dir / UNSEEN_POOL_FILE)
             else:
                 pool_path = output_dir / ACTIVE_POOL_FILE
@@ -1929,19 +1995,41 @@ def main() -> None:
         selection_stats: dict[str, Any] = {}
         calibration_diag: dict[str, Any] = {}
 
-        if args.selection_strategy == "active_pseudo":
+        if uses_unseen_pool:
             inferred_path = iter_dir / "unseen_inference.json"
             selected_path = iter_dir / "selected_samples.json"
 
             if inferred_path.exists():
                 unseen = load_records_json(inferred_path)
                 print(f"Loaded completed pool inference ({len(unseen)} samples).")
-            else:
+            elif args.selection_strategy == "active_pseudo":
                 print(f"Running dual-mode inference on {len(unseen)} unseen samples...")
                 unseen = run_dual_mode_inference(
                     unseen,
                     model_path=current_model_path,
                     dtype=args.dtype,
+                    agreement_samples=args.agreement_samples,
+                    max_new_tokens=max_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    output_path=inferred_path,
+                    checkpoint_path=iter_dir / PARTIAL_INFERENCE_FILE,
+                    checkpoint_every=args.checkpoint_every,
+                )
+                save_run_state(
+                    output_dir,
+                    next_iteration=iteration,
+                    current_model_path=current_model_path,
+                    args=args,
+                )
+            else:
+                print(f"Running answer-first inference on {len(unseen)} unseen samples...")
+                unseen = run_inference(
+                    unseen,
+                    model_path=current_model_path,
+                    dtype=args.dtype,
+                    use_reasoning=True,
+                    answer_first=True,
                     agreement_samples=args.agreement_samples,
                     max_new_tokens=max_tokens,
                     temperature=args.temperature,
@@ -1966,7 +2054,7 @@ def main() -> None:
                         selection_stats = json.load(handle)
                 calibration_diag = identify_calibration_errors(unseen)
                 print(f"Loaded selection ({len(selected)} samples, {len(unseen)} unseen remaining).")
-            else:
+            elif args.selection_strategy == "active_pseudo":
                 if iteration == 0:
                     selected, unseen, selection_stats = build_seed_set(
                         unseen,
@@ -1979,6 +2067,23 @@ def main() -> None:
                         select_rationale_first=args.select_rationale_first,
                         select_answer_first=args.select_answer_first,
                     )
+                calibration_diag = identify_calibration_errors(unseen)
+                save_records_json(selected_path, selected)
+                save_records_json(output_dir / UNSEEN_POOL_FILE, unseen)
+                with open(iter_dir / "selection_stats.json", "w", encoding="utf-8") as handle:
+                    json.dump(selection_stats, handle, indent=2, ensure_ascii=False)
+                save_run_state(
+                    output_dir,
+                    next_iteration=iteration,
+                    current_model_path=current_model_path,
+                    args=args,
+                )
+            else:
+                selected, unseen, selection_stats = select_entropy_calibration(
+                    unseen,
+                    n_wrong_low_entropy=args.n_wrong_low_entropy,
+                    n_correct_high_entropy=args.n_correct_high_entropy,
+                )
                 calibration_diag = identify_calibration_errors(unseen)
                 save_records_json(selected_path, selected)
                 save_records_json(output_dir / UNSEEN_POOL_FILE, unseen)
@@ -2077,14 +2182,29 @@ def main() -> None:
         else:
             print("Skipping training (--skip_train).")
 
-        print("Evaluating holdout...")
-        eval_metrics = evaluate_iteration(
-            holdout,
-            model_path=current_model_path,
-            output_dir=iter_dir,
-            args=args,
-            iteration=iteration,
-        )
+        if holdout:
+            print("Evaluating holdout...")
+            eval_metrics = evaluate_iteration(
+                holdout,
+                model_path=current_model_path,
+                output_dir=iter_dir,
+                args=args,
+                iteration=iteration,
+            )
+        else:
+            print("Skipping holdout evaluation (--holdout_ratio 0).")
+            eval_metrics = {
+                "accuracy": None,
+                "aurc": None,
+                "aurc_rationale_first": None,
+                "aurc_answer_first": None,
+                "ece": None,
+                "n_holdout": 0,
+                "n_valid_entropy": 0,
+                "holdout_results_path": None,
+                "mean_confidence": None,
+                "mean_entropy": None,
+            }
 
         iteration_metrics: dict[str, Any] = {
             "iteration": iteration,
@@ -2116,6 +2236,16 @@ def main() -> None:
                     "fraction_answer_first": selection_stats.get("fraction_answer_first", 0.0),
                 }
             )
+        elif args.selection_strategy == "entropy_calibration":
+            iteration_metrics.update(
+                {
+                    "n_unseen_remaining": selection_stats.get("n_unseen_remaining", len(unseen)),
+                    "n_wrong_low_entropy": selection_stats.get("n_wrong_low_entropy", 0),
+                    "n_correct_high_entropy": selection_stats.get("n_correct_high_entropy", 0),
+                    "fraction_wrong_low_entropy": selection_stats.get("fraction_wrong_low_entropy", 0.0),
+                    "fraction_correct_high_entropy": selection_stats.get("fraction_correct_high_entropy", 0.0),
+                }
+            )
         else:
             iteration_metrics.update(
                 {
@@ -2139,8 +2269,14 @@ def main() -> None:
 
         wandb.log(
             {
-                f"iter_{iteration}/accuracy": eval_metrics["accuracy"],
-                f"iter_{iteration}/aurc": eval_metrics["aurc"],
+                **(
+                    {
+                        f"iter_{iteration}/accuracy": eval_metrics["accuracy"],
+                        f"iter_{iteration}/aurc": eval_metrics["aurc"],
+                    }
+                    if holdout
+                    else {}
+                ),
                 f"iter_{iteration}/answer_loss": train_metrics["answer_loss"],
                 f"iter_{iteration}/calibration_loss": train_metrics["calibration_loss"],
                 f"iter_{iteration}/n_selected": selection_stats["n_selected"],
@@ -2148,7 +2284,7 @@ def main() -> None:
         )
         print(json.dumps(iteration_metrics, indent=2))
 
-        if args.selection_strategy == "active_pseudo" and not unseen:
+        if uses_unseen_pool and not unseen:
             print("Unseen pool exhausted; stopping early.")
             break
 
