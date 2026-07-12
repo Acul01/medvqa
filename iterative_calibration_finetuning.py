@@ -520,6 +520,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration_loss", type=str, default="confidence_bce")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
     parser.add_argument("--max_length", type=int, default=512)
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing during training (reduces GPU memory)",
+    )
+    parser.add_argument(
+        "--use_8bit_optimizer",
+        action="store_true",
+        help="Use 8-bit AdamW via bitsandbytes (reduces optimizer memory)",
+    )
     parser.add_argument("--logging_steps", type=int, default=10)
     parser.add_argument("--data_root", type=str, default=get_data_root())
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
@@ -1539,13 +1549,31 @@ def train_iteration(
     """Fine-tune the model on the selected calibration subset (warm start)."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
+    use_8bit_optimizer = args.use_8bit_optimizer
+    if use_8bit_optimizer:
+        try:
+            import bitsandbytes  # noqa: F401
+        except ImportError:
+            print("Warning: bitsandbytes not installed, falling back to standard optimizer")
+            use_8bit_optimizer = False
+
+    if args.dtype == "bfloat16":
+        dtype = torch.bfloat16
+    elif args.dtype == "float16":
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=dtype,
         device_map="auto",
         low_cpu_mem_usage=True,
     )
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        print("Gradient checkpointing enabled")
+
     processor_path = resolve_processor_path(model_path)
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
@@ -1576,6 +1604,7 @@ def train_iteration(
             remove_unused_columns=False,
             bf16=args.dtype == "bfloat16",
             fp16=args.dtype == "float16",
+            optim="adamw_8bit" if use_8bit_optimizer else "adamw_torch",
         ),
         train_dataset=train_dataset,
         data_collator=collator,
