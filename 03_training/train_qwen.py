@@ -1,6 +1,7 @@
 """Fine-tune Qwen2.5-VL on Medical VQA (MC) via HuggingFace Trainer."""
 
 import argparse
+import random
 from collections import Counter
 
 import torch
@@ -160,6 +161,12 @@ def parse_args():
     p.add_argument("--use_8bit_optimizer", action="store_true")
     p.add_argument("--dataloader_num_workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--max_train_samples",
+        type=int,
+        default=None,
+        help="Cap training set size: random subset (seed=42) after verify filter when --use_reasoning.",
+    )
     p.add_argument("--resume_from_checkpoint", type=str, default=None)
     p.add_argument("--use_lora", action="store_true")
     p.add_argument("--lora_r", type=int, default=16)
@@ -206,6 +213,14 @@ def _load_samples(
             return loader.load_combined(split, vqarad_split=vqarad_split)
         return loader.load_combined(split)
     return loader.load_dataset(dataset, split=split)
+
+
+def _subsample_train_samples(samples: list[VQASample], max_n: int, *, seed: int = 42) -> list[VQASample]:
+    if max_n is None or max_n <= 0 or len(samples) <= max_n:
+        return samples
+    rng = random.Random(seed)
+    indices = rng.sample(range(len(samples)), max_n)
+    return [samples[i] for i in indices]
 
 
 def main():
@@ -283,6 +298,7 @@ def main():
         )
 
     train_total = len(train_samples)
+    train_samples_after_filter = train_total
     if args.use_reasoning:
         train_samples = [
             s
@@ -290,6 +306,7 @@ def main():
             if is_pseudo_reasoning_verified(s.metadata)
             and pseudo_reasoning_raw_from_metadata(s.metadata)
         ]
+        train_samples_after_filter = len(train_samples)
         print(
             f"Train: {len(train_samples)} / {train_total} "
             f"(use_reasoning, qwen_verify/is_correct=True)"
@@ -301,6 +318,20 @@ def main():
             )
     else:
         print(f"Train: {len(train_samples)} samples")
+
+    if args.max_train_samples is not None:
+        if not args.use_reasoning:
+            raise ValueError("--max_train_samples requires --use_reasoning (subset of verified samples).")
+        before_cap = len(train_samples)
+        train_samples = _subsample_train_samples(
+            train_samples,
+            args.max_train_samples,
+            seed=42,
+        )
+        print(
+            f"Train subset: {len(train_samples)} / {before_cap} "
+            f"(max_train_samples={args.max_train_samples}, seed=42)"
+        )
 
     som_resolver: SomResolver | None = None
     if args.use_som:
@@ -401,8 +432,9 @@ def main():
         {
             "final_train_loss": result.training_loss,
             "train_samples": len(train_dataset),
-            "train_samples_total_before_filter": train_total if args.use_reasoning else len(train_dataset),
-            "train_samples_filtered": len(train_dataset) if args.use_reasoning else None,
+            "train_samples_total_before_filter": train_total,
+            "train_samples_after_verify_filter": train_samples_after_filter if args.use_reasoning else None,
+            "max_train_samples": args.max_train_samples,
             "val_samples": len(val_dataset) if val_dataset else 0,
         }
     )
