@@ -42,6 +42,13 @@ from utils.qwen_vl import (
     resolve_processor_path,
     squeeze_batch_dim,
 )
+from utils.mc_json_zeroshot import (
+    DEFAULT_JSON_MAX_NEW_TOKENS,
+    JsonSingleShotOrder,
+    build_mc_zeroshot_training_conversation,
+    build_qwen_json_conversation,
+    parse_mc_answer_rationale_json,
+)
 from utils.save_results import clean_answer, save_results
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -403,6 +410,63 @@ def training_rationale(record: CalibrationRecord) -> str | None:
     return record.generated_rationale
 
 
+def uses_zeroshot_json(args: argparse.Namespace) -> bool:
+    """entropy_calibration uses free-form rationale JSON (mc_json_zeroshot), not GPT REGION schema."""
+    return args.selection_strategy == "entropy_calibration"
+
+
+def zeroshot_json_order(args: argparse.Namespace) -> JsonSingleShotOrder:
+    return "answer_first" if args.answer_first else "rationale_first"
+
+
+def _parse_inference_output(
+    generated_text: str,
+    num_opts: int,
+    *,
+    zeroshot_json: bool,
+    inference_mod: Any,
+) -> tuple[str | None, str | None]:
+    """Decode MC letter and rationale text from model output."""
+    if zeroshot_json:
+        parsed = parse_mc_answer_rationale_json(generated_text, num_opts)
+        return parsed.predicted_letter, parsed.rationale_text
+    predicted_letter, pred_reason_text, _ = inference_mod.decode_mc_prediction(
+        generated_text,
+        num_options=num_opts,
+        use_reasoning_json=True,
+    )
+    return predicted_letter, pred_reason_text
+
+
+def _build_inference_conversation(
+    sample: VQASample,
+    image: Image.Image,
+    *,
+    use_reasoning: bool,
+    answer_first: bool,
+    zeroshot_json: bool,
+) -> list[dict[str, Any]]:
+    """Build inference conversation (zero-shot JSON or GPT-structured reasoning JSON)."""
+    if not use_reasoning:
+        return build_mc_conversation(sample.question, sample.mc_options or [], image=image)
+    if zeroshot_json:
+        json_order: JsonSingleShotOrder = "answer_first" if answer_first else "rationale_first"
+        return build_qwen_json_conversation(
+            sample.question,
+            sample.mc_options or [],
+            json_order=json_order,
+            image=image,
+        )
+    from utils.qwen_vl import build_mc_reasoning_inference_conversation
+
+    return build_mc_reasoning_inference_conversation(
+        sample.question,
+        sample.mc_options or [],
+        image=image,
+        answer_first=answer_first,
+    )
+
+
 def record_to_vqa_sample(record: CalibrationRecord, *, dataset: str = "calibration") -> VQASample:
     """Convert a calibration record into a VQASample for Qwen training."""
     metadata = dict(record.original_row)
@@ -735,17 +799,17 @@ def _infer_single_mode(
     max_new_tokens: int,
     temperature: float,
     top_p: float,
+    zeroshot_json: bool = False,
 ) -> dict[str, Any]:
     """Run one MC reasoning inference pass (rationale-first or answer-first)."""
-    from utils.qwen_vl import build_mc_reasoning_inference_conversation
-
     sample = record_to_vqa_sample(record)
     image = Image.open(sample.image_path).convert("RGB")
-    conversation = build_mc_reasoning_inference_conversation(
-        sample.question,
-        sample.mc_options or [],
-        image=image,
+    conversation = _build_inference_conversation(
+        sample,
+        image,
+        use_reasoning=True,
         answer_first=answer_first,
+        zeroshot_json=zeroshot_json,
     )
     inputs = prepare_qwen_inputs(processor, conversation, add_generation_prompt=True)
     inputs = _move_inputs_to_device(inputs, device)
@@ -768,10 +832,11 @@ def _infer_single_mode(
     generated_ids = generation_output.sequences[0][input_length:]
     generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
     num_opts = len(sample.mc_options or [])
-    predicted_letter, pred_reason_text, _ = inference_mod.decode_mc_prediction(
+    predicted_letter, pred_reason_text = _parse_inference_output(
         generated_text,
-        num_options=num_opts,
-        use_reasoning_json=True,
+        num_opts,
+        zeroshot_json=zeroshot_json,
+        inference_mod=inference_mod,
     )
 
     agreement_confidences: list[float] = []
@@ -835,6 +900,7 @@ def run_dual_mode_inference(
     output_path: Path | None = None,
     checkpoint_path: Path | None = None,
     checkpoint_every: int = 25,
+    zeroshot_json: bool = False,
 ) -> list[CalibrationRecord]:
     """Run rationale-first and answer-first inference; populate rf_* and af_* fields."""
     inference_mod = _inference_qwen_module()
@@ -879,6 +945,7 @@ def run_dual_mode_inference(
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                zeroshot_json=zeroshot_json,
             )
             af = _infer_single_mode(
                 record,
@@ -892,6 +959,7 @@ def run_dual_mode_inference(
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                zeroshot_json=zeroshot_json,
             )
 
             new_record = CalibrationRecord(
@@ -959,10 +1027,10 @@ def run_inference(
     output_path: Path | None = None,
     checkpoint_path: Path | None = None,
     checkpoint_every: int = 25,
+    zeroshot_json: bool = False,
 ) -> list[CalibrationRecord]:
     """Run MC inference on records and refresh generated outputs and uncertainty."""
     inference_mod = _inference_qwen_module()
-    from utils.qwen_vl import build_mc_reasoning_inference_conversation
 
     model, processor, device = load_qwen_model_and_processor(model_path, dtype=dtype)
     model.eval()
@@ -1002,19 +1070,12 @@ def run_inference(
 
             sample = record_to_vqa_sample(record)
             image = Image.open(sample.image_path).convert("RGB")
-            conversation = (
-                build_mc_reasoning_inference_conversation(
-                    sample.question,
-                    sample.mc_options or [],
-                    image=image,
-                    answer_first=answer_first,
-                )
-                if use_reasoning
-                else build_mc_conversation(
-                    sample.question,
-                    sample.mc_options or [],
-                    image=image,
-                )
+            conversation = _build_inference_conversation(
+                sample,
+                image,
+                use_reasoning=use_reasoning,
+                answer_first=answer_first,
+                zeroshot_json=zeroshot_json,
             )
             inputs = prepare_qwen_inputs(processor, conversation, add_generation_prompt=True)
             inputs = _move_inputs_to_device(inputs, device)
@@ -1031,11 +1092,19 @@ def run_inference(
                 processor.decode(generated_ids, skip_special_tokens=True).strip()
             )
             num_opts = len(sample.mc_options or [])
-            predicted_letter, pred_reason_text, _ = inference_mod.decode_mc_prediction(
-                generated_text,
-                num_options=num_opts,
-                use_reasoning_json=use_reasoning,
-            )
+            if use_reasoning:
+                predicted_letter, pred_reason_text = _parse_inference_output(
+                    generated_text,
+                    num_opts,
+                    zeroshot_json=zeroshot_json,
+                    inference_mod=inference_mod,
+                )
+            else:
+                predicted_letter, pred_reason_text, _ = inference_mod.decode_mc_prediction(
+                    generated_text,
+                    num_options=num_opts,
+                    use_reasoning_json=False,
+                )
 
             agreement_confidences: list[float] = []
             agreement_entropies: list[float] = []
@@ -1420,6 +1489,7 @@ class CalibrationTrainDataset(Dataset):
         *,
         use_reasoning: bool = False,
         answer_first: bool = False,
+        zeroshot_json: bool = False,
         dataset_name: str = "calibration",
     ):
         self.records = records
@@ -1427,6 +1497,7 @@ class CalibrationTrainDataset(Dataset):
         self.max_length = max_length
         self.use_reasoning = use_reasoning
         self.answer_first = answer_first
+        self.zeroshot_json = zeroshot_json
         self.dataset_name = dataset_name
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
@@ -1441,14 +1512,27 @@ class CalibrationTrainDataset(Dataset):
 
         rationale = training_rationale(record)
         if self.use_reasoning and rationale:
-            conversation = build_mc_reasoning_conversation(
-                sample.question,
-                sample.mc_options or [],
-                reasoning_raw=rationale,
-                answer=sample.answer,
-                image=image,
-                answer_first=self.answer_first,
-            )
+            if self.zeroshot_json:
+                json_order: JsonSingleShotOrder = (
+                    "answer_first" if self.answer_first else "rationale_first"
+                )
+                conversation = build_mc_zeroshot_training_conversation(
+                    sample.question,
+                    sample.mc_options or [],
+                    rationale_raw=rationale,
+                    answer=sample.answer,
+                    image=image,
+                    json_order=json_order,
+                )
+            else:
+                conversation = build_mc_reasoning_conversation(
+                    sample.question,
+                    sample.mc_options or [],
+                    reasoning_raw=rationale,
+                    answer=sample.answer,
+                    image=image,
+                    answer_first=self.answer_first,
+                )
         else:
             conversation = build_mc_conversation(
                 sample.question,
@@ -1477,6 +1561,7 @@ def build_dataloader(
     max_length: int,
     use_reasoning: bool,
     answer_first: bool,
+    zeroshot_json: bool,
     dataset_name: str,
 ) -> tuple[CalibrationTrainDataset, CalibrationVLDataCollator]:
     """Build training dataset and collator for one calibration iteration."""
@@ -1486,6 +1571,7 @@ def build_dataloader(
         max_length=max_length,
         use_reasoning=use_reasoning,
         answer_first=answer_first,
+        zeroshot_json=zeroshot_json,
         dataset_name=dataset_name,
     )
     collator = CalibrationVLDataCollator(tokenizer=processor.tokenizer)
@@ -1584,6 +1670,7 @@ def train_iteration(
         max_length=args.max_length,
         use_reasoning=args.use_reasoning,
         answer_first=args.answer_first,
+        zeroshot_json=uses_zeroshot_json(args),
         dataset_name=args.dataset,
     )
     combined_loss = build_losses_from_args(args, processor)
@@ -1793,11 +1880,14 @@ def evaluate_iteration(
 ) -> dict[str, Any]:
     """Evaluate holdout accuracy, AURC, and ECE after an iteration."""
     max_tokens = args.max_new_tokens or (
-        DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+        DEFAULT_JSON_MAX_NEW_TOKENS
+        if uses_zeroshot_json(args)
+        else DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
         if args.selection_strategy in ("active_pseudo", "entropy_calibration") or args.use_reasoning
         else 8
     )
 
+    zeroshot_json = uses_zeroshot_json(args)
     if args.selection_strategy == "active_pseudo":
         refreshed = run_dual_mode_inference(
             holdout,
@@ -1808,6 +1898,7 @@ def evaluate_iteration(
             temperature=args.temperature,
             top_p=args.top_p,
             output_path=None,
+            zeroshot_json=zeroshot_json,
         )
         for record in refreshed:
             _apply_primary_eval_view(record, primary="answer_first")
@@ -1823,6 +1914,7 @@ def evaluate_iteration(
             temperature=args.temperature,
             top_p=args.top_p,
             output_path=None,
+            zeroshot_json=zeroshot_json,
         )
 
     eval_rows = [record.to_inference_row() for record in refreshed]
@@ -1924,10 +2016,13 @@ def main() -> None:
             )
 
     max_tokens = args.max_new_tokens or (
-        DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+        DEFAULT_JSON_MAX_NEW_TOKENS
+        if uses_zeroshot_json(args)
+        else DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
         if uses_unseen_pool or args.use_reasoning
         else 8
     )
+    zeroshot_json = uses_zeroshot_json(args)
 
     if args.resume_from:
         output_dir = Path(args.resume_from)
@@ -2066,6 +2161,7 @@ def main() -> None:
                     output_path=inferred_path,
                     checkpoint_path=iter_dir / PARTIAL_INFERENCE_FILE,
                     checkpoint_every=args.checkpoint_every,
+                    zeroshot_json=zeroshot_json,
                 )
                 save_run_state(
                     output_dir,
@@ -2147,6 +2243,7 @@ def main() -> None:
                         output_path=pool_inference_path,
                         checkpoint_path=iter_dir / POOL_PARTIAL_INFERENCE_FILE,
                         checkpoint_every=args.checkpoint_every,
+                        zeroshot_json=zeroshot_json,
                     )
                     save_records_json(output_dir / ACTIVE_POOL_FILE, pool)
                     save_run_state(

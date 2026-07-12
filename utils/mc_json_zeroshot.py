@@ -125,6 +125,31 @@ def build_qwen_json_conversation(
     return _qwen_image_conversation(full_question, image=image)
 
 
+def build_mc_zeroshot_training_conversation(
+    question: str,
+    options: List[str],
+    *,
+    rationale_raw: str,
+    answer: str,
+    json_order: JsonSingleShotOrder = "answer_first",
+    image: Any = None,
+) -> List[dict]:
+    """Training: zero-shot JSON user prompt; assistant target {\"answer\", \"rationale\"}."""
+    letter = str(answer or "").strip().upper()
+    if len(letter) != 1 or letter not in LETTER_POOL:
+        raise ValueError(f"Invalid MC answer letter: {answer!r}")
+    rationale = rationale_raw.strip()
+    payload = (
+        {"answer": letter, "rationale": rationale}
+        if json_order == "answer_first"
+        else {"rationale": rationale, "answer": letter}
+    )
+    assistant_text = json.dumps(payload, ensure_ascii=False)
+    return build_qwen_json_conversation(
+        question, options, json_order=json_order, image=image
+    ) + [{"role": "assistant", "content": [{"type": "text", "text": assistant_text}]}]
+
+
 def build_qwen_stage1_conversation(
     question: str,
     options: List[str],
