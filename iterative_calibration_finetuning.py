@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import wandb
 from PIL import Image
 from tqdm import tqdm
 from torch.utils.data import Dataset
@@ -37,7 +36,6 @@ from utils.qwen_vl import (
     build_mc_reasoning_conversation,
     configure_qwen_processor_pixels,
     mask_labels_assistant_only,
-    model_short_name,
     prepare_qwen_inputs,
     resolve_processor_path,
     squeeze_batch_dim,
@@ -629,8 +627,6 @@ def parse_args() -> argparse.Namespace:
         default=25,
         help="Save partial inference checkpoint every N samples (enables resume within an iteration)",
     )
-    parser.add_argument("--wandb_project", type=str, default="medvqa")
-    parser.add_argument("--wandb_run_name", type=str, default=None)
     return parser.parse_args()
 
 
@@ -1803,7 +1799,7 @@ def train_iteration(
             learning_rate=args.learning_rate,
             logging_steps=args.logging_steps,
             save_strategy="epoch",
-            report_to="wandb",
+            report_to="none",
             seed=args.seed,
             remove_unused_columns=False,
             bf16=args.dtype == "bfloat16",
@@ -2218,15 +2214,6 @@ def main() -> None:
             args=args,
         )
 
-    run_name = args.wandb_run_name or f"{model_short_name(args.model_path)}_{args.dataset}_iter_calib"
-    wandb.init(
-        project=args.wandb_project,
-        name=run_name,
-        config=vars(args),
-        tags=["iterative_calibration", args.dataset, args.selection_strategy],
-        resume="allow" if args.resume_from else None,
-    )
-
     for iteration in range(start_iteration, args.iterations):
         iter_dir = output_dir / f"iter_{iteration}"
         iter_dir.mkdir(parents=True, exist_ok=True)
@@ -2523,21 +2510,6 @@ def main() -> None:
             args=args,
         )
 
-        wandb.log(
-            {
-                **(
-                    {
-                        f"iter_{iteration}/accuracy": eval_metrics["accuracy"],
-                        f"iter_{iteration}/aurc": eval_metrics["aurc"],
-                    }
-                    if holdout
-                    else {}
-                ),
-                f"iter_{iteration}/answer_loss": train_metrics["answer_loss"],
-                f"iter_{iteration}/calibration_loss": train_metrics["calibration_loss"],
-                f"iter_{iteration}/n_selected": selection_stats["n_selected"],
-            }
-        )
         print(json.dumps(iteration_metrics, indent=2))
 
         if uses_unseen_pool and not unseen:
@@ -2548,7 +2520,6 @@ def main() -> None:
     with open(output_dir / "summary.json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
 
-    wandb.finish()
     print(f"\nCompleted. Summary: {output_dir / 'summary.json'}")
 
 
