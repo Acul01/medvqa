@@ -25,7 +25,7 @@ from transformers import (
 )
 from transformers.trainer_utils import set_seed
 
-from calibration_losses import build_losses, compute_ece
+from calibration_losses import AnswerConfidenceHead, build_losses, compute_ece
 from utils.load_data import MedicalVQALoader, VQASample
 from utils.mc_eval import run_mc_evaluation
 from utils.mc_vqa import correct_index_to_letter, parse_predicted_letter
@@ -53,6 +53,9 @@ from utils.save_results import clean_answer, save_results
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
+
+CONFIDENCE_HEAD_FILE = "confidence_head.pt"
+CONFIDENCE_HEAD_BOTTLENECK = 256
 
 HOLDOUT_RECORDS_FILE = "holdout_records.json"
 UNSEEN_POOL_FILE = "unseen_pool.json"
@@ -581,7 +584,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use_reasoning", action="store_true", default=False)
     parser.add_argument("--answer_first", action="store_true", default=False)
     parser.add_argument("--answer_loss", type=str, default="cross_entropy")
-    parser.add_argument("--calibration_loss", type=str, default="confidence_bce")
+    parser.add_argument(
+        "--calibration_loss",
+        type=str,
+        default="confidence_bce",
+        choices=["confidence_bce", "confidence_head"],
+        help=(
+            "confidence_bce: BCE on the answer-letter softmax probability (same distribution "
+            "the answer cross-entropy optimizes -- conflicts with it whenever a sample has "
+            "calibration_target=0, degrading answer-format quality). "
+            "confidence_head: BCE via a small learned head on the answer-token hidden state "
+            "(decoupled from the vocabulary logits, avoids that conflict). Persisted as "
+            "confidence_head.pt alongside the model checkpoint and warm-started across "
+            "iterations like the model weights."
+        ),
+    )
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument(
@@ -710,6 +727,38 @@ def compute_confidence_entropy(
     )
 
 
+def compute_head_confidence_entropy(
+    generation_hidden_states: Any,
+    generated_ids: torch.Tensor,
+    *,
+    num_opts: int,
+    answer_letter_token_ids: dict[int, str],
+    confidence_head: Any,
+) -> tuple[float, float]:
+    """Compute (entropy, confidence) via the learned confidence head at the answer-token step.
+
+    entropy is the binary entropy of the head's P(correct) output — monotonic in uncertainty
+    (0 = certain either way, maximal at p=0.5) so it plugs directly into the existing
+    AURC/risk-coverage code that expects a score_field="entropy" ranking.
+    """
+    inference_mod = _inference_qwen_module()
+    if not generation_hidden_states:
+        return float("nan"), float("nan")
+
+    valid_answer_ids = {
+        tid: letter for tid, letter in answer_letter_token_ids.items() if letter in "ABCDEFGHIJ"[:num_opts]
+    }
+    answer_step = inference_mod._find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
+    if answer_step is None or answer_step >= len(generation_hidden_states):
+        return float("nan"), float("nan")
+
+    hidden = generation_hidden_states[answer_step][-1][:, -1, :].float()
+    confidence = float(torch.sigmoid(confidence_head(hidden)).item())
+    confidence = min(max(confidence, 1e-6), 1.0 - 1e-6)
+    entropy = -(confidence * math.log(confidence) + (1 - confidence) * math.log(1 - confidence))
+    return entropy, confidence
+
+
 def _move_inputs_to_device(inputs: dict[str, Any], device: torch.device) -> dict[str, Any]:
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
@@ -780,10 +829,41 @@ def load_qwen_model_and_processor(
 
         model = load_spatial_filter_checkpoint(model, str(spatial_filter_ckpt), bottleneck=64)
 
+    confidence_head_ckpt = Path(resolved_path) / CONFIDENCE_HEAD_FILE
+    if confidence_head_ckpt.exists():
+        model = attach_confidence_head(model, resolved_path)
+
     processor_path = resolve_processor_path(base_model or resolved_path if is_lora else resolved_path)
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
     return model, processor, device
+
+
+def attach_confidence_head(
+    model: Any,
+    model_path: str,
+    *,
+    bottleneck: int = CONFIDENCE_HEAD_BOTTLENECK,
+) -> Any:
+    """Attach an AnswerConfidenceHead submodule to `model`, warm-starting from
+    confidence_head.pt in model_path if present, else fresh-initializing.
+    """
+    from utils.spatial_filter import get_visual_merger_output_dim
+
+    hidden_size = get_visual_merger_output_dim(model)
+    head = AnswerConfidenceHead(hidden_size, bottleneck=bottleneck)
+    ckpt_path = Path(model_path) / CONFIDENCE_HEAD_FILE
+    if ckpt_path.exists():
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        head.load_state_dict(state)
+        print(f"Confidence head loaded from {ckpt_path}")
+    else:
+        print("Confidence head freshly initialized (no confidence_head.pt found)")
+
+    param = next(model.parameters())
+    head.to(device=param.device, dtype=param.dtype)
+    model.confidence_head = head
+    return model
 
 
 def _infer_single_mode(
@@ -1034,6 +1114,7 @@ def run_inference(
 
     model, processor, device = load_qwen_model_and_processor(model_path, dtype=dtype)
     model.eval()
+    has_head = hasattr(model, "confidence_head")
 
     answer_letter_token_ids = inference_mod._get_answer_letter_token_ids(processor.tokenizer)
     agreement_samples = max(1, agreement_samples)
@@ -1042,8 +1123,9 @@ def run_inference(
         "do_sample": True,
         "temperature": temperature,
         "top_p": top_p,
+        "output_hidden_states": has_head,
     }
-    gen_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False}
+    gen_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False, "output_hidden_states": has_head}
 
     done_by_key: dict[tuple[str, str], CalibrationRecord] = {}
     if checkpoint_path is not None and checkpoint_path.exists():
@@ -1116,7 +1198,17 @@ def run_inference(
                     output_logits=True,
                 )
                 sample_generated_ids = sample_output.sequences[0][input_length:]
-                if sample_output.logits:
+                if has_head and sample_output.hidden_states:
+                    entropy, confidence = compute_head_confidence_entropy(
+                        sample_output.hidden_states,
+                        sample_generated_ids,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                        confidence_head=model.confidence_head,
+                    )
+                    agreement_entropies.append(entropy)
+                    agreement_confidences.append(confidence)
+                elif not has_head and sample_output.logits:
                     entropy, confidence = compute_confidence_entropy(
                         sample_output.logits,
                         sample_generated_ids,
@@ -1129,14 +1221,25 @@ def run_inference(
 
             confidence = inference_mod._mean_finite(agreement_confidences)
             entropy = inference_mod._mean_finite(agreement_entropies)
-            if (not math.isfinite(confidence) or not math.isfinite(entropy)) and generation_output.logits:
-                greedy_entropy, greedy_confidence = compute_confidence_entropy(
-                    generation_output.logits,
-                    generated_ids,
-                    use_reasoning_json=use_reasoning,
-                    num_opts=num_opts,
-                    answer_letter_token_ids=answer_letter_token_ids,
-                )
+            if not math.isfinite(confidence) or not math.isfinite(entropy):
+                if has_head and generation_output.hidden_states:
+                    greedy_entropy, greedy_confidence = compute_head_confidence_entropy(
+                        generation_output.hidden_states,
+                        generated_ids,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                        confidence_head=model.confidence_head,
+                    )
+                elif not has_head and generation_output.logits:
+                    greedy_entropy, greedy_confidence = compute_confidence_entropy(
+                        generation_output.logits,
+                        generated_ids,
+                        use_reasoning_json=use_reasoning,
+                        num_opts=num_opts,
+                        answer_letter_token_ids=answer_letter_token_ids,
+                    )
+                else:
+                    greedy_entropy, greedy_confidence = float("nan"), float("nan")
                 if not math.isfinite(confidence):
                     confidence = greedy_confidence
                 if not math.isfinite(entropy):
@@ -1291,15 +1394,25 @@ def select_entropy_calibration(
     n_wrong_low_entropy: int,
     n_correct_high_entropy: int,
 ) -> tuple[list[CalibrationRecord], list[CalibrationRecord], dict[str, Any]]:
-    """Select miscalibrated samples: wrong+low entropy and correct+high entropy."""
+    """Select miscalibrated samples: wrong+low entropy (overconfident) and correct+high
+    entropy (underconfident).
+
+    Sorts directly by confidence rather than entropy: for the confidence-head metric,
+    entropy = binary_entropy(P(correct)) is symmetric around p=0 and p=1 (both "confidently
+    wrong" and "correctly humble about being wrong" have low entropy), so entropy alone can't
+    distinguish the miscalibration case we want from an already-well-calibrated one. Sorting
+    wrong-records by confidence descending / correct-records by confidence ascending picks
+    exactly "most overconfident wrong" / "most underconfident correct" without that ambiguity
+    — which also matches the .md spec's original phrasing ("falsche Antwort + hohe Confidence").
+    """
     wrong_sorted = sorted(
-        [record for record in unseen if not record.is_correct and math.isfinite(record.entropy)],
-        key=lambda record: record.entropy,
+        [record for record in unseen if not record.is_correct and math.isfinite(record.confidence)],
+        key=lambda record: record.confidence,
+        reverse=True,
     )
     correct_sorted = sorted(
-        [record for record in unseen if record.is_correct and math.isfinite(record.entropy)],
-        key=lambda record: record.entropy,
-        reverse=True,
+        [record for record in unseen if record.is_correct and math.isfinite(record.confidence)],
+        key=lambda record: record.confidence,
     )
 
     wrong_selected = wrong_sorted[:n_wrong_low_entropy]
@@ -1592,9 +1705,10 @@ class CalibrationTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         calibration_targets = inputs.pop("calibration_target")
         labels = inputs.get("labels")
-        outputs = model(**inputs)
+        outputs = model(**inputs, output_hidden_states=True)
         total, answer_loss, calibration_loss = self.combined_loss(
             outputs.logits,
+            outputs.hidden_states[-1],
             labels,
             calibration_targets,
         )
@@ -1611,7 +1725,7 @@ class CalibrationTrainer(Trainer):
         return (total, outputs) if return_outputs else total
 
 
-def build_losses_from_args(args: argparse.Namespace, processor: Any) -> Any:
+def build_losses_from_args(args: argparse.Namespace, processor: Any, model: Any) -> Any:
     """Build combined loss using inference helpers for answer-token lookup."""
     inference_mod = _inference_qwen_module()
     answer_letter_token_ids = inference_mod._get_answer_letter_token_ids(processor.tokenizer)
@@ -1622,6 +1736,7 @@ def build_losses_from_args(args: argparse.Namespace, processor: Any) -> Any:
         answer_letter_token_ids=answer_letter_token_ids,
         find_answer_token_step=inference_mod._find_answer_token_step,
         use_reasoning_json=args.use_reasoning,
+        confidence_head=getattr(model, "confidence_head", None),
     )
 
 
@@ -1656,6 +1771,8 @@ def train_iteration(
         device_map="auto",
         low_cpu_mem_usage=True,
     )
+    if args.calibration_loss == "confidence_head":
+        model = attach_confidence_head(model, model_path)
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
@@ -1673,7 +1790,7 @@ def train_iteration(
         zeroshot_json=uses_zeroshot_json(args),
         dataset_name=args.dataset,
     )
-    combined_loss = build_losses_from_args(args, processor)
+    combined_loss = build_losses_from_args(args, processor, model)
 
     trainer = CalibrationTrainer(
         combined_loss,
@@ -1699,8 +1816,21 @@ def train_iteration(
     )
 
     train_result = trainer.train()
+
+    confidence_head_state = None
+    if args.calibration_loss == "confidence_head" and hasattr(model, "confidence_head"):
+        # Detach before save_pretrained: an unregistered submodule would land in the
+        # safetensors as unexpected keys that from_pretrained silently drops on reload
+        # (same reasoning as spatial_filter.pt in 03_training/train_qwen_modified.py).
+        confidence_head_state = model.confidence_head.state_dict()
+        del model.confidence_head
+
     trainer.save_model()
     processor.save_pretrained(output_dir)
+
+    if confidence_head_state is not None:
+        torch.save(confidence_head_state, output_dir / CONFIDENCE_HEAD_FILE)
+        print(f"Confidence head saved -> {output_dir / CONFIDENCE_HEAD_FILE}")
 
     answer_loss = (
         sum(trainer._answer_losses) / len(trainer._answer_losses)
