@@ -1104,13 +1104,22 @@ def run_inference(
     checkpoint_path: Path | None = None,
     checkpoint_every: int = 25,
     zeroshot_json: bool = False,
+    confidence_source: str = "auto",
 ) -> list[CalibrationRecord]:
-    """Run MC inference on records and refresh generated outputs and uncertainty."""
+    """Run MC inference on records and refresh generated outputs and uncertainty.
+
+    confidence_source: "auto" uses the confidence head when the checkpoint has one
+    (intended for holdout evaluation, where we want to measure the head's own quality).
+    "token_prob" forces the pre-head token-probability method even if a head is present --
+    use this for pool inference that feeds sample *selection*, so an early, still-unreliable
+    head doesn't curate its own next training batch (a self-reinforcing feedback loop that
+    degraded calibration and accuracy across iterations when selection also used the head).
+    """
     inference_mod = _inference_qwen_module()
 
     model, processor, device = load_qwen_model_and_processor(model_path, dtype=dtype)
     model.eval()
-    has_head = hasattr(model, "confidence_head")
+    has_head = hasattr(model, "confidence_head") and confidence_source != "token_prob"
 
     answer_letter_token_ids = inference_mod._get_answer_letter_token_ids(processor.tokenizer)
     agreement_samples = max(1, agreement_samples)
@@ -2279,6 +2288,7 @@ def main() -> None:
                     checkpoint_path=iter_dir / PARTIAL_INFERENCE_FILE,
                     checkpoint_every=args.checkpoint_every,
                     zeroshot_json=zeroshot_json,
+                    confidence_source="token_prob",
                 )
                 save_run_state(
                     output_dir,
@@ -2361,6 +2371,7 @@ def main() -> None:
                         checkpoint_path=iter_dir / POOL_PARTIAL_INFERENCE_FILE,
                         checkpoint_every=args.checkpoint_every,
                         zeroshot_json=zeroshot_json,
+                        confidence_source="token_prob",
                     )
                     save_records_json(output_dir / ACTIVE_POOL_FILE, pool)
                     save_run_state(
