@@ -371,7 +371,7 @@ def prepare_qwen_inputs(
 
 @dataclass
 class QwenVLDataCollator:
-    """Pad text fields; concatenate vision tensors (Qwen2.5-VL batch layout)."""
+    """Pad text fields; concatenate vision tensors (Qwen2.5-VL / Qwen3-VL batch layout)."""
 
     tokenizer: Any
 
@@ -396,6 +396,22 @@ class QwenVLDataCollator:
             "attention_mask": input_ids.ne(pad_id),
         }
 
+        if instances and "mm_token_type_ids" in instances[0]:
+            mm_ids = []
+            for inst in instances:
+                mm = inst.get("mm_token_type_ids")
+                if mm is None:
+                    continue
+                if mm.ndim == 0:
+                    mm = mm.unsqueeze(0)
+                elif mm.ndim > 1:
+                    mm = mm.reshape(-1)
+                mm_ids.append(mm)
+            if mm_ids:
+                batch["mm_token_type_ids"] = torch.nn.utils.rnn.pad_sequence(
+                    mm_ids, batch_first=True, padding_value=0
+                )
+
         if instances and "pixel_values" in instances[0]:
             pixel_values = [inst["pixel_values"] for inst in instances if inst.get("pixel_values") is not None]
             if pixel_values:
@@ -410,7 +426,7 @@ class QwenVLDataCollator:
                         rows.append(grid.unsqueeze(0))
                     else:
                         rows.append(grid)
-                batch["image_grid_thw"] = torch.cat(rows, dim=0)
+                batch["image_grid_thw"] = torch.cat(rows, dim=0).reshape(-1, 3)
 
         return batch
 
@@ -419,7 +435,17 @@ def squeeze_batch_dim(batch: dict) -> dict:
     """Remove batch dimension from processor outputs for per-sample Dataset items."""
     out = {}
     for key, value in batch.items():
-        if isinstance(value, torch.Tensor) and value.ndim > 0 and value.shape[0] == 1:
+        if not isinstance(value, torch.Tensor) or value.ndim == 0:
+            out[key] = value
+            continue
+        # Keep mm_token_type_ids aligned with input_ids (same leading batch dim).
+        if key in {"input_ids", "attention_mask", "mm_token_type_ids"}:
+            if value.shape[0] == 1:
+                out[key] = value.squeeze(0)
+            else:
+                out[key] = value
+            continue
+        if value.shape[0] == 1:
             out[key] = value.squeeze(0)
         else:
             out[key] = value
