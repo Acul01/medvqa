@@ -48,10 +48,10 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Einheitlicher Datenloader (`MedicalVQALoader`, `VQASample`) | **Implementiert** (`utils/load_data.py`) |
 | Training Standard-LLaVA (HF `LlavaForConditionalGeneration` + `Trainer`) | **Implementiert** (`03_training/train.py`) |
 | Training LLaVA-Med (Microsoft-`llava` + `Trainer`) | **Implementiert** (`03_training/train_med.py`, benötigt installiertes LLaVA-Med) |
-| Training Qwen2.5-VL-7B (HF `Qwen2_5_VLForConditionalGeneration` + `Trainer`) | **Implementiert** (`03_training/train_qwen.py`) |
+| Training Qwen-VL 2.5 / 3 (HF + `Trainer`) | **Implementiert** (`03_training/train_qwen.py`, Default Qwen2.5; Qwen3 via `--model_path`) |
 | Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`04_evaluation/inference.py`) |
 | Inferenz LLaVA-Med | **Implementiert** (`04_evaluation/inference_med.py`) |
-| Inferenz Qwen2.5-VL + Unsicherheitsmetriken | **Implementiert** (`04_evaluation/inference_qwen.py`) |
+| Inferenz Qwen-VL (2.5 / 3) + Unsicherheitsmetriken | **Implementiert** (`04_evaluation/inference_qwen.py`) |
 | Inferenz MedVLM-R1 (off-the-shelf, Accuracy + Agreement) | **Implementiert** (`04_evaluation/inference_medvlm_r1.py`) |
 | Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`04_evaluation/evaluate.py`) |
 | Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`04_evaluation/risk_coverage_entropy.py`) |
@@ -167,11 +167,11 @@ pip install openpyxl
 # Optional: Datensatz-Download (download_datasets.py)
 pip install datasets huggingface_hub
 
-# Qwen2.5-VL (train_qwen.py, inference_qwen.py)
-pip install "transformers>=4.49" qwen-vl-utils accelerate
+# Qwen-VL (train_qwen.py, inference_qwen.py) — Qwen2.5-VL und Qwen3-VL
+pip install "transformers>=4.57" qwen-vl-utils accelerate
 ```
 
-Bei `KeyError: 'qwen2_5_vl'` ggf. Transformers aus Source installieren:
+Bei `KeyError: 'qwen2_5_vl'` oder fehlender `Qwen3VLForConditionalGeneration`-Klasse ggf. Transformers aus Source installieren:
 
 ```bash
 pip install git+https://github.com/huggingface/transformers accelerate
@@ -278,11 +278,11 @@ python 03_training/train.py \
 
 Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei SLAKE Validation z. B. `--val_split validate`), `--num_train_epochs`, `--per_device_train_batch_size`, `--learning_rate`, `--max_length`, `--fp16` / `--bf16`, `--gradient_checkpointing`, LoRA-Flags (`--use_lora`, …), `--wandb_project`.
 
-**Hinweis:** `03_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `03_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`). **Qwen2.5-VL** läuft über `03_training/train_qwen.py` (Default `Qwen/Qwen2.5-VL-7B-Instruct`).
+**Hinweis:** `03_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `03_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`). **Qwen-VL** (2.5 und 3) läuft über `03_training/train_qwen.py` (Default `Qwen/Qwen2.5-VL-7B-Instruct`; Qwen3 via `--model_path Qwen/Qwen3-VL-8B-Instruct`).
 
-### Qwen2.5-VL trainieren (MC-Baseline)
+### Qwen-VL trainieren (MC-Baseline)
 
-Gleiches MC-Format und Loss-Masking wie LLaVA-HF; Bildverarbeitung über `qwen-vl-utils` (`utils/qwen_vl.py`).
+Gleiches MC-Format und Loss-Masking wie LLaVA-HF; Bildverarbeitung über `qwen-vl-utils` (`utils/qwen_vl.py`, Modell-Loader in `utils/qwen_model.py`).
 
 **SLAKE** (Validation-Split heißt `validate`):
 
@@ -309,6 +309,27 @@ python 03_training/train_qwen.py \
 python 03_training/train_qwen.py \
   --dataset medvqa2019 \
   --output_dir ./05_outputs/qwen_medvqa2019 \
+  --bf16 --gradient_checkpointing
+```
+
+**Qwen3-VL-8B** (answer-only):
+
+```bash
+python 03_training/train_qwen.py \
+  --dataset vqarad \
+  --model_path Qwen/Qwen3-VL-8B-Instruct \
+  --output_dir ./05_outputs/mc/qwen3/vqarad_MC_full \
+  --bf16 --gradient_checkpointing
+```
+
+**Qwen3-VL-8B** mit Explanation (`--use_reasoning`; verified Pseudo-Reasoning-JSON vorausgesetzt):
+
+```bash
+python 03_training/train_qwen.py \
+  --dataset vqarad \
+  --model_path Qwen/Qwen3-VL-8B-Instruct \
+  --use_reasoning \
+  --output_dir ./05_outputs/mc/qwen3/vqarad_reasoning \
   --bf16 --gradient_checkpointing
 ```
 
@@ -510,7 +531,7 @@ Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veral
 
 **LLaVA-Med:** `inference_med.py` (andere Konversationsschablone, siehe Dateikopf).
 
-**Qwen2.5-VL:** `inference_qwen.py` — MC-Inferenz mit Entropie, Agreement, Confidence und Ablationen (`black`/`shuffle`); **ohne** 2-Stage-Reasoning und GradCAM.
+**Qwen-VL:** `inference_qwen.py` — MC-Inferenz mit Entropie, Agreement, Confidence und Ablationen (`black`/`shuffle`); **ohne** 2-Stage-Reasoning und GradCAM. Unterstützt Qwen2.5-VL und Qwen3-VL via `--model_path`.
 
 **Unsicherheit (Qwen):** `--agreement_samples K` (Default 5) steuert `agreement`, `confidence` und scalar `entropy` gemeinsam — letztere beiden sind arithmetische Mittel über K stochastische Generierungen (`temperature`/`top_p`). Answer-only: Token-Entropy am ersten generierten Token; mit `--use_reasoning_json`: scalar `entropy` am Antwort-Buchstaben-Token im JSON. Der greedy Hauptlauf liefert `predicted_*`; mit `--use_reasoning_json` zusätzlich `entropy_tokens_all` (Entropy pro generiertem Token der JSON-Antwort) und `entropy_sequence_mean`.
 
@@ -539,7 +560,31 @@ python 04_evaluation/inference_qwen.py \
   --results_dir 06_results
 ```
 
-Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` weglassen oder explizit setzen (ohne `--finetuned`).
+Basis-Modell (ohne Fine-Tuning): `--model_path Qwen/Qwen2.5-VL-7B-Instruct` oder `Qwen/Qwen3-VL-8B-Instruct` weglassen bzw. explizit setzen (ohne `--finetuned`).
+
+**Qwen3-VL-8B** (pretrained, answer-only):
+
+```bash
+python 04_evaluation/inference_qwen.py \
+  --dataset vqarad \
+  --split test \
+  --model_path Qwen/Qwen3-VL-8B-Instruct \
+  --dtype bfloat16 \
+  --results_dir 06_results/qwen3_base
+```
+
+**Qwen3-VL-8B** mit Explanation (Reasoning-Checkpoint):
+
+```bash
+python 04_evaluation/inference_qwen.py \
+  --dataset vqarad \
+  --split test \
+  --model_path ./05_outputs/mc/qwen3/vqarad_reasoning \
+  --finetuned \
+  --use_reasoning_json \
+  --dtype bfloat16 \
+  --results_dir 06_results/qwen3_reasoning
+```
 
 ### MedVLM-R1 (off-the-shelf)
 
@@ -995,6 +1040,7 @@ Vergleich mit **Basis-Modell** (ohne Fine-Tuning): `--model_path` weglassen oder
 | LLaVA 1.5 (7B, HF) | `llava-hf/llava-1.5-7b-hf` |
 | LLaVA-Med | `microsoft/llava-med-v1.5-mistral-7b` |
 | Qwen2.5-VL (7B, HF) | `Qwen/Qwen2.5-VL-7B-Instruct` |
+| Qwen3-VL (8B, HF) | `Qwen/Qwen3-VL-8B-Instruct` |
 | MedVLM-R1 (2B, HF, pretrained) | `JZPeterPan/MedVLM-R1` |
 
 Fine-getunte Gewichte liegen unter dem gewählten `--output_dir` und können in `inference.py` / `train.py`, `inference_med.py` / `train_med.py` bzw. `inference_qwen.py` / `train_qwen.py` via `--model_path` weiterverwendet werden. MedVLM-R1 wird in v1 nur **off-the-shelf** inferiert (`inference_medvlm_r1.py`).

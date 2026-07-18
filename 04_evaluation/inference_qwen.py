@@ -1,9 +1,8 @@
-"""Inference script for Qwen2.5-VL on MC Medical VQA."""
+"""Inference script for Qwen-VL (2.5 / 3) on MC Medical VQA."""
 
 import argparse
 import json
 import math
-import os
 import random
 from collections import Counter
 from pathlib import Path
@@ -12,7 +11,7 @@ import torch
 import wandb
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import run_mc_evaluation
@@ -23,6 +22,12 @@ from utils.som_select import (
     DEFAULT_SELECTION_MAX_NEW_TOKENS,
     parse_selected_labels,
     question_with_som_hint,
+)
+from utils.qwen_model import (
+    default_base_model_for_path,
+    is_lora_checkpoint,
+    load_qwen_vl_for_inference,
+    resolve_local_model_path,
 )
 from utils.qwen_vl import (
     DEFAULT_MODEL_PATH,
@@ -57,7 +62,7 @@ def decode_mc_prediction(generated_text: str, *, num_options: int, use_reasoning
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run inference with Qwen2.5-VL on MC Medical VQA")
+    parser = argparse.ArgumentParser(description="Run inference with Qwen-VL on MC Medical VQA")
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--base_model", type=str, default=None)
     parser.add_argument(
@@ -282,79 +287,17 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Resolve to absolute path — newer huggingface_hub rejects relative paths
-    # like "./05_outputs/..." in from_pretrained.
-    model_path = os.path.abspath(args.model_path)
-
+    model_path = resolve_local_model_path(args.model_path)
+    is_lora = is_lora_checkpoint(model_path)
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     load_dtype = dtype_map[args.dtype]
 
-    is_local = os.path.isdir(model_path)
-    is_lora  = is_local and (Path(model_path) / "adapter_config.json").exists()
-
-    # WORKAROUND for a bug in this transformers version:
-    #
-    # from_pretrained → maybe_load_adapters (peft.py)
-    #   → cached_file("adapter_config.json")          [hub.py:278]
-    #     → cached_files(...)                         [hub.py:473]
-    #       → hf_hub_download(repo_id=<local_path>)  ← HFValidationError!
-    #
-    # cached_files tries hf_hub_download even for local dirs when the file is
-    # absent, and maybe_load_adapters has no try/except to catch it.
-    #
-    # Key insight: cached_file (hub.py) calls cached_files via a *global name
-    # lookup in hub.py's own namespace*.  Patching hub_mod.cached_files affects
-    # that lookup regardless of how peft.py imported cached_file.
-    #
-    # Our replacement returns None-per-missing-file for local dirs so that
-    # cached_file → None → maybe_load_adapters → "no adapter found".
-    _patches: list[tuple] = []
-    if is_local and not is_lora:
-        try:
-            import transformers.utils.hub as _hub_mod
-
-            _orig_cached_files = _hub_mod.cached_files
-
-            def _safe_cached_files(path_or_repo_id=None, filenames=None, **kwargs):
-                if (
-                    path_or_repo_id is not None
-                    and filenames is not None
-                    and isinstance(path_or_repo_id, (str, os.PathLike))
-                    and os.path.isdir(str(path_or_repo_id))
-                ):
-                    p = str(path_or_repo_id)
-                    # Return local path if the file exists, else None.
-                    # None causes cached_file to return None, which
-                    # maybe_load_adapters interprets as "no adapter present".
-                    return [
-                        (os.path.join(p, fn) if os.path.exists(os.path.join(p, fn)) else None)
-                        for fn in filenames
-                    ]
-                return _orig_cached_files(
-                    path_or_repo_id=path_or_repo_id, filenames=filenames, **kwargs
-                )
-
-            _hub_mod.cached_files = _safe_cached_files
-            _patches.append((_hub_mod, "cached_files", _orig_cached_files))
-        except (ImportError, AttributeError):
-            pass
-
-    try:
-        if is_lora:
-            from peft import PeftModel
-            base_path  = args.base_model or DEFAULT_MODEL_PATH
-            base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                base_path, torch_dtype=load_dtype, device_map="auto"
-            )
-            model = PeftModel.from_pretrained(base_model, model_path)
-            model = model.merge_and_unload()
-        else:
-            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=load_dtype, device_map="auto"
-            )
-    finally:
-        for _mod, _attr, _orig in _patches:
-            setattr(_mod, _attr, _orig)
+    model, model_path = load_qwen_vl_for_inference(
+        model_path,
+        torch_dtype=load_dtype,
+        device_map="auto",
+        base_model=args.base_model,
+    )
     model.eval()
 
     # Auto-detect spatial filter checkpoint produced by train_qwen_modified.py.
@@ -371,9 +314,15 @@ def main():
         print("No spatial_filter.pt found — running without spatial filter.")
 
     if is_lora:
-        processor_path = resolve_processor_path(args.base_model or DEFAULT_MODEL_PATH)
+        processor_path = resolve_processor_path(
+            args.base_model or default_base_model_for_path(model_path),
+            default_path=default_base_model_for_path(model_path),
+        )
     else:
-        processor_path = resolve_processor_path(model_path)
+        processor_path = resolve_processor_path(
+            model_path,
+            default_path=default_base_model_for_path(model_path),
+        )
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
 

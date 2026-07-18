@@ -1,4 +1,4 @@
-"""Fine-tune Qwen2.5-VL on Medical VQA (MC) via HuggingFace Trainer."""
+"""Fine-tune Qwen-VL (2.5 / 3) on Medical VQA (MC) via HuggingFace Trainer."""
 
 import argparse
 import random
@@ -10,7 +10,6 @@ from PIL import Image
 from torch.utils.data import Dataset
 from transformers import (
     AutoProcessor,
-    Qwen2_5_VLForConditionalGeneration,
     Trainer,
     TrainingArguments,
 )
@@ -20,6 +19,7 @@ from utils.ablation import FgrTrainLookup, load_fgr_supervised_train_lookup, nor
 from utils.load_data import MedicalVQALoader, VQASample
 from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen, get_som_dir
 from utils.som import SomResolver
+from utils.qwen_model import default_base_model_for_path, load_qwen_vl_model, resolve_local_model_path
 from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
     DEFAULT_MODEL_PATH,
@@ -121,7 +121,7 @@ class QwenMCTrainDataset(Dataset):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Fine-tune Qwen2.5-VL on Medical VQA (MC)")
+    p = argparse.ArgumentParser(description="Fine-tune Qwen-VL on Medical VQA (MC)")
     p.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     p.add_argument("--data_root", type=str, default=get_data_root())
     p.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
@@ -246,9 +246,10 @@ def main():
             args.use_8bit_optimizer = False
 
     dtype = torch.bfloat16 if args.bf16 else (torch.float16 if args.fp16 else torch.float32)
-    print(f"Loading model: {args.model_path}")
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        args.model_path,
+    resolved_model_path = resolve_local_model_path(args.model_path)
+    print(f"Loading model: {resolved_model_path}")
+    model = load_qwen_vl_model(
+        resolved_model_path,
         torch_dtype=dtype,
         device_map="auto",
         low_cpu_mem_usage=True,
@@ -273,8 +274,11 @@ def main():
         )
         model.print_trainable_parameters()
 
-    processor_path = resolve_processor_path(args.model_path)
-    if processor_path != args.model_path:
+    processor_path = resolve_processor_path(
+        resolved_model_path,
+        default_path=default_base_model_for_path(resolved_model_path),
+    )
+    if processor_path != resolved_model_path:
         print(f"Processor not in checkpoint, loading from: {processor_path}")
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
@@ -419,7 +423,7 @@ def main():
         loss_desc = f"assistant JSON ({order})"
     else:
         loss_desc = "assistant answer tokens only"
-    print(f"Starting Qwen2.5-VL training (loss on {loss_desc})...")
+    print(f"Starting Qwen-VL training (loss on {loss_desc})...")
     result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     print(f"Saving model to {args.output_dir}")

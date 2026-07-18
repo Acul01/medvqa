@@ -1,4 +1,4 @@
-"""Shared helpers for Qwen2.5-VL training and inference."""
+"""Shared helpers for Qwen-VL (2.5 / 3) training and inference."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_lette
 from utils.reasoning_mc import format_reasoning_block_for_training
 
 DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
+QWEN3_DEFAULT_MODEL_PATH = "Qwen/Qwen3-VL-8B-Instruct"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO = "_pseudo"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
 QWEN_VERIFY_FIELD = "qwen_verify"
@@ -246,14 +247,27 @@ def parse_mc_reasoning_json_output(raw: str, num_options: int) -> McReasoningJso
 
 
 def model_short_name(model_path: str) -> str:
-    name = Path(model_path).name.lower()
-    if "qwen" in name:
+    lowered = model_path.lower()
+    if "qwen3" in lowered:
+        return "qwen3-vl"
+    if "qwen2" in lowered or "qwen" in lowered:
         return "qwen2.5-vl"
     return Path(model_path).name
 
 
-def resolve_processor_path(model_path: str, default_path: str = DEFAULT_MODEL_PATH) -> str:
+def resolve_processor_path(model_path: str, default_path: str | None = None) -> str:
     """Use base model processor when a local checkpoint omits preprocessor config."""
+    if default_path is None:
+        from utils.qwen_model import default_base_model_for_path, family_from_path_hint
+
+        if family_from_path_hint(model_path) is not None or Path(model_path).exists():
+            try:
+                default_path = default_base_model_for_path(model_path)
+            except (OSError, ValueError):
+                default_path = DEFAULT_MODEL_PATH
+        else:
+            default_path = DEFAULT_MODEL_PATH
+
     path = Path(model_path)
     if path.exists() and not (path / "preprocessor_config.json").exists():
         return default_path
