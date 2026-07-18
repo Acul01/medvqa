@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from utils.paths import get_results_dir
+from utils.qwen_vl import model_short_name as qwen_model_short_name
 
 RESULTS_DIR = Path(get_results_dir())
 
@@ -32,16 +33,16 @@ def clean_yesno_answer(text: str) -> str:
 
 
 def _derive_model_short_name(model_path: str) -> str:
-    name = Path(model_path).name
-    name_lower = name.lower()
-    if "llava-med" in name_lower:
+    path_lower = model_path.lower()
+    if "llava-med" in path_lower:
         return "llava-med"
-    if "llava" in name_lower:
+    if "llava" in path_lower:
         return "llava"
-    if "medvlm" in name_lower:
+    if "medvlm" in path_lower:
         return "medvlm-r1"
-    if "qwen" in name_lower:
-        return "qwen2.5-vl"
+    if "qwen" in path_lower:
+        return qwen_model_short_name(model_path)
+    name = Path(model_path).name
     return name.replace("/", "_").replace(" ", "_")
 
 
