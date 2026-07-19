@@ -1,8 +1,12 @@
 """
-Generate pseudo REGION/OBSERVATION/REASONING annotations for MC training samples via OpenAI vision.
+Generate pseudo REGION/OBSERVATION/REASONING annotations for MC training samples.
 
-- Gold label (correct answer text) is passed to GPT so the reasoning justifies that answer.
-- N reasoning variants per sample (OpenAI ``n`` parameter); each variant is a separate row.
+Backends (selected via ``--model``):
+- ``gpt-4o-mini`` — OpenAI vision API (``n`` completions per call)
+- ``qwen3-vl-8b`` — local Qwen3-VL-8B-Instruct (``n`` sampled generations)
+
+- Gold label (correct answer text) is passed so the reasoning justifies that answer.
+- N reasoning variants per sample; each variant is a separate row.
 - Output suffix default ``_pseudo`` → e.g. ``vqarad_train_mc_openai_pseudo.json``.
 - Run ``04_evaluation/verify_pseudo_reasoning_qwen.py`` afterward to set ``qwen_verify``
   and write ``*_mc_openai_pseudo_pr_qwen_verify.json`` for ``train_qwen --use_reasoning``.
@@ -23,7 +27,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -36,6 +40,18 @@ from utils.build_mc_datasets_openai import (
 )
 from utils.load_data import MedicalVQALoader
 from utils.reasoning_mc import build_reasoning_prompt, parse_reasoning_fields
+
+
+MODEL_CHOICES = {
+    "gpt-4o-mini": {"backend": "openai", "id": "gpt-4o-mini"},
+    "qwen3-vl-8b": {"backend": "qwen", "id": "Qwen/Qwen3-VL-8B-Instruct"},
+}
+
+_DTYPE_MAP = {
+    "float32": "float32",
+    "float16": "float16",
+    "bfloat16": "bfloat16",
+}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -97,6 +113,33 @@ def build_openai_client(api_key: str, timeout_s: float):
     return OpenAI(api_key=api_key, timeout=timeout_s)
 
 
+def load_qwen_bundle(model_id: str, dtype_name: str) -> Tuple[Any, Any, Any]:
+    """Load Qwen VL model + processor. Returns (model, processor, device)."""
+    import torch
+    from transformers import AutoProcessor
+
+    from utils.qwen_model import load_qwen_vl_model
+    from utils.qwen_vl import configure_qwen_processor_pixels, resolve_processor_path
+
+    dtype_map = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+    }
+    torch_dtype = dtype_map[dtype_name]
+    model = load_qwen_vl_model(
+        model_id,
+        torch_dtype=torch_dtype,
+        device_map="auto",
+    )
+    model.eval()
+    processor_path = resolve_processor_path(model_id)
+    processor = AutoProcessor.from_pretrained(processor_path)
+    configure_qwen_processor_pixels(processor)
+    device = next(model.parameters()).device
+    return model, processor, device
+
+
 # ── cache ─────────────────────────────────────────────────────────────────────
 
 
@@ -145,6 +188,7 @@ def request_n_reasonings(
     sleep_between_retries_s: float,
 ) -> List[str]:
     """Return exactly ``n`` raw reasoning strings from a single API call."""
+    _ = options  # gold answer text is used in the prompt; options kept for call-site parity
     data_url = image_path_to_data_url(image_path)
     user_text = build_reasoning_prompt(
         question,
@@ -187,6 +231,90 @@ def request_n_reasonings(
             if attempt < max_retries:
                 time.sleep(sleep_between_retries_s)
     raise RuntimeError(f"OpenAI request failed after {max_retries} retries: {last_err}")
+
+
+# ── Qwen call ─────────────────────────────────────────────────────────────────
+
+
+def request_n_reasonings_qwen(
+    model: Any,
+    processor: Any,
+    device: Any,
+    image_path: Path,
+    question: str,
+    correct_answer: str,
+    *,
+    n: int,
+    temperature: float,
+    max_new_tokens: int,
+    max_retries: int,
+    sleep_between_retries_s: float,
+) -> List[str]:
+    """Return exactly ``n`` raw reasoning strings via local Qwen VL sampling."""
+    import torch
+    from PIL import Image
+
+    from utils.qwen_vl import prepare_qwen_inputs
+
+    user_text = build_reasoning_prompt(question, correct_answer=correct_answer)
+    image = Image.open(image_path).convert("RGB")
+    conversation = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": user_text},
+            ],
+        }
+    ]
+
+    do_sample = temperature > 0.0
+    gen_kwargs: Dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": do_sample,
+    }
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+
+    raws: List[str] = []
+    last_err: Optional[Exception] = None
+    for _ in range(n):
+        content: Optional[str] = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                inputs = prepare_qwen_inputs(
+                    processor,
+                    conversation,
+                    add_generation_prompt=True,
+                )
+                inputs = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in inputs.items()
+                }
+                prompt_len = inputs["input_ids"].shape[-1]
+                with torch.no_grad():
+                    out = model.generate(**inputs, **gen_kwargs)
+                new_ids = out[0, prompt_len:]
+                content = processor.tokenizer.decode(
+                    new_ids, skip_special_tokens=True
+                ).strip()
+                if not content:
+                    raise ValueError("Qwen returned empty content")
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                content = None
+                if attempt < max_retries:
+                    time.sleep(sleep_between_retries_s)
+        if content is None:
+            raise RuntimeError(
+                f"Qwen generation failed after {max_retries} retries: {last_err}"
+            )
+        raws.append(content)
+
+    while len(raws) < n:
+        raws.append(raws[-1])
+    return raws[:n]
 
 
 # ── row expansion ─────────────────────────────────────────────────────────────
@@ -247,7 +375,14 @@ def _splits_for_dataset(args: argparse.Namespace, loader: MedicalVQALoader, slug
     return list(args.split)
 
 
-def process_dataset(args: argparse.Namespace, loader: MedicalVQALoader, slug: str) -> None:
+def process_dataset(
+    args: argparse.Namespace,
+    loader: MedicalVQALoader,
+    slug: str,
+    *,
+    openai_client: Any = None,
+    qwen_bundle: Optional[Tuple[Any, Any, Any]] = None,
+) -> None:
     splits = _splits_for_dataset(args, loader, slug)
     in_dir = Path(args.mc_data_root) / slug
     out_root = Path(args.output_dir) if args.output_dir else Path(args.mc_data_root)
@@ -257,7 +392,9 @@ def process_dataset(args: argparse.Namespace, loader: MedicalVQALoader, slug: st
     cache_path = out_dir / f"pseudo_reasoning_cache{args.output_suffix}.jsonl"
     cache: Dict[str, List[str]] = load_cache(cache_path) if args.resume else {}
 
-    client = build_openai_client(api_key=args._api_key, timeout_s=args.request_timeout_s)
+    model_choice = args.model
+    backend = MODEL_CHOICES[model_choice]["backend"]
+    backend_model_id = MODEL_CHOICES[model_choice]["id"]
 
     for split in splits:
         json_in = in_dir / f"{slug}_{split}_mc_openai.json"
@@ -307,32 +444,49 @@ def process_dataset(args: argparse.Namespace, loader: MedicalVQALoader, slug: st
             # Cache hit
             if args.resume and key in cache and not args.overwrite:
                 raws = cache[key]
-                out_records.extend(expand_row(row, raws, args.openai_model))
+                out_records.extend(expand_row(row, raws, model_choice))
                 existing_keys.add(key)
                 n_cache += 1
                 continue
 
-            # API call
+            # Generation call
             try:
                 img_path = resolve_record_image_path(loader, row)
                 if not img_path.is_file():
                     raise FileNotFoundError(f"Image not found: {img_path}")
-                raws = request_n_reasonings(
-                    client=client,
-                    model=args.openai_model,
-                    image_path=img_path,
-                    question=str(row.get("question", "")),
-                    options=options,
-                    correct_answer=answer_text,
-                    n=args.n_reasonings,
-                    temperature=args.temperature,
-                    max_completion_tokens=args.max_completion_tokens,
-                    image_detail=args.image_detail,
-                    max_retries=args.max_retries,
-                    sleep_between_retries_s=args.sleep_between_retries_s,
-                )
+                if backend == "openai":
+                    raws = request_n_reasonings(
+                        client=openai_client,
+                        model=backend_model_id,
+                        image_path=img_path,
+                        question=str(row.get("question", "")),
+                        options=options,
+                        correct_answer=answer_text,
+                        n=args.n_reasonings,
+                        temperature=args.temperature,
+                        max_completion_tokens=args.max_completion_tokens,
+                        image_detail=args.image_detail,
+                        max_retries=args.max_retries,
+                        sleep_between_retries_s=args.sleep_between_retries_s,
+                    )
+                else:
+                    assert qwen_bundle is not None
+                    qwen_model, qwen_processor, qwen_device = qwen_bundle
+                    raws = request_n_reasonings_qwen(
+                        model=qwen_model,
+                        processor=qwen_processor,
+                        device=qwen_device,
+                        image_path=img_path,
+                        question=str(row.get("question", "")),
+                        correct_answer=answer_text,
+                        n=args.n_reasonings,
+                        temperature=args.temperature,
+                        max_new_tokens=args.max_completion_tokens,
+                        max_retries=args.max_retries,
+                        sleep_between_retries_s=args.sleep_between_retries_s,
+                    )
                 cache[key] = raws
-                out_records.extend(expand_row(row, raws, args.openai_model))
+                out_records.extend(expand_row(row, raws, model_choice))
                 existing_keys.add(key)
                 n_api += 1
             except Exception as exc:  # noqa: BLE001
@@ -362,7 +516,8 @@ def process_dataset(args: argparse.Namespace, loader: MedicalVQALoader, slug: st
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Generate N pseudo reasonings per MC sample via OpenAI vision (gold-label guided). "
+            "Generate N pseudo reasonings per MC sample (gold-label guided). "
+            "Backend via --model: gpt-4o-mini (OpenAI) or qwen3-vl-8b (local HF). "
             "Output is written to a separate file; source MC JSON is never modified."
         )
     )
@@ -393,13 +548,26 @@ def parse_args() -> argparse.Namespace:
         help="Process only these splits (e.g. train). Default: all splits.",
     )
     p.add_argument("--datasets", nargs="+", default=DATASETS, choices=DATASETS)
-    p.add_argument("--openai_model", type=str, default="gpt-4o-mini")
+    p.add_argument(
+        "--model",
+        type=str,
+        default="gpt-4o-mini",
+        choices=sorted(MODEL_CHOICES.keys()),
+        help="Generator model: gpt-4o-mini (OpenAI API) or qwen3-vl-8b (local HF).",
+    )
     p.add_argument("--openai_api_key_env", type=str, default="OPENAI_API_KEY")
+    p.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=sorted(_DTYPE_MAP.keys()),
+        help="Qwen model dtype (ignored for gpt-4o-mini). Default: bfloat16.",
+    )
     p.add_argument(
         "--n_reasonings",
         type=int,
         default=5,
-        help="Number of reasoning variants to generate per sample (OpenAI n parameter).",
+        help="Number of reasoning variants to generate per sample.",
     )
     p.add_argument(
         "--temperature",
@@ -407,7 +575,12 @@ def parse_args() -> argparse.Namespace:
         default=0.7,
         help="Sampling temperature for diversity (must be > 0 when n > 1).",
     )
-    p.add_argument("--max_completion_tokens", type=int, default=512)
+    p.add_argument(
+        "--max_completion_tokens",
+        type=int,
+        default=512,
+        help="Max new tokens per reasoning (OpenAI max_tokens / Qwen max_new_tokens).",
+    )
     p.add_argument("--image_detail", type=str, default="low", choices=["low", "high", "auto"])
     p.add_argument("--max_retries", type=int, default=3)
     p.add_argument("--request_timeout_s", type=float, default=120.0)
@@ -431,12 +604,21 @@ def main() -> None:
     if args.n_reasonings > 1 and args.temperature == 0.0:
         print("Warning: temperature=0 with n>1 produces identical reasonings. Consider temperature>=0.5.")
 
-    api_key = os.getenv(args.openai_api_key_env)
-    if not api_key:
-        raise EnvironmentError(f"Missing API key in env var '{args.openai_api_key_env}'.")
-    args._api_key = api_key
+    backend = MODEL_CHOICES[args.model]["backend"]
+    backend_id = MODEL_CHOICES[args.model]["id"]
 
-    print(f"Generating {args.n_reasonings} reasoning(s) per sample with {args.openai_model}")
+    openai_client = None
+    qwen_bundle = None
+    if backend == "openai":
+        api_key = os.getenv(args.openai_api_key_env)
+        if not api_key:
+            raise EnvironmentError(f"Missing API key in env var '{args.openai_api_key_env}'.")
+        openai_client = build_openai_client(api_key=api_key, timeout_s=args.request_timeout_s)
+    else:
+        print(f"Loading Qwen model {backend_id} (dtype={args.dtype})...")
+        qwen_bundle = load_qwen_bundle(backend_id, args.dtype)
+
+    print(f"Generating {args.n_reasonings} reasoning(s) per sample with {args.model}")
     print(f"  temperature={args.temperature}  output_suffix={args.output_suffix!r}")
     if args.output_dir:
         print(f"  output_dir={args.output_dir}")
@@ -445,7 +627,13 @@ def main() -> None:
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     for slug in args.datasets:
-        process_dataset(args, loader, slug)
+        process_dataset(
+            args,
+            loader,
+            slug,
+            openai_client=openai_client,
+            qwen_bundle=qwen_bundle,
+        )
     print("Done.")
 
 

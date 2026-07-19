@@ -132,7 +132,7 @@ flowchart LR
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
 | `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
-| `utils/build_pseudo_reasonings_openai.py` | Pseudo REGION/OBS/REASONING via OpenAI Vision |
+| `utils/build_pseudo_reasonings_openai.py` | Pseudo REGION/OBS/REASONING via `--model gpt-4o-mini` oder `qwen3-vl-8b` |
 | `utils/download_datasets.py` | Download PathVQA / SLAKE / VQA-Rad / Med-VQA-2019 nach `02_data/` |
 | `utils/example_loader_usage.py` | Beispiel Nutzung des Loaders |
 | `utils/load_data.py` | `MedicalVQALoader`, `VQASample` |
@@ -909,21 +909,30 @@ python utils/build_mc_datasets_openai.py \
   --resume
 ```
 
-### Pseudo-Reasoning (OpenAI → Qwen-Verify → Training)
+### Pseudo-Reasoning (OpenAI / Qwen3 → Qwen-Verify → Training)
 
 Pipeline für **Pseudo-Rationales** auf MC-Trainingsdaten:
 
-1. **Generieren** (`utils/build_pseudo_reasonings_openai.py`) — GPT-4o-mini erzeugt REGION/OBSERVATION/REASONING mit Gold-Antwort im Prompt; Ausgabe z. B. `*_mc_openai_pseudo.json` (Default-Suffix `_pseudo`).
+1. **Generieren** (`utils/build_pseudo_reasonings_openai.py`) — via `--model gpt-4o-mini` (OpenAI Vision) oder `--model qwen3-vl-8b` (lokal `Qwen/Qwen3-VL-8B-Instruct`) REGION/OBSERVATION/REASONING mit Gold-Antwort im Prompt; Ausgabe z. B. `*_mc_openai_pseudo.json` (Default-Suffix `_pseudo`).
 2. **Qwen-Verify** (`04_evaluation/verify_pseudo_reasoning_qwen.py`) — Pretrained **Qwen2.5-VL** bekommt den Reasoning-Text + MC-Frage/Optionen **ohne Bild** (Hinweis im Prompt: die Beschreibung bezieht sich auf ein nicht gezeigtes Bild); setzt `qwen_verify` true/false. Ausgabe z. B. `*_mc_openai_pseudo_pr_qwen_verify.json`.
 3. **Training** (`03_training/train_qwen.py --use_reasoning`) — nutzt nur Zeilen mit `qwen_verify=True` (oder Alias `is_correct=True`) und nicht-leerem `pseudo_reasoning_raw`.
 
 ```bash
-# 1) Pseudo-Rationales generieren
+# 1) Pseudo-Rationales generieren (OpenAI)
 PYTHONPATH=. python utils/build_pseudo_reasonings_openai.py \
   --data_root 02_data \
   --mc_data_root 02_data/data_mc_openai \
   --datasets vqarad \
-  --openai_model gpt-4o-mini \
+  --model gpt-4o-mini \
+  --n_reasonings 5 --temperature 0.7
+
+# 1b) alternativ mit lokalem Qwen3-VL-8B
+PYTHONPATH=. python utils/build_pseudo_reasonings_openai.py \
+  --data_root 02_data \
+  --mc_data_root 02_data/data_mc_openai \
+  --datasets vqarad \
+  --model qwen3-vl-8b \
+  --dtype bfloat16 \
   --n_reasonings 5 --temperature 0.7
 
 # 2) Mit Basis-Qwen verifizieren (empfohlen: Pretrained, nicht das später fine-getunte Reasoning-Modell)
