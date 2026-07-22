@@ -20,6 +20,7 @@ from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
+from utils.qwen_vl import format_mc_reasoning_user_text, parse_mc_reasoning_json_output
 from utils.som import SomResolver, draw_region_marks
 from utils.som_select import (
     DEFAULT_SELECTION_MAX_NEW_TOKENS,
@@ -32,6 +33,7 @@ from utils.mc_eval import run_mc_evaluation
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 END_REASONING_TOKEN = "<END_REASONING>"
+DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
 
 DATASET_MAX_NEW_TOKENS = {
     "pathvqa": 8,
@@ -60,6 +62,16 @@ def parse_args():
     parser.add_argument("--gradcam_dir", type=str, default=None, help="Directory for GradCAM artifacts when enabled")
     parser.add_argument("--gradcam_chunk_size", type=int, default=100, help="Chunk size for automatic gradcam inference splitting to reduce OOM risk")
     parser.add_argument("--reasoning_max_new_tokens", type=int, default=192, help="Maximum new tokens for stage-1 reasoning generation")
+    parser.add_argument(
+        "--use_reasoning_json",
+        action="store_true",
+        help='Emit assistant JSON {"reasoning","answer"} (match train_llava --use_reasoning)',
+    )
+    parser.add_argument(
+        "--answer_first",
+        action="store_true",
+        help='Use answer-first JSON schema {"answer","reasoning"} (match train_llava --answer_first). Only effective with --use_reasoning_json.',
+    )
     parser.add_argument(
         "--ablation_mode",
         type=str,
@@ -94,8 +106,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_conversation(question: str, options: list[str]):
-    user_text = format_mc_user_text(question, options)
+def build_conversation(question: str, options: list[str], *, use_reasoning_json: bool = False, answer_first: bool = False):
+    if use_reasoning_json:
+        user_text = format_mc_reasoning_user_text(question, options, answer_first=answer_first)
+    else:
+        user_text = format_mc_user_text(question, options)
     return [
         {
             "role": "user",
@@ -105,6 +120,15 @@ def build_conversation(question: str, options: list[str]):
             ],
         }
     ]
+
+
+def decode_mc_prediction(generated_text: str, *, num_options: int, use_reasoning_json: bool):
+    """Return (predicted_letter, reasoning_text_or_none, json_parse_ok_or_false)."""
+    if use_reasoning_json:
+        parsed = parse_mc_reasoning_json_output(generated_text, num_options=num_options)
+        return parsed.predicted_letter, parsed.reasoning_text, parsed.json_parse_ok
+    letter = parse_predicted_letter(generated_text, num_options=num_options)
+    return letter, None, False
 
 
 def build_text_only_conversation(user_text: str):
@@ -309,8 +333,14 @@ def _build_shuffle_assignment(samples, seed: int) -> dict[int, str]:
 
 def main():
     args = parse_args()
+    if args.use_reasoning_json and args.use_two_stage_reasoning:
+        raise ValueError("--use_reasoning_json and --use_two_stage_reasoning cannot be used together.")
     if args.max_new_tokens is None:
-        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
+        args.max_new_tokens = (
+            DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+            if args.use_reasoning_json
+            else DATASET_MAX_NEW_TOKENS[args.dataset]
+        )
     if args.use_gradcam and not args.use_two_stage_reasoning:
         warnings.warn("--use_gradcam is ignored unless --use_two_stage_reasoning is set.", UserWarning, stacklevel=1)
     gradcam_effective = bool(args.use_gradcam and args.use_two_stage_reasoning)
@@ -320,8 +350,18 @@ def main():
 
     model_short = _model_short_name(args.model_path)
     ft_tag = "finetuned" if args.finetuned else "pretrained"
-    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_eval_mc"
-    wandb.init(project=args.wandb_project, name=run_name, group=args.dataset, tags=["inference", "mc", model_short, args.dataset, ft_tag], config=vars(args))
+    if args.use_reasoning_json:
+        reason_tag = "reasoning_json_answer_first" if args.answer_first else "reasoning_json"
+    else:
+        reason_tag = "answer_only"
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_{reason_tag}_eval_mc"
+    wandb.init(
+        project=args.wandb_project,
+        name=run_name,
+        group=args.dataset,
+        tags=["inference", "mc", model_short, args.dataset, ft_tag, reason_tag],
+        config=vars(args),
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -499,7 +539,12 @@ def main():
                     )
                     conversation = build_text_only_conversation(final_user_prompt)
                 else:
-                    conversation = build_conversation(question_for_prompt, sample.mc_options)
+                    conversation = build_conversation(
+                        question_for_prompt,
+                        sample.mc_options,
+                        use_reasoning_json=args.use_reasoning_json,
+                        answer_first=args.answer_first,
+                    )
 
                 prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
                 inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
@@ -510,6 +555,8 @@ def main():
                 generated_text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
                 stage2_option_probs = {}
                 stage2_decoding_mode = "text_parse"
+                predicted_reasoning_text = None
+                predicted_json_parse_ok = False
                 if args.use_two_stage_reasoning:
                     stage2_option_probs = _stage2_letter_probs_from_first_step(
                         generation_output.scores,
@@ -520,7 +567,11 @@ def main():
                     generated_text = predicted_letter or ""
                     stage2_decoding_mode = "letter_logits_only"
                 else:
-                    predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
+                    predicted_letter, predicted_reasoning_text, predicted_json_parse_ok = decode_mc_prediction(
+                        generated_text,
+                        num_options=len(sample.mc_options),
+                        use_reasoning_json=args.use_reasoning_json,
+                    )
                 ground_truth_letter = sample.answer
 
                 # Forward pass AFTER generate — raw logits free of all logit processors.
@@ -559,7 +610,11 @@ def main():
                         sample_letter = _pick_letter_from_probs(sample_probs)
                     else:
                         sample_text = clean_answer(processor.decode(sample_generated_ids, skip_special_tokens=True).strip())
-                        sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
+                        sample_letter, _, _ = decode_mc_prediction(
+                            sample_text,
+                            num_options=len(sample.mc_options),
+                            use_reasoning_json=args.use_reasoning_json,
+                        )
                     sampled_predicted_letters.append(sample_letter)
 
                 agreement = _compute_agreement(sampled_predicted_letters)
@@ -575,6 +630,8 @@ def main():
                         "gradcam_error": gradcam_error,
                         "gradcam_overlay_path": gradcam_overlay_path,
                         "gradcam_heatmap_path": gradcam_heatmap_path,
+                        "use_reasoning_json": args.use_reasoning_json,
+                        "answer_first": bool(args.answer_first and args.use_reasoning_json),
                         "reasoning_raw": reasoning_raw,
                         "reasoning_region": reasoning_region,
                         "reasoning_observation": reasoning_observation,
@@ -599,6 +656,9 @@ def main():
                         "som_selected_regions": som_selected_regions,
                         "som_selection_response": som_selection_response,
                     }
+                if args.use_reasoning_json:
+                    row["predicted_reasoning_text"] = predicted_reasoning_text
+                    row["predicted_json_parse_ok"] = predicted_json_parse_ok
                 if ablation.fgr_crop_path is not None:
                     row["fgr_crop_path"] = ablation.fgr_crop_path
                 results.append(row)

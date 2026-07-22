@@ -2,40 +2,50 @@
 Training script for standard LLaVA on Medical VQA datasets.
 
 Uses HuggingFace's LlavaForConditionalGeneration + AutoProcessor + Trainer.
-The conversation format matches inference.py:
+The conversation format matches inference_llava.py:
     USER: <image>\n{question}
     ASSISTANT: {answer}
+
+With --use_reasoning the assistant target is JSON {reasoning, answer}
+(or answer-first), matching train_qwen.py / utils/qwen_vl.py prompts.
 
 The model handles image-token expansion internally during forward(),
 so the dataset only needs a single <image> token in the input_ids.
 
-For LLaVA-Med, use train_med.py instead.
+For LLaVA-Med, use train_llava-med.py instead.
 """
 
 import argparse
+import random
+from collections import Counter
+from pathlib import Path
+
 import torch
 import wandb
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import (
-    LlavaForConditionalGeneration,
     AutoProcessor,
-    TrainingArguments,
+    LlavaForConditionalGeneration,
     Trainer,
+    TrainingArguments,
 )
 from transformers.trainer_utils import set_seed
-from pathlib import Path
 
-from collections import Counter
-
-from utils.load_data import MedicalVQALoader
+from utils.load_data import MedicalVQALoader, VQASample
 from utils.mc_vqa import format_mc_user_text
-from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_llava, get_som_dir
+from utils.paths import get_data_root, get_mc_data_root, get_som_dir, get_train_output_dir_llava
+from utils.qwen_vl import (
+    DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
+    format_mc_reasoning_assistant_json,
+    format_mc_reasoning_user_text,
+    is_pseudo_reasoning_verified,
+    pseudo_reasoning_raw_from_metadata,
+)
 from utils.som import SomResolver
 
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
-
 
 
 # ── Dataset ─────────────────────────────────────────────────────────────────────
@@ -44,13 +54,9 @@ class LLaVATrainDataset(Dataset):
     """
     Training dataset for standard LLaVA.
 
-    Uses the same conversation format as inference.py:
+    Uses the same conversation format as inference_llava.py:
         USER: <image>\\n{question}
-        ASSISTANT: {answer}
-
-    The processor tokenises the text (with a single <image> token) and
-    preprocesses the image into pixel_values.  During forward() the model
-    replaces the <image> embedding with actual image features.
+        ASSISTANT: {answer | JSON}
 
     Labels are set to -100 for all prompt tokens so the loss is only
     computed on the assistant's answer.
@@ -63,16 +69,19 @@ class LLaVATrainDataset(Dataset):
         max_length=512,
         dataset="vqarad",
         som_resolver: SomResolver | None = None,
+        *,
+        use_reasoning: bool = False,
+        answer_first: bool = False,
     ):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
         self.som_resolver = som_resolver
-        # Ensure pad token is set
+        self.use_reasoning = use_reasoning
+        self.answer_first = answer_first
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
-        # Fix for community models missing patch_size
         if getattr(processor, "patch_size", None) is None:
             processor.patch_size = 14
         if getattr(processor, "vision_feature_select_strategy", None) is None:
@@ -90,33 +99,47 @@ class LLaVATrainDataset(Dataset):
         )
         image = Image.open(image_path).convert("RGB")
 
-        # ── Build conversation (user + assistant) ────────────────────────
         if not sample.mc_options:
             raise ValueError("MC options missing in sample; ensure mc_data_root points to MC exports.")
-        full_question = format_mc_user_text(sample.question, sample.mc_options)
+
+        if self.use_reasoning:
+            reasoning_raw = pseudo_reasoning_raw_from_metadata(sample.metadata)
+            if not reasoning_raw:
+                raise ValueError("pseudo_reasoning_raw missing for reasoning training sample.")
+            user_text = format_mc_reasoning_user_text(
+                sample.question,
+                sample.mc_options,
+                answer_first=self.answer_first,
+            )
+            assistant_text = format_mc_reasoning_assistant_json(
+                reasoning_raw,
+                sample.answer,
+                answer_first=self.answer_first,
+            )
+        else:
+            user_text = format_mc_user_text(sample.question, sample.mc_options)
+            assistant_text = sample.answer
 
         conversation = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": full_question},
+                    {"type": "text", "text": user_text},
                 ],
             },
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "text", "text": sample.answer},
+                    {"type": "text", "text": assistant_text},
                 ],
             },
         ]
 
-        # Full prompt (user + assistant, no generation prompt)
         full_text = self.processor.apply_chat_template(
             conversation, add_generation_prompt=False
         )
 
-        # Process (tokenisation + image preprocessing)
         inputs = self.processor(
             images=image,
             text=full_text,
@@ -130,10 +153,8 @@ class LLaVATrainDataset(Dataset):
         attention_mask = inputs["attention_mask"].squeeze(0)
         pixel_values = inputs["pixel_values"].squeeze(0)
 
-        # ── Labels: mask prompt, keep only answer ────────────────────────
         labels = input_ids.clone()
 
-        # Find "ASSISTANT:" marker in token IDs
         assistant_ids = self.processor.tokenizer.encode(
             "ASSISTANT:", add_special_tokens=False
         )
@@ -148,7 +169,6 @@ class LLaVATrainDataset(Dataset):
         if answer_start is not None:
             labels[:answer_start] = -100
         else:
-            # Fallback: tokenise prompt-only to find the boundary
             prompt_only_text = self.processor.apply_chat_template(
                 [conversation[0]], add_generation_prompt=True
             )
@@ -157,7 +177,6 @@ class LLaVATrainDataset(Dataset):
             )["input_ids"]
             labels[: len(prompt_only_ids)] = -100
 
-        # Mask padding tokens
         labels[input_ids == self.processor.tokenizer.pad_token_id] = -100
 
         return {
@@ -175,15 +194,25 @@ def parse_args():
         description="Fine-tune standard LLaVA on Medical VQA"
     )
 
-    # Model
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH,
                         help=f"HuggingFace model name or local path (default: {DEFAULT_MODEL_PATH})")
 
-    # Data
     parser.add_argument("--data_root", type=str, default=get_data_root(),
                         help="Root directory containing raw image folders ($MEDVQA_DATA_ROOT or 02_data)")
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root(),
                         help="Root directory containing MC JSON/CSV exports ($MEDVQA_MC_ROOT or 02_data/data_mc_openai)")
+    parser.add_argument("--mc_export_suffix", type=str, default="",
+                        help="MC export filename suffix (e.g. _verify). Empty + --use_reasoning → _pseudo_pr_qwen_verify.")
+    parser.add_argument(
+        "--use_reasoning",
+        action="store_true",
+        help="Train on verified pseudo reasoning (qwen_verify=True or is_correct=True).",
+    )
+    parser.add_argument(
+        "--answer_first",
+        action="store_true",
+        help="Use answer-first JSON schema {answer, reasoning}. Only effective with --use_reasoning.",
+    )
     parser.add_argument("--dataset", type=str, required=True,
                         choices=["pathvqa", "slake", "vqarad", "medvqa2019", "all"],
                         help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad+Med-VQA-2019 (prompt names from each sample)")
@@ -192,7 +221,6 @@ def parse_args():
     parser.add_argument("--val_split", type=str, default="validation",
                         help="Validation split name")
 
-    # Training
     parser.add_argument("--output_dir", type=str, default=get_train_output_dir_llava(),
                         help="Output directory for checkpoints ($MEDVQA_OUTPUTS_DIR/llava)")
     parser.add_argument("--num_train_epochs", type=int, default=3)
@@ -205,7 +233,7 @@ def parse_args():
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--eval_steps", type=int, default=500)
     parser.add_argument("--max_length", type=int, default=512,
-                        help="Maximum sequence length (image tokens excluded, model handles expansion)")
+                        help="Maximum sequence length (use >=2048 with --use_reasoning)")
     parser.add_argument("--gradient_checkpointing", action="store_true",
                         help="Enable gradient checkpointing (saves memory)")
     parser.add_argument("--fp16", action="store_true",
@@ -216,10 +244,15 @@ def parse_args():
                         help="Use 8-bit AdamW (requires bitsandbytes)")
     parser.add_argument("--dataloader_num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--max_train_samples",
+        type=int,
+        default=None,
+        help="Cap training set size: random subset (seed=42) after verify filter when --use_reasoning.",
+    )
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
                         help="Resume training from checkpoint path")
 
-    # LoRA
     parser.add_argument("--use_lora", action="store_true",
                         help="Use LoRA instead of full fine-tuning")
     parser.add_argument("--lora_r", type=int, default=16,
@@ -232,7 +265,6 @@ def parse_args():
                         default=["q_proj", "v_proj"],
                         help="LoRA target modules (default: q_proj v_proj)")
 
-    # W&B
     parser.add_argument("--wandb_project", type=str, default="medvqa",
                         help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
@@ -264,13 +296,21 @@ def _model_short_name(model_path: str) -> str:
     return Path(model_path).name
 
 
+def _subsample_train_samples(samples: list[VQASample], max_n: int, *, seed: int = 42) -> list[VQASample]:
+    if max_n is None or max_n <= 0 or len(samples) <= max_n:
+        return samples
+    rng = random.Random(seed)
+    indices = rng.sample(range(len(samples)), max_n)
+    return [samples[i] for i in indices]
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
 
-    # ── W&B ──────────────────────────────────────────────────────────────
     model_short = _model_short_name(args.model_path)
-    ft_tag = "lora" if args.use_lora else "full-ft"
+    reasoning_tag = ("reasoning-answer-first-" if args.answer_first else "reasoning-") if args.use_reasoning else ""
+    ft_tag = reasoning_tag + ("lora" if args.use_lora else "full-ft")
     run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_train"
     wandb.init(
         project=args.wandb_project,
@@ -280,7 +320,6 @@ def main():
         config=vars(args),
     )
 
-    # Check 8-bit optimizer
     if args.use_8bit_optimizer:
         try:
             import bitsandbytes  # noqa: F401
@@ -288,11 +327,9 @@ def main():
             print("Warning: bitsandbytes not installed, falling back to standard optimizer")
             args.use_8bit_optimizer = False
 
-    # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # ── Load model ──────────────────────────────────────────────────────
     print(f"Loading model: {args.model_path}")
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_path,
@@ -305,9 +342,8 @@ def main():
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
 
-    # ── LoRA ─────────────────────────────────────────────────────────────
     if args.use_lora:
-        from peft import LoraConfig, get_peft_model, TaskType
+        from peft import LoraConfig, TaskType, get_peft_model
         lora_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
@@ -319,17 +355,20 @@ def main():
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
 
-    # ── Load processor ──────────────────────────────────────────────────
-    # For fine-tuned checkpoints the processor config may not be saved –
-    # fall back to the base model's processor.
     processor_path = args.model_path
     if Path(args.model_path).exists() and not Path(args.model_path, "preprocessor_config.json").exists():
         processor_path = DEFAULT_MODEL_PATH
         print(f"Processor not in checkpoint, loading from: {processor_path}")
     processor = AutoProcessor.from_pretrained(processor_path)
 
-    # ── Load datasets ───────────────────────────────────────────────────
-    loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
+    train_suffix = args.mc_export_suffix or (
+        DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY if args.use_reasoning else ""
+    )
+    loader = MedicalVQALoader(
+        data_root=args.data_root,
+        mc_data_root=args.mc_data_root,
+        mc_export_suffix=train_suffix,
+    )
     use_all = args.dataset == "all"
 
     som_resolver: SomResolver | None = None
@@ -341,35 +380,75 @@ def main():
         print(f"SoM enabled — images loaded from {args.som_dir}")
 
     if use_all:
-        # Source tag per sample: VQASample.dataset. VQA-Rad val uses test split (no validation in loader).
-        print(f"Loading combined PathVQA+SLAKE+VQA-Rad {args.train_split} split...")
+        print(f"Loading combined PathVQA+SLAKE+VQA-Rad {args.train_split} split (suffix={train_suffix!r})...")
         train_samples = loader.load_combined(args.train_split)
-        train_dataset = LLaVATrainDataset(
-            train_samples,
-            processor,
-            args.max_length,
-            dataset=args.dataset,
-            som_resolver=som_resolver,
-        )
-        print(f"Train: {len(train_dataset)} samples ({dict(Counter(s.dataset for s in train_samples))})")
     else:
-        print(f"Loading {args.dataset} {args.train_split} split...")
+        print(f"Loading {args.dataset} {args.train_split} split (suffix={train_suffix!r})...")
         train_samples = loader.load_dataset(args.dataset, split=args.train_split)
-        train_dataset = LLaVATrainDataset(
-            train_samples, processor, args.max_length, dataset=args.dataset, som_resolver=som_resolver,
+
+    train_total = len(train_samples)
+    train_samples_after_filter = train_total
+    if args.use_reasoning:
+        train_samples = [
+            s
+            for s in train_samples
+            if is_pseudo_reasoning_verified(s.metadata)
+            and pseudo_reasoning_raw_from_metadata(s.metadata)
+        ]
+        train_samples_after_filter = len(train_samples)
+        print(
+            f"Train: {len(train_samples)} / {train_total} "
+            f"(use_reasoning, qwen_verify/is_correct=True)"
         )
-        print(f"Train: {len(train_dataset)} samples")
+        if not train_samples:
+            raise ValueError(
+                "No verified reasoning samples after filtering. "
+                "Ensure MC JSON has qwen_verify=True or is_correct=True and non-empty pseudo_reasoning_raw."
+            )
+    else:
+        print(f"Train: {len(train_samples)} samples")
+
+    if args.max_train_samples is not None:
+        if not args.use_reasoning:
+            raise ValueError("--max_train_samples requires --use_reasoning (subset of verified samples).")
+        before_cap = len(train_samples)
+        train_samples = _subsample_train_samples(
+            train_samples,
+            args.max_train_samples,
+            seed=42,
+        )
+        print(
+            f"Train subset: {len(train_samples)} / {before_cap} "
+            f"(max_train_samples={args.max_train_samples}, seed=42)"
+        )
+
+    train_dataset = LLaVATrainDataset(
+        train_samples,
+        processor,
+        args.max_length,
+        dataset=args.dataset,
+        som_resolver=som_resolver,
+        use_reasoning=args.use_reasoning,
+        answer_first=args.answer_first,
+    )
+    if use_all and not args.use_reasoning:
+        print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
 
     val_dataset = None
     try:
+        val_loader = MedicalVQALoader(
+            data_root=args.data_root,
+            mc_data_root=args.mc_data_root,
+            mc_export_suffix="",
+        )
         if use_all:
             print(
                 f"Loading validation: PathVQA/SLAKE split={args.val_split!r}, "
                 "VQA-Rad split='test' (VQA-Rad has no validation split in this loader)."
             )
-            val_samples = loader.load_combined(args.val_split, vqarad_split="test")
+            val_samples = val_loader.load_combined(args.val_split, vqarad_split="test")
         else:
-            val_samples = loader.load_dataset(args.dataset, split=args.val_split)
+            val_samples = val_loader.load_dataset(args.dataset, split=args.val_split)
         val_dataset = LLaVATrainDataset(
             val_samples,
             processor,
@@ -384,7 +463,6 @@ def main():
     except Exception as e:
         print(f"No validation split available: {e}")
 
-    # ── Training arguments ──────────────────────────────────────────────
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.num_train_epochs,
@@ -410,7 +488,6 @@ def main():
         save_only_model=True,
     )
 
-    # ── Trainer ─────────────────────────────────────────────────────────
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -419,14 +496,17 @@ def main():
         processing_class=processor.tokenizer,
     )
 
-    # ── Train ───────────────────────────────────────────────────────────
+    if args.use_reasoning:
+        order = "answer + reasoning" if args.answer_first else "reasoning + answer"
+        loss_desc = f"assistant JSON ({order})"
+    else:
+        loss_desc = "assistant answer tokens only"
     print("Starting training...")
-    print(f"  Conversation format: USER: <image>\\n{{question}} ASSISTANT: {{answer}}")
+    print(f"  Conversation format: USER: <image>\\n{{question}} ASSISTANT: {{{loss_desc}}}")
     print(f"  Loss computed only on assistant response tokens")
 
     result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
-    # Save final model
     print(f"Saving model to {args.output_dir}")
     trainer.save_model()
     trainer.save_state()
@@ -437,6 +517,9 @@ def main():
     wandb.log({
         "final_train_loss": result.training_loss,
         "train_samples": len(train_dataset),
+        "train_samples_total_before_filter": train_total,
+        "train_samples_after_verify_filter": train_samples_after_filter if args.use_reasoning else None,
+        "max_train_samples": args.max_train_samples,
         "val_samples": len(val_dataset) if val_dataset else 0,
     })
     wandb.finish()

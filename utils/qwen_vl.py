@@ -138,6 +138,35 @@ def _normalize_mc_letter(answer: Optional[str]) -> str:
     raise ValueError(f"Invalid MC answer letter: {answer!r}")
 
 
+def format_mc_reasoning_user_text(
+    question: str,
+    options: List[str],
+    *,
+    answer_first: bool = False,
+) -> str:
+    """MC block + JSON schema instruction (shared by Qwen / LLaVA / LLaVA-Med)."""
+    instruction = (
+        MC_JSON_RESPONSE_INSTRUCTION_ANSWER_FIRST if answer_first else MC_JSON_RESPONSE_INSTRUCTION
+    )
+    return format_mc_user_text(question, options) + instruction
+
+
+def format_mc_reasoning_assistant_json(
+    reasoning_raw: str,
+    answer: str,
+    *,
+    answer_first: bool = False,
+) -> str:
+    """Gold assistant JSON for reasoning training ({reasoning,answer} or answer-first)."""
+    letter = _normalize_mc_letter(answer)
+    payload = (
+        {"answer": letter, "reasoning": reasoning_raw.strip()}
+        if answer_first
+        else {"reasoning": reasoning_raw.strip(), "answer": letter}
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def build_mc_reasoning_inference_conversation(
     question: str,
     options: List[str],
@@ -146,8 +175,7 @@ def build_mc_reasoning_inference_conversation(
     answer_first: bool = False,
 ) -> List[dict]:
     """User turn: MC block + instructions to emit JSON reasoning+answer (inference — no gold reasoning)."""
-    instruction = MC_JSON_RESPONSE_INSTRUCTION_ANSWER_FIRST if answer_first else MC_JSON_RESPONSE_INSTRUCTION
-    full_question = format_mc_user_text(question, options) + instruction
+    full_question = format_mc_reasoning_user_text(question, options, answer_first=answer_first)
     image_content: dict = {"type": "image"}
     if image is not None:
         image_content["image"] = image
@@ -163,17 +191,11 @@ def build_mc_reasoning_conversation(
     image: Any = None,
     answer_first: bool = False,
 ) -> List[dict]:
-    """Training: user sees MC + reference pseudo reasoning; assistant learns JSON {\"reasoning\", \"answer\"} or {\"answer\", \"reasoning\"}."""
-    instruction = MC_JSON_RESPONSE_INSTRUCTION_ANSWER_FIRST if answer_first else MC_JSON_RESPONSE_INSTRUCTION
-    mc = format_mc_user_text(question, options)
-    user_text = mc + instruction
-    letter = _normalize_mc_letter(answer)
-    payload = (
-        {"answer": letter, "reasoning": reasoning_raw.strip()}
-        if answer_first
-        else {"reasoning": reasoning_raw.strip(), "answer": letter}
+    """Training: user sees MC + JSON instruction; assistant learns JSON {\"reasoning\", \"answer\"} or {\"answer\", \"reasoning\"}."""
+    user_text = format_mc_reasoning_user_text(question, options, answer_first=answer_first)
+    assistant_text = format_mc_reasoning_assistant_json(
+        reasoning_raw, answer, answer_first=answer_first
     )
-    assistant_text = json.dumps(payload, ensure_ascii=False)
 
     image_content: dict = {"type": "image"}
     if image is not None:

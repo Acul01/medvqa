@@ -278,7 +278,29 @@ python 03_training/train.py \
 
 Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei SLAKE Validation z. B. `--val_split validate`), `--num_train_epochs`, `--per_device_train_batch_size`, `--learning_rate`, `--max_length`, `--fp16` / `--bf16`, `--gradient_checkpointing`, LoRA-Flags (`--use_lora`, …), `--wandb_project`.
 
-**Hinweis:** `03_training/train.py` ist **nur** für HuggingFace-LLaVA. **LLaVA-Med** läuft über `03_training/train_med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`). **Qwen-VL** (2.5 und 3) läuft über `03_training/train_qwen.py` (Default `Qwen/Qwen2.5-VL-7B-Instruct`; Qwen3 via `--model_path Qwen/Qwen3-VL-8B-Instruct`).
+**Hinweis:** HF-LLaVA läuft über `03_training/train_llava.py` (Default `llava-hf/llava-1.5-7b-hf`). **LLaVA-Med** läuft über `03_training/train_llava-med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`). **Qwen-VL** (2.5 und 3) läuft über `03_training/train_qwen.py` (Default `Qwen/Qwen2.5-VL-7B-Instruct`; Qwen3 via `--model_path Qwen/Qwen3-VL-8B-Instruct`).
+
+**Pseudo-Reasoning (LLaVA / LLaVA-Med):** gleiche JSON-Prompts wie Qwen (`utils/qwen_vl.py`). Flags: `--use_reasoning`, `--answer_first`, `--mc_export_suffix` (z. B. `_verify`), `--max_train_samples`. Bei Reasoning `--max_length 2048` empfohlen.
+
+```bash
+python 03_training/train_llava.py \
+  --dataset vqarad \
+  --mc_data_root 02_data/data_mc_openai \
+  --mc_export_suffix _verify \
+  --val_split test \
+  --use_reasoning --answer_first \
+  --max_length 2048 --bf16 --gradient_checkpointing --use_8bit_optimizer \
+  --output_dir ./05_outputs/mc/llava/llava_vqarad_af
+
+python 03_training/train_llava-med.py \
+  --dataset vqarad \
+  --mc_data_root 02_data/data_mc_openai \
+  --mc_export_suffix _verify \
+  --val_split test \
+  --use_reasoning --answer_first \
+  --max_length 2048 --bf16 --gradient_checkpointing --use_8bit_optimizer \
+  --output_dir ./05_outputs/mc/llava-med/llava_med_vqarad_af
+```
 
 ### Qwen-VL trainieren (MC-Baseline)
 
@@ -529,7 +551,21 @@ PYTHONPATH=. python 04_evaluation/inference_qwen.py \
 
 Das alte README-Beispiel mit `full_response` und `<question>`-Tokens ist **veraltet**; das tatsächliche Format folgt dem Chat-Template des Processors und den Feldern oben.
 
-**LLaVA-Med:** `inference_med.py` (andere Konversationsschablone, siehe Dateikopf).
+**LLaVA / LLaVA-Med:** `inference_llava.py` / `inference_llava-med.py`. Mit **`--use_reasoning_json`** (optional **`--answer_first`**) derselbe JSON-Contract wie beim Training (`train_llava*.py --use_reasoning`); Default `--max_new_tokens` dann 320. Nicht zusammen mit `--use_two_stage_reasoning` verwendbar. Zusätzliche Result-Felder: `predicted_reasoning_text`, `predicted_json_parse_ok`.
+
+```bash
+python 04_evaluation/inference_llava.py \
+  --dataset vqarad --split test \
+  --model_path ./05_outputs/mc/llava/llava_vqarad_af \
+  --finetuned --use_reasoning_json --answer_first \
+  --max_new_tokens 512 --results_dir 06_results
+
+python 04_evaluation/inference_llava-med.py \
+  --dataset vqarad --split test \
+  --model_path ./05_outputs/mc/llava-med/llava_med_vqarad_af \
+  --finetuned --use_reasoning_json --answer_first \
+  --max_new_tokens 512 --results_dir 06_results
+```
 
 **Qwen-VL:** `inference_qwen.py` — MC-Inferenz mit Entropie, Agreement, Confidence und Ablationen (`black`/`shuffle`); **ohne** 2-Stage-Reasoning und GradCAM. Unterstützt Qwen2.5-VL und Qwen3-VL via `--model_path`.
 
@@ -915,7 +951,7 @@ Pipeline für **Pseudo-Rationales** auf MC-Trainingsdaten:
 
 1. **Generieren** (`utils/build_pseudo_reasonings_openai.py`) — via `--model gpt-4o-mini` (OpenAI Vision) oder `--model qwen3-vl-8b` (lokal `Qwen/Qwen3-VL-8B-Instruct`) REGION/OBSERVATION/REASONING mit Gold-Antwort im Prompt; Ausgabe z. B. `*_mc_openai_pseudo.json` (Default-Suffix `_pseudo`).
 2. **Qwen-Verify** (`04_evaluation/verify_pseudo_reasoning_qwen.py`) — Pretrained **Qwen2.5-VL** bekommt den Reasoning-Text + MC-Frage/Optionen **ohne Bild** (Hinweis im Prompt: die Beschreibung bezieht sich auf ein nicht gezeigtes Bild); setzt `qwen_verify` true/false. Ausgabe z. B. `*_mc_openai_pseudo_pr_qwen_verify.json`.
-3. **Training** (`03_training/train_qwen.py --use_reasoning`) — nutzt nur Zeilen mit `qwen_verify=True` (oder Alias `is_correct=True`) und nicht-leerem `pseudo_reasoning_raw`.
+3. **Training** — `train_qwen.py`, `train_llava.py` oder `train_llava-med.py` mit `--use_reasoning`: nutzt nur Zeilen mit `qwen_verify=True` (oder Alias `is_correct=True`) und nicht-leerem `pseudo_reasoning_raw`. Gleiche JSON-Prompts (`utils/qwen_vl.py`).
 
 ```bash
 # 1) Pseudo-Rationales generieren (OpenAI)
@@ -941,18 +977,24 @@ python 04_evaluation/verify_pseudo_reasoning_qwen.py \
   --model_path Qwen/Qwen2.5-VL-7B-Instruct \
   --resume
 
-# 3) Reasoning-Training
+# 3) Reasoning-Training (Qwen, LLaVA oder LLaVA-Med)
 python 03_training/train_qwen.py \
   --dataset vqarad \
   --use_reasoning \
   --use_lora \
   --output_dir ./05_outputs/qwen_vqarad_reasoning \
   --bf16 --gradient_checkpointing
+
+python 03_training/train_llava.py \
+  --dataset vqarad --mc_export_suffix _verify \
+  --use_reasoning --answer_first --max_length 2048 \
+  --output_dir ./05_outputs/mc/llava/llava_vqarad_af \
+  --bf16 --gradient_checkpointing
 ```
 
-Inferenz auf dem Reasoning-Checkpoint: `inference_qwen.py --use_reasoning_json --max_new_tokens 512` (siehe Abschnitt Qwen-Inferenz).
+Inferenz auf dem Reasoning-Checkpoint: `inference_qwen.py` / `inference_llava.py` / `inference_llava-med.py` mit `--use_reasoning_json` (und `--answer_first` falls so trainiert); `--max_new_tokens 512` empfohlen.
 
-Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `04_evaluation/inference_med.py` / `inference.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser (unabhängig von dieser Pseudo-Pipeline).
+Die **2-Stufen-Inferenz** (`--use_two_stage_reasoning`) in `inference_llava-med.py` / `inference_llava.py` nutzt weiterhin [`utils/reasoning_mc.py`](utils/reasoning_mc.py) für Prompt/Parser (unabhängig von dieser Pseudo-Pipeline).
 
 Ausgabe pro Datensatz:
 **MC als Standardpfad:** `MedicalVQALoader()` nutzt `MEDVQA_DATA_ROOT` / `MEDVQA_MC_ROOT` bzw. die Fallbacks `02_data` und `02_data/data_mc_openai` (siehe [`utils/paths.py`](utils/paths.py)). Fehlen die MC-Dateien unter dem MC-Root, gibt der Loader einen Fehler mit Verweis auf `utils/build_mc_datasets_openai.py`. **`utils/build_mc_datasets_openai.py`** selbst nutzt dagegen immer **Freitext** aus `--data_root` und schreibt nur nach `--output_root`.

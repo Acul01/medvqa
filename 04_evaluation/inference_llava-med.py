@@ -29,6 +29,7 @@ from utils.ablation import prepare_fgr_crop_lookup, resolve_ablation_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
+from utils.qwen_vl import format_mc_reasoning_user_text, parse_mc_reasoning_json_output
 from utils.save_results import clean_answer, save_results
 from utils.mc_eval import run_mc_evaluation
 from utils.gradcam_inference import (
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 DATASET_MAX_NEW_TOKENS = {"pathvqa": 8, "slake": 8, "vqarad": 8, "medvqa2019": 8}
+DEFAULT_REASONING_JSON_MAX_NEW_TOKENS = 320
 END_REASONING_TOKEN = "<END_REASONING>"
 
 
@@ -56,6 +58,15 @@ def parse_mc_options_cli(options_line: str) -> List[str]:
     if len(out) < 2:
         raise ValueError(f"Could not parse at least two MC options from: {options_line!r}")
     return out
+
+
+def decode_mc_prediction(generated_text: str, *, num_options: int, use_reasoning_json: bool):
+    """Return (predicted_letter, reasoning_text_or_none, json_parse_ok_or_false)."""
+    if use_reasoning_json:
+        parsed = parse_mc_reasoning_json_output(generated_text, num_options=num_options)
+        return parsed.predicted_letter, parsed.reasoning_text, parsed.json_parse_ok
+    letter = parse_predicted_letter(generated_text, num_options=num_options)
+    return letter, None, False
 
 
 def parse_args():
@@ -85,6 +96,16 @@ def parse_args():
     parser.add_argument("--gradcam_dir", type=str, default=None, help="Directory for GradCAM overlay/heatmap artifacts (default: <results_dir>/gradcam_overlays)")
     parser.add_argument("--gradcam_chunk_size", type=int, default=100, help="Chunk size for automatic gradcam inference splitting to reduce OOM risk")
     parser.add_argument("--reasoning_max_new_tokens", type=int, default=192, help="Maximum new tokens for stage-1 reasoning generation")
+    parser.add_argument(
+        "--use_reasoning_json",
+        action="store_true",
+        help='Emit assistant JSON {"reasoning","answer"} (match train_llava-med --use_reasoning)',
+    )
+    parser.add_argument(
+        "--answer_first",
+        action="store_true",
+        help='Use answer-first JSON schema {"answer","reasoning"} (match train_llava-med --answer_first). Only effective with --use_reasoning_json.',
+    )
     parser.add_argument(
         "--ablation_mode",
         type=str,
@@ -605,8 +626,14 @@ def main():
         _run_path2_cli(args)
         return
 
+    if args.use_reasoning_json and args.use_two_stage_reasoning:
+        raise ValueError("--use_reasoning_json and --use_two_stage_reasoning cannot be used together.")
     if args.max_new_tokens is None:
-        args.max_new_tokens = DATASET_MAX_NEW_TOKENS[args.dataset]
+        args.max_new_tokens = (
+            DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
+            if args.use_reasoning_json
+            else DATASET_MAX_NEW_TOKENS[args.dataset]
+        )
     if args.use_gradcam and not args.use_two_stage_reasoning:
         logger.warning("--use_gradcam is ignored unless --use_two_stage_reasoning is set.")
     gradcam_effective = bool(args.use_gradcam and args.use_two_stage_reasoning)
@@ -615,8 +642,18 @@ def main():
 
     model_short = _model_short_name(args.model_path)
     ft_tag = "finetuned" if args.finetuned else "pretrained"
-    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_eval_mc"
-    wandb.init(project=args.wandb_project, name=run_name, group=args.dataset, tags=["inference", "mc", model_short, args.dataset, ft_tag], config=vars(args))
+    if args.use_reasoning_json:
+        reason_tag = "reasoning_json_answer_first" if args.answer_first else "reasoning_json"
+    else:
+        reason_tag = "answer_only"
+    run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_{reason_tag}_eval_mc"
+    wandb.init(
+        project=args.wandb_project,
+        name=run_name,
+        group=args.dataset,
+        tags=["inference", "mc", model_short, args.dataset, ft_tag, reason_tag],
+        config=vars(args),
+    )
 
     device, model, tokenizer, image_processor = load_llava_med_bundle(args)
 
@@ -740,7 +777,15 @@ def main():
                         reasoning_explanation,
                     )
                 else:
-                    final_user_text = format_mc_user_text(sample.question, sample.mc_options)
+                    final_user_text = (
+                        format_mc_reasoning_user_text(
+                            sample.question,
+                            sample.mc_options,
+                            answer_first=args.answer_first,
+                        )
+                        if args.use_reasoning_json
+                        else format_mc_user_text(sample.question, sample.mc_options)
+                    )
 
                 question = f"{DEFAULT_IMAGE_TOKEN}\n{final_user_text}"
                 conv.append_message(conv.roles[0], question)
@@ -758,10 +803,15 @@ def main():
                     output_scores=True,
                 )
 
-                generated_ids = generation_output.sequences[0]
+                _, new_ids, _ = normalize_generation_sequences(
+                    generation_output.sequences, input_ids
+                )
+                generated_ids = new_ids[0]
                 generated_text = clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())
                 stage2_option_probs: Dict[str, float] = {}
                 stage2_decoding_mode = "text_parse"
+                predicted_reasoning_text = None
+                predicted_json_parse_ok = False
                 if args.use_two_stage_reasoning:
                     stage2_option_probs = _stage2_letter_probs_from_first_step(
                         generation_output.scores,
@@ -772,7 +822,11 @@ def main():
                     generated_text = predicted_letter or ""
                     stage2_decoding_mode = "letter_logits_only"
                 else:
-                    predicted_letter = parse_predicted_letter(generated_text, num_options=len(sample.mc_options))
+                    predicted_letter, predicted_reasoning_text, predicted_json_parse_ok = decode_mc_prediction(
+                        generated_text,
+                        num_options=len(sample.mc_options),
+                        use_reasoning_json=args.use_reasoning_json,
+                    )
                 ground_truth_letter = sample.answer
 
                 # Forward pass AFTER generate — raw logits free of all logit processors.
@@ -809,7 +863,6 @@ def main():
                         return_dict_in_generate=True,
                         output_scores=args.use_two_stage_reasoning,
                     )
-                    sample_generated_ids = sample_output.sequences[0]
                     if args.use_two_stage_reasoning:
                         sample_probs = _stage2_letter_probs_from_first_step(
                             sample_output.scores,
@@ -818,8 +871,17 @@ def main():
                         )
                         sample_letter = _pick_letter_from_probs(sample_probs)
                     else:
-                        sample_text = clean_answer(tokenizer.decode(sample_generated_ids, skip_special_tokens=True).strip())
-                        sample_letter = parse_predicted_letter(sample_text, num_options=len(sample.mc_options))
+                        _, sample_new_ids, _ = normalize_generation_sequences(
+                            sample_output.sequences, input_ids
+                        )
+                        sample_text = clean_answer(
+                            tokenizer.decode(sample_new_ids[0], skip_special_tokens=True).strip()
+                        )
+                        sample_letter, _, _ = decode_mc_prediction(
+                            sample_text,
+                            num_options=len(sample.mc_options),
+                            use_reasoning_json=args.use_reasoning_json,
+                        )
                     sampled_predicted_letters.append(sample_letter)
 
                 agreement = _compute_agreement(sampled_predicted_letters)
@@ -835,6 +897,8 @@ def main():
                         "gradcam_error": gradcam_error,
                         "gradcam_overlay_path": gradcam_overlay_path,
                         "gradcam_heatmap_path": gradcam_heatmap_path,
+                        "use_reasoning_json": args.use_reasoning_json,
+                        "answer_first": bool(args.answer_first and args.use_reasoning_json),
                         "reasoning_raw": reasoning_raw,
                         "reasoning_region": reasoning_region,
                         "reasoning_observation": reasoning_observation,
@@ -857,6 +921,9 @@ def main():
                         "confidence": confidence,
                         "agreement_samples": sampled_predicted_letters,
                     }
+                if args.use_reasoning_json:
+                    row["predicted_reasoning_text"] = predicted_reasoning_text
+                    row["predicted_json_parse_ok"] = predicted_json_parse_ok
                 if ablation.fgr_crop_path is not None:
                     row["fgr_crop_path"] = ablation.fgr_crop_path
                 results.append(row)
