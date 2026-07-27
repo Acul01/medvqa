@@ -32,7 +32,7 @@ def clean_yesno_answer(text: str) -> str:
     return text
 
 
-def _derive_model_short_name(model_path: str) -> str:
+def derive_model_short_name(model_path: str) -> str:
     path_lower = model_path.lower()
     if "llava-med" in path_lower:
         return "llava-med"
@@ -44,6 +44,20 @@ def _derive_model_short_name(model_path: str) -> str:
         return qwen_model_short_name(model_path)
     name = Path(model_path).name
     return name.replace("/", "_").replace(" ", "_")
+
+
+def build_results_base_name(
+    model_path: str,
+    dataset: str,
+    n_samples: int | None,
+    name_suffix: str | None = None,
+) -> str:
+    model_name = derive_model_short_name(model_path)
+    n_tag = str(n_samples) if n_samples is not None else "all"
+    base_name = f"{model_name}_{dataset}_{n_tag}"
+    if name_suffix:
+        base_name = f"{base_name}_{name_suffix}"
+    return base_name
 
 
 def save_results(
@@ -58,11 +72,7 @@ def save_results(
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    model_name = _derive_model_short_name(model_path)
-    n_tag = str(n_samples) if n_samples is not None else "all"
-    base_name = f"{model_name}_{dataset}_{n_tag}"
-    if name_suffix:
-        base_name = f"{base_name}_{name_suffix}"
+    base_name = build_results_base_name(model_path, dataset, n_samples, name_suffix=name_suffix)
 
     json_path = results_dir / f"{base_name}.json"
     with open(json_path, "w", encoding="utf-8") as f:

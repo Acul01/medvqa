@@ -30,6 +30,11 @@ from utils.load_data import MedicalVQALoader
 from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.qwen_vl import format_mc_reasoning_user_text, parse_mc_reasoning_json_output
+from utils.inference_resume import (
+    add_inference_resume_cli_arguments,
+    sample_inference_key,
+    setup_inference_checkpoint,
+)
 from utils.save_results import clean_answer, save_results
 from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
 from utils.gradcam_inference import (
@@ -132,6 +137,7 @@ def parse_args():
     parser.add_argument("--options", type=str, default=None, help='path2: e.g. "A) Yes B) No"')
     parser.add_argument("--path2_output", type=str, default=None, help="path2: optional JSON path for results + sidecar heatmap/overlay")
     parser.add_argument("--rationale_max_new_tokens", type=int, default=128)
+    add_inference_resume_cli_arguments(parser)
     args = parser.parse_args()
 
     if args.mode == "eval" and args.dataset is None:
@@ -692,7 +698,12 @@ def main():
     else:
         chunk_ranges = [(0, len(samples))]
 
-    results = []
+    ckpt_manager, _ = setup_inference_checkpoint(
+        args,
+        resume=args.resume,
+        checkpoint_every=args.checkpoint_every,
+        partial_path=args.partial_path,
+    )
     skipped_fgr = 0
     with torch.no_grad():
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_ranges, start=1):
@@ -703,6 +714,8 @@ def main():
                     continue
 
                 source_image_path = sample.image_path
+                if ckpt_manager.try_skip(sample_inference_key(source_image_path, sample.question)):
+                    continue
                 ablation = resolve_ablation_image(
                     ablation_mode=args.ablation_mode,
                     source_image_path=source_image_path,
@@ -927,7 +940,7 @@ def main():
                     row["predicted_json_parse_ok"] = predicted_json_parse_ok
                 if ablation.fgr_crop_path is not None:
                     row["fgr_crop_path"] = ablation.fgr_crop_path
-                results.append(row)
+                ckpt_manager.append_new(row)
 
             if gradcam_effective:
                 # Drop large temporary references early to keep peak VRAM stable.
@@ -970,6 +983,8 @@ def main():
     if skipped_fgr:
         logger.info("Skipped %d samples (no FGR crop mapping).", skipped_fgr)
 
+    ckpt_manager.print_summary()
+    results = ckpt_manager.results
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]
     open_rows = [r for r in results if r.get("question_type") == "open"]
@@ -982,6 +997,7 @@ def main():
     closed_acc = _safe_div(closed_correct, len(closed_rows)) if closed_rows else None
     open_acc = _safe_div(open_correct, len(open_rows)) if open_rows else None
 
+    ckpt_manager.finalize(complete=True)
     results_path = save_results(
         results=results,
         model_path=args.model_path,

@@ -28,6 +28,11 @@ from utils.som_select import (
     parse_selected_labels,
     question_with_som_hint,
 )
+from utils.inference_resume import (
+    add_inference_resume_cli_arguments,
+    sample_inference_key,
+    setup_inference_checkpoint,
+)
 from utils.save_results import clean_answer, save_results
 from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
 
@@ -104,6 +109,7 @@ def parse_args():
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
     )
+    add_inference_resume_cli_arguments(parser)
     return parser.parse_args()
 
 
@@ -431,7 +437,12 @@ def main():
     else:
         chunk_ranges = [(0, len(samples))]
 
-    results = []
+    ckpt_manager, _ = setup_inference_checkpoint(
+        args,
+        resume=args.resume,
+        checkpoint_every=args.checkpoint_every,
+        partial_path=args.partial_path,
+    )
     skipped_fgr = 0
     with torch.no_grad():
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_ranges, start=1):
@@ -441,6 +452,8 @@ def main():
                 if not sample.mc_options or sample.mc_correct_index is None:
                     continue
                 source_image_path = sample.image_path
+                if ckpt_manager.try_skip(sample_inference_key(source_image_path, sample.question)):
+                    continue
                 ablation = resolve_ablation_image(
                     ablation_mode=args.ablation_mode,
                     source_image_path=source_image_path,
@@ -662,7 +675,7 @@ def main():
                     row["predicted_json_parse_ok"] = predicted_json_parse_ok
                 if ablation.fgr_crop_path is not None:
                     row["fgr_crop_path"] = ablation.fgr_crop_path
-                results.append(row)
+                ckpt_manager.append_new(row)
 
             if gradcam_effective:
                 gc.collect()
@@ -675,6 +688,8 @@ def main():
     if skipped_fgr:
         print(f"Skipped {skipped_fgr} samples (no FGR crop mapping)")
 
+    ckpt_manager.print_summary()
+    results = ckpt_manager.results
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]
     open_rows = [r for r in results if r.get("question_type") == "open"]
@@ -693,6 +708,7 @@ def main():
     if open_acc is not None:
         print(f"Open accuracy: {open_correct}/{len(open_rows)} = {open_acc:.4f}")
 
+    ckpt_manager.finalize(complete=True)
     results_path = save_results(
         results=results,
         model_path=args.model_path,
