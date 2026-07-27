@@ -53,6 +53,36 @@ def _format_optional_float(value: float | None, digits: int = 6) -> str:
     return f"{float(value):.{digits}f}"
 
 
+def add_aurc_cli_arguments(parser) -> None:
+    """Shared CLI flags for post-inference dual AURC evaluation."""
+    parser.add_argument(
+        "--combined_alpha",
+        type=float,
+        default=0.5,
+        help="Weight for token entropy in combined AURC (default: 0.5); 1-alpha = vote entropy",
+    )
+    parser.add_argument(
+        "--skip_aurc",
+        action="store_true",
+        help="Skip dual AURC after inference (accuracy metrics only)",
+    )
+
+
+def apply_aurc_to_wandb_summary(summary: Any, metrics: dict[str, Any]) -> None:
+    """Write dual AURC fields from run_mc_evaluation into a wandb summary object."""
+    if summary is None or not metrics:
+        return
+    for split in ("closed", "open", "overall"):
+        payload = metrics.get(split) or {}
+        for key in ("aurc_entropy", "aurc_combined"):
+            value = payload.get(key)
+            if isinstance(value, (int, float)) and not math.isnan(float(value)):
+                summary[f"{split}_{key}"] = float(value)
+    alpha = metrics.get("combined_alpha")
+    if isinstance(alpha, (int, float)) and not math.isnan(float(alpha)):
+        summary["combined_alpha"] = float(alpha)
+
+
 def _append_eval_runs_mc_csv(csv_path: Path, row: Dict[str, str]) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(EVAL_RUN_MC_COLUMNS)

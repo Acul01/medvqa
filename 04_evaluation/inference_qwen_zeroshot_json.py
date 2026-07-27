@@ -13,9 +13,8 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-from calibration_losses import AnswerConfidenceHead
 from utils.load_data import MedicalVQALoader
-from utils.mc_eval import run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
@@ -92,6 +91,7 @@ def parse_args():
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    add_aurc_cli_arguments(parser)
     parser.add_argument(
         "--use_som",
         action="store_true",
@@ -162,34 +162,14 @@ def _compute_answer_token_stats(
     answer_letter_token_ids: dict[int, str],
     model,
     inputs: dict,
-    confidence_head=None,
 ) -> tuple[float, float]:
-    """Returns (entropy, confidence) at the answer token.
-
-    With confidence_head set: reads the last-layer hidden state at the answer-token
-    generation step through the head (decoupled from the vocabulary logits the answer
-    itself was sampled from -- same metric iterative_calibration_finetuning.py trains
-    against). entropy is the binary entropy of the head's P(correct) output.
-    Without it: falls back to max-softmax-probability / Shannon entropy from raw logits,
-    with a forward-pass fallback when the answer token cannot be located.
-    """
+    """Returns (entropy, confidence) at the answer token from vocabulary logits."""
     valid_answer_ids = {
         tid: letter
         for tid, letter in answer_letter_token_ids.items()
         if letter in "ABCDEFGHIJ"[:num_opts]
     }
     answer_step = find_answer_token_step(generated_ids.tolist(), valid_answer_ids)
-
-    if confidence_head is not None:
-        hidden_states = getattr(generation_output, "hidden_states", None)
-        if answer_step is None or not hidden_states or answer_step >= len(hidden_states):
-            return float("nan"), float("nan")
-        hidden = hidden_states[answer_step][-1][:, -1, :].float()
-        with torch.no_grad():
-            confidence = float(torch.sigmoid(confidence_head(hidden)).item())
-        confidence = min(max(confidence, 1e-6), 1.0 - 1e-6)
-        entropy = -(confidence * math.log(confidence) + (1 - confidence) * math.log(1 - confidence))
-        return entropy, confidence
 
     if answer_step is not None and generation_output.logits and answer_step < len(generation_output.logits):
         logits = generation_output.logits[answer_step][0].double()
@@ -241,26 +221,6 @@ def main():
     )
     model.eval()
 
-    # Auto-detect the confidence head produced by iterative_calibration_finetuning.py
-    # (--calibration_loss confidence_head). If present, confidence/entropy are computed
-    # from it (hidden-state based, decoupled from the answer-token vocabulary logits)
-    # instead of from raw token probabilities -- same metric the model was trained against.
-    confidence_head_ckpt = Path(args.model_path) / "confidence_head.pt"
-    confidence_head = None
-    if confidence_head_ckpt.exists():
-        from utils.spatial_filter import get_visual_merger_output_dim
-
-        hidden_size = get_visual_merger_output_dim(model)
-        confidence_head = AnswerConfidenceHead(hidden_size)
-        head_state = torch.load(confidence_head_ckpt, map_location="cpu", weights_only=True)
-        confidence_head.load_state_dict(head_state)
-        head_param = next(model.parameters())
-        confidence_head.to(device=head_param.device, dtype=head_param.dtype)
-        confidence_head.eval()
-        print(f"Confidence head loaded from {confidence_head_ckpt}")
-    else:
-        print("No confidence_head.pt found -- using token-probability confidence/entropy.")
-
     processor_path = resolve_processor_path(args.model_path)
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
@@ -295,7 +255,6 @@ def main():
         "do_sample": True,
         "temperature": args.temperature,
         "top_p": args.top_p,
-        "output_hidden_states": confidence_head is not None,
     }
     stage1_gen_kwargs = {"max_new_tokens": args.rationale_max_new_tokens, "do_sample": False}
 
@@ -386,7 +345,6 @@ def main():
                         answer_letter_token_ids=answer_letter_token_ids,
                         model=model,
                         inputs=inputs,
-                        confidence_head=confidence_head,
                     )
                     sample_results.append((sample_text, sample_parsed, ent, conf))
 
@@ -424,7 +382,7 @@ def main():
                     "predicted_rationale_text": matching[1].rationale_text,
                     "predicted_json_parse_ok": matching[1].json_parse_ok,
                     "zeroshot_json": True,
-                    "confidence_source": "head" if confidence_head is not None else "token_prob",
+                    "confidence_source": "token_prob",
                     "som_selected_regions": som_selected_regions,
                     "som_selection_response": som_selection_response,
                 }
@@ -476,7 +434,6 @@ def main():
                             answer_letter_token_ids=answer_letter_token_ids,
                             model=model,
                             inputs=agr_inputs2,
-                            confidence_head=confidence_head,
                         )
                         sample_results.append((agr_stage2, agr_letter, ent, conf))
 
@@ -514,7 +471,7 @@ def main():
                         "stage1_raw": stage1_raw,
                         "stage2_raw": matching[0],
                         "zeroshot_json": False,
-                        "confidence_source": "head" if confidence_head is not None else "token_prob",
+                        "confidence_source": "token_prob",
                         "two_stage_cot": True,
                         "som_selected_regions": som_selected_regions,
                         "som_selection_response": som_selection_response,
@@ -550,7 +507,6 @@ def main():
                             answer_letter_token_ids=answer_letter_token_ids,
                             model=model,
                             inputs=agr_inputs2,
-                            confidence_head=confidence_head,
                         )
                         sample_results.append((agr_stage2, agr_parsed2, ent, conf))
 
@@ -590,7 +546,7 @@ def main():
                         "stage2_raw": matching[0],
                         "predicted_json_parse_ok": matching[1].json_parse_ok,
                         "zeroshot_json": False,
-                        "confidence_source": "head" if confidence_head is not None else "token_prob",
+                        "confidence_source": "token_prob",
                         "two_stage_cot": True,
                         "som_selected_regions": som_selected_regions,
                         "som_selection_response": som_selection_response,
@@ -624,7 +580,11 @@ def main():
         results_dir=args.results_dir,
         name_suffix=args.json_order,
     )
-    run_mc_evaluation(results_path)
+    metrics = run_mc_evaluation(
+        results_path,
+        compute_aurc=not args.skip_aurc,
+        combined_alpha=args.combined_alpha,
+    )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc
     if closed_acc is not None:
@@ -632,6 +592,7 @@ def main():
     if open_acc is not None:
         wandb.summary["mc_open_accuracy"] = open_acc
     wandb.summary["total_samples"] = total
+    apply_aurc_to_wandb_summary(wandb.summary, metrics)
 
     table = wandb.Table(
         columns=[

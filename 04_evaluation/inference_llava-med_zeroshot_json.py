@@ -19,7 +19,7 @@ from llava.mm_utils import process_images, tokenizer_image_token
 from llava.model.builder import load_pretrained_model
 
 from utils.load_data import MedicalVQALoader
-from utils.mc_eval import run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
@@ -86,6 +86,7 @@ def parse_args():
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    add_aurc_cli_arguments(parser)
     return parser.parse_args()
 
 
@@ -619,7 +620,11 @@ def main():
         results_dir=args.results_dir,
         name_suffix=args.json_order,
     )
-    run_mc_evaluation(results_path)
+    metrics = run_mc_evaluation(
+        results_path,
+        compute_aurc=not args.skip_aurc,
+        combined_alpha=args.combined_alpha,
+    )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc
     if closed_acc is not None:

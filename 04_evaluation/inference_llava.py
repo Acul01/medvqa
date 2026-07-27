@@ -29,7 +29,7 @@ from utils.som_select import (
     question_with_som_hint,
 )
 from utils.save_results import clean_answer, save_results
-from utils.mc_eval import run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
 
 DEFAULT_MODEL_PATH = "llava-hf/llava-1.5-7b-hf"
 END_REASONING_TOKEN = "<END_REASONING>"
@@ -91,6 +91,7 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    add_aurc_cli_arguments(parser)
     parser.add_argument(
         "--use_som",
         action="store_true",
@@ -699,7 +700,11 @@ def main():
         n_samples=args.n_samples,
         results_dir=args.results_dir,
     )
-    run_mc_evaluation(results_path)
+    metrics = run_mc_evaluation(
+        results_path,
+        compute_aurc=not args.skip_aurc,
+        combined_alpha=args.combined_alpha,
+    )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc
     if closed_acc is not None:

@@ -31,7 +31,7 @@ from utils.mc_vqa import LETTER_POOL, format_mc_user_text, parse_predicted_lette
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
 from utils.qwen_vl import format_mc_reasoning_user_text, parse_mc_reasoning_json_output
 from utils.save_results import clean_answer, save_results
-from utils.mc_eval import run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
 from utils.gradcam_inference import (
     compute_reasoning_gradcam_overlay,
     normalize_generation_sequences,
@@ -125,6 +125,7 @@ def parse_args():
     parser.add_argument("--finetuned", action="store_true", default=False)
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    add_aurc_cli_arguments(parser)
     # path2-only
     parser.add_argument("--image", type=str, default=None, help="path2: path to input image")
     parser.add_argument("--question", type=str, default=None, help="path2: clinical question")
@@ -988,7 +989,11 @@ def main():
         n_samples=args.n_samples,
         results_dir=args.results_dir,
     )
-    run_mc_evaluation(results_path)
+    metrics = run_mc_evaluation(
+        results_path,
+        compute_aurc=not args.skip_aurc,
+        combined_alpha=args.combined_alpha,
+    )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc
     if closed_acc is not None:
