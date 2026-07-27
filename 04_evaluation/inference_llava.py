@@ -588,6 +588,15 @@ def main():
                     )
                 ground_truth_letter = sample.answer
 
+                entropy_tokens_all: dict = {}
+                entropy_sequence_mean = float("nan")
+                if args.use_reasoning_json and generation_output.scores:
+                    entropy_tokens_all, entropy_sequence_mean = _compute_token_entropies(
+                        generation_output.scores,
+                        generated_ids,
+                        processor.tokenizer,
+                    )
+
                 # Forward pass AFTER generate — raw logits free of all logit processors.
                 fwd = model(**inputs, return_dict=True)
                 first_logits = fwd.logits[0, -1, :].double()
@@ -673,6 +682,8 @@ def main():
                 if args.use_reasoning_json:
                     row["predicted_reasoning_text"] = predicted_reasoning_text
                     row["predicted_json_parse_ok"] = predicted_json_parse_ok
+                    row["entropy_tokens_all"] = entropy_tokens_all
+                    row["entropy_sequence_mean"] = entropy_sequence_mean
                 if ablation.fgr_crop_path is not None:
                     row["fgr_crop_path"] = ablation.fgr_crop_path
                 ckpt_manager.append_new(row)
