@@ -25,6 +25,7 @@ __pycache__/
 general_guide.md
 HPC_JUPYTERLAB_GPU_ANLEITUNG.md
 setup.txt
+cmds.md
 
 # local/cluster secrets
 .env
