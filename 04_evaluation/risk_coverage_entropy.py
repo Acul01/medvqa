@@ -2,15 +2,16 @@
 Entropy-threshold baseline for reliable VQA.
 
 Computes risk/coverage sweep, plots risk-coverage curve, and reports AURC
-(Area Under the Risk-Coverage Curve).
+(Area Under the Risk-Coverage Curve) for entropy-only and combined uncertainty.
 """
 
 import argparse
 import csv
 import json
 import math
+from collections import Counter
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 import matplotlib.pyplot as plt
 
@@ -113,6 +114,121 @@ def prepare_samples(
     return samples
 
 
+def agreement_letters(row: Dict) -> List[str]:
+    """Extract non-empty answer letters from agreement_samples."""
+    raw = row.get("agreement_samples")
+    if not isinstance(raw, list):
+        return []
+    letters: List[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            letters.append(item.strip().upper())
+    return letters
+
+
+def compute_vote_entropy(samples: Sequence[str]) -> float:
+    """
+    Shannon entropy of the answer distribution across generations.
+    Measures between-generation inconsistency.
+    """
+    if not samples:
+        return 0.0
+    counts = Counter(samples)
+    total = float(sum(counts.values()))
+    entropy = 0.0
+    for count in counts.values():
+        p = count / total
+        if p > 0.0:
+            entropy -= p * math.log(p)
+    return float(entropy)
+
+
+def compute_combined_uncertainties(
+    token_H: Sequence[float],
+    vote_H: Sequence[float],
+    alpha: float,
+) -> List[float]:
+    """
+    Symmetric Min-Max normalize token and vote entropy, then combine.
+
+    Higher values indicate higher uncertainty.
+    """
+    if len(token_H) != len(vote_H):
+        raise ValueError("token_H and vote_H must have the same length.")
+    if not token_H:
+        return []
+
+    token_min = min(token_H)
+    token_max = max(token_H)
+    vote_min = min(vote_H)
+    vote_max = max(vote_H)
+    token_span = token_max - token_min + 1e-12
+    vote_span = vote_max - vote_min + 1e-12
+
+    combined: List[float] = []
+    for tok, vote in zip(token_H, vote_H):
+        token_norm = (tok - token_min) / token_span
+        vote_norm = (vote - vote_min) / vote_span
+        combined.append(alpha * token_norm + (1.0 - alpha) * vote_norm)
+    return combined
+
+
+def prepare_dual_samples(
+    results: List[Dict],
+    risk_metric: str,
+    max_entropy: float | None,
+    alpha: float,
+) -> List[Dict]:
+    """
+    Build samples usable for both entropy-only and combined AURC.
+
+    Requires valid entropy, non-empty agreement_samples, and a risk metric.
+    Combined uncertainty is Min-Max normalized over this subset only.
+    """
+    candidates: List[Dict] = []
+    token_H: List[float] = []
+    vote_H: List[float] = []
+
+    for r in results:
+        entropy = r.get("entropy")
+        if not is_valid_number(entropy):
+            continue
+        entropy = float(entropy)
+        if max_entropy is not None and entropy > max_entropy:
+            continue
+
+        letters = agreement_letters(r)
+        if not letters:
+            continue
+
+        metric_val = metric_value_from_row(r, risk_metric=risk_metric)
+        if metric_val is None:
+            continue
+
+        candidates.append({"entropy": entropy, "metric_value": metric_val})
+        token_H.append(entropy)
+        vote_H.append(compute_vote_entropy(letters))
+
+    combined = compute_combined_uncertainties(token_H, vote_H, alpha=alpha)
+    samples: List[Dict] = []
+    for cand, comb in zip(candidates, combined):
+        samples.append(
+            {
+                "entropy": cand["entropy"],
+                "combined_uncertainty": float(comb),
+                "metric_value": cand["metric_value"],
+            }
+        )
+    return samples
+
+
+def samples_with_score(dual_samples: List[Dict], score_key: str) -> List[Dict]:
+    return [
+        {"score_value": float(s[score_key]), "metric_value": float(s["metric_value"])}
+        for s in dual_samples
+    ]
+
+
 def unique_thresholds(values: List[float], num_thresholds: int) -> List[float]:
     uniq = sorted(set(values))
     if len(uniq) <= num_thresholds:
@@ -202,7 +318,12 @@ def save_curve_csv(curve_rows: List[Dict], path: Path) -> None:
             writer.writerow(row)
 
 
-def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
+def plot_curve(
+    curve_rows: List[Dict],
+    out_path: Path,
+    title: str,
+    threshold_label: str = "Entropy threshold",
+) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     x = [r["coverage"] for r in curve_rows]
     y = [r["risk"] for r in curve_rows]
@@ -212,7 +333,7 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
     ax2 = ax1.twinx()
 
     # Main risk-coverage curve (left y-axis)
-    line_risk = ax1.plot(x, y, linewidth=2, color="tab:blue", label="Risk")[0]
+    ax1.plot(x, y, linewidth=2, color="tab:blue", label="Risk")
     ax1.set_xlabel("Coverage")
     ax1.set_ylabel("Risk", color="tab:blue")
     ax1.tick_params(axis="y", labelcolor="tab:blue")
@@ -220,8 +341,8 @@ def plot_curve(curve_rows: List[Dict], out_path: Path, title: str) -> None:
     ax1.grid(alpha=0.25)
 
     # Threshold trace (right y-axis)
-    line_thr = ax2.plot(x, t, linewidth=2, color="tab:orange", label="Entropy threshold")[0]
-    ax2.set_ylabel("Entropy threshold", color="tab:orange")
+    ax2.plot(x, t, linewidth=2, color="tab:orange", label=threshold_label)
+    ax2.set_ylabel(threshold_label, color="tab:orange")
     ax2.tick_params(axis="y", labelcolor="tab:orange")
 
     fig.tight_layout()
@@ -242,6 +363,13 @@ def artifact_paths(out_dir: Path, stem: str, question_type: str) -> tuple[Path, 
     return csv_path, plot_path
 
 
+def combined_artifact_paths(out_dir: Path, stem: str, question_type: str) -> tuple[Path, Path]:
+    base = artifact_base(stem, question_type)
+    csv_path = out_dir / f"{base}_combined_risk_coverage.csv"
+    plot_path = out_dir / f"{base}_combined_risk_coverage_curve.png"
+    return csv_path, plot_path
+
+
 def empty_type_metrics(filtered_rows: int) -> Dict:
     return {
         "filtered_rows": filtered_rows,
@@ -250,6 +378,23 @@ def empty_type_metrics(filtered_rows: int) -> Dict:
         "aurc": 0.0,
         **coverage_at_risk([], risk_targets=RISK_TARGETS),
         **risk_at_coverage([], cov_targets=COVERAGE_TARGETS),
+    }
+
+
+def metrics_from_curve(
+    curve: List[Dict],
+    *,
+    filtered_rows: int,
+    valid_samples: int,
+) -> Dict:
+    return {
+        "filtered_rows": filtered_rows,
+        "valid_samples": valid_samples,
+        "num_thresholds": len(curve),
+        "aurc": aurc_trapezoid(curve),
+        **coverage_at_risk(curve, risk_targets=RISK_TARGETS),
+        **risk_at_coverage(curve, cov_targets=COVERAGE_TARGETS),
+        "curve": curve,
     }
 
 
@@ -292,17 +437,118 @@ def evaluate_question_type(
     }
 
 
-def print_aurc_table(aurc_by_type: Dict[str, float]) -> None:
+def evaluate_dual_question_type(
+    results: List[Dict],
+    question_type: str,
+    *,
+    risk_metric: str,
+    max_entropy: float | None,
+    num_thresholds: int,
+    combined_alpha: float,
+) -> Dict:
+    """
+    Evaluate entropy-only and combined uncertainty AURC on the same sample set.
+    """
+    filtered_results = filter_by_question_type(results, question_type=question_type)
+    if not filtered_results:
+        empty = {**empty_type_metrics(0), "curve": []}
+        return {"entropy": empty, "combined": {**empty, "alpha": combined_alpha}}
+
+    dual_samples = prepare_dual_samples(
+        filtered_results,
+        risk_metric=risk_metric,
+        max_entropy=max_entropy,
+        alpha=combined_alpha,
+    )
+    if not dual_samples:
+        empty = {**empty_type_metrics(len(filtered_results)), "curve": []}
+        return {"entropy": empty, "combined": {**empty, "alpha": combined_alpha}}
+
+    n = len(dual_samples)
+    filtered_n = len(filtered_results)
+    entropy_curve = compute_curve(
+        samples_with_score(dual_samples, "entropy"),
+        num_thresholds=num_thresholds,
+        answer_when_higher=False,
+    )
+    combined_curve = compute_curve(
+        samples_with_score(dual_samples, "combined_uncertainty"),
+        num_thresholds=num_thresholds,
+        answer_when_higher=False,
+    )
+    entropy_metrics = metrics_from_curve(
+        entropy_curve,
+        filtered_rows=filtered_n,
+        valid_samples=n,
+    )
+    combined_metrics = metrics_from_curve(
+        combined_curve,
+        filtered_rows=filtered_n,
+        valid_samples=n,
+    )
+    combined_metrics["alpha"] = combined_alpha
+    return {"entropy": entropy_metrics, "combined": combined_metrics}
+
+
+def print_aurc_table(aurc_by_type: Dict[str, float], title: str = "AURC") -> None:
     col_width = 12
     headers = QUESTION_TYPES
     values = [aurc_by_type[qtype] for qtype in headers]
-    print("\nAURC")
+    print(f"\n{title}")
     print("".join(h.ljust(col_width) for h in headers))
     print("".join(f"{v:.6f}".ljust(col_width) for v in values))
 
 
+def compute_dual_aurc_summary(
+    results: List[Dict],
+    *,
+    combined_alpha: float = 0.5,
+    risk_metric: str = "match",
+    max_entropy: float | None = None,
+    num_thresholds: int = 200,
+) -> Dict:
+    """
+    Compact dual-AURC summary for post-inference / MC-eval hooks.
+
+    Does not write curve artifacts. Returns NaN AURC values when a split has
+    no valid dual samples (missing entropy and/or agreement_samples).
+    """
+    summary: Dict = {
+        "combined_alpha": combined_alpha,
+        "risk_metric": risk_metric,
+        "num_thresholds": num_thresholds,
+    }
+    for question_type in QUESTION_TYPES:
+        dual = evaluate_dual_question_type(
+            results,
+            question_type,
+            risk_metric=risk_metric,
+            max_entropy=max_entropy,
+            num_thresholds=num_thresholds,
+            combined_alpha=combined_alpha,
+        )
+        entropy_eval = dual["entropy"]
+        combined_eval = dual["combined"]
+        valid = int(entropy_eval.get("valid_samples", 0))
+        if valid <= 0:
+            aurc_entropy = float("nan")
+            aurc_combined = float("nan")
+        else:
+            aurc_entropy = float(entropy_eval["aurc"])
+            aurc_combined = float(combined_eval["aurc"])
+        summary[question_type] = {
+            "valid_samples": valid,
+            "filtered_rows": int(entropy_eval.get("filtered_rows", 0)),
+            "aurc_entropy": aurc_entropy,
+            "aurc_combined": aurc_combined,
+        }
+    return summary
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Entropy thresholding baseline for risk/coverage + AURC")
+    parser = argparse.ArgumentParser(
+        description="Entropy + combined-uncertainty risk/coverage + AURC"
+    )
     parser.add_argument("--results_file", type=str, required=True, help="Path to results JSON")
     parser.add_argument("--output_dir", type=str, default=get_results_dir(), help="Output directory")
     parser.add_argument("--num_thresholds", type=int, default=200, help="Number of thresholds for sweep")
@@ -324,13 +570,22 @@ def parse_args():
         type=str,
         default="entropy",
         choices=["entropy", "agreement", "confidence"],
-        help="Field used for thresholding (entropy lower=more confident, agreement/confidence higher=more confident)",
+        help="Kept for evaluate_question_type API; main() always runs entropy + combined",
+    )
+    parser.add_argument(
+        "--combined_alpha",
+        type=float,
+        default=0.5,
+        help="Weight for token entropy in combined uncertainty (1-alpha = vote entropy)",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if not 0.0 <= args.combined_alpha <= 1.0:
+        raise ValueError(f"--combined_alpha must be in [0, 1], got {args.combined_alpha}")
+
     results_path = Path(args.results_file)
     if not results_path.exists():
         raise FileNotFoundError(f"Results file not found: {results_path}")
@@ -340,39 +595,66 @@ def main():
     stem = results_path.stem
 
     type_results: Dict[str, Dict] = {}
-    aurc_by_type: Dict[str, float] = {}
+    aurc_entropy_by_type: Dict[str, float] = {}
+    aurc_combined_by_type: Dict[str, float] = {}
 
     for question_type in QUESTION_TYPES:
-        evaluation = evaluate_question_type(
+        dual = evaluate_dual_question_type(
             results,
             question_type,
             risk_metric=args.risk_metric,
-            score_field=args.score_field,
             max_entropy=args.max_entropy,
             num_thresholds=args.num_thresholds,
+            combined_alpha=args.combined_alpha,
         )
-        curve = evaluation.pop("curve")
-        type_results[question_type] = evaluation
-        aurc_by_type[question_type] = evaluation["aurc"]
+        entropy_eval = dual["entropy"]
+        combined_eval = dual["combined"]
+        entropy_curve = entropy_eval.pop("curve")
+        combined_curve = combined_eval.pop("curve")
+
+        type_results[question_type] = {
+            **entropy_eval,
+            "combined": combined_eval,
+        }
+        aurc_entropy_by_type[question_type] = entropy_eval["aurc"]
+        aurc_combined_by_type[question_type] = combined_eval["aurc"]
 
         csv_path, plot_path = artifact_paths(out_dir, stem, question_type)
-        if curve:
-            save_curve_csv(curve, csv_path)
+        comb_csv_path, comb_plot_path = combined_artifact_paths(out_dir, stem, question_type)
+        base = artifact_base(stem, question_type)
+
+        if entropy_curve:
+            save_curve_csv(entropy_curve, csv_path)
             plot_curve(
-                curve,
+                entropy_curve,
                 plot_path,
-                title=f"Risk-Coverage Curve ({artifact_base(stem, question_type)}, {question_type})",
+                title=f"Risk-Coverage Curve entropy ({base}, {question_type})",
+                threshold_label="Entropy threshold",
             )
-            print(f"{question_type}: valid_samples={evaluation['valid_samples']}, AURC={evaluation['aurc']:.6f}")
+            save_curve_csv(combined_curve, comb_csv_path)
+            plot_curve(
+                combined_curve,
+                comb_plot_path,
+                title=f"Risk-Coverage Curve combined ({base}, {question_type})",
+                threshold_label="Combined uncertainty threshold",
+            )
+            print(
+                f"{question_type}: valid_samples={entropy_eval['valid_samples']}, "
+                f"AURC_entropy={entropy_eval['aurc']:.6f}, "
+                f"AURC_combined={combined_eval['aurc']:.6f}"
+            )
             print(f"  Saved: {csv_path}")
             print(f"  Saved: {plot_path}")
+            print(f"  Saved: {comb_csv_path}")
+            print(f"  Saved: {comb_plot_path}")
         else:
-            print(f"{question_type}: no valid samples (filtered_rows={evaluation['filtered_rows']})")
+            print(f"{question_type}: no valid samples (filtered_rows={entropy_eval['filtered_rows']})")
 
     if type_results["overall"]["valid_samples"] == 0:
         raise ValueError(
-            "No valid samples found for question_type='overall' "
-            "with letter labels and numeric score values."
+            "No valid samples found for question_type='overall'. "
+            "Dual AURC requires numeric entropy, non-empty agreement_samples, "
+            "and a valid risk metric per row."
         )
 
     summary_path = out_dir / f"{stem}_risk_coverage_summary.json"
@@ -381,7 +663,8 @@ def main():
         "total_input_rows": len(results),
         "max_entropy_filter": args.max_entropy,
         "risk_metric": args.risk_metric,
-        "score_field": args.score_field,
+        "score_field": "entropy",
+        "combined_alpha": args.combined_alpha,
         "counts": {
             "closed_rows": type_results["closed"]["filtered_rows"],
             "open_rows": type_results["open"]["filtered_rows"],
@@ -396,7 +679,8 @@ def main():
         json.dump(summary, f, indent=2)
 
     print(f"\nSaved: {summary_path}")
-    print_aurc_table(aurc_by_type)
+    print_aurc_table(aurc_entropy_by_type, title="AURC entropy")
+    print_aurc_table(aurc_combined_by_type, title="AURC combined")
 
 
 if __name__ == "__main__":

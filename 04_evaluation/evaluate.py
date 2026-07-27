@@ -26,6 +26,17 @@ def parse_args() -> argparse.Namespace:
             "directory as --results_file)"
         ),
     )
+    parser.add_argument(
+        "--combined_alpha",
+        type=float,
+        default=0.5,
+        help="Weight for token entropy in combined AURC (default: 0.5)",
+    )
+    parser.add_argument(
+        "--skip_aurc",
+        action="store_true",
+        help="Skip dual AURC computation (accuracy/entropy means only)",
+    )
     return parser.parse_args()
 
 
@@ -35,6 +46,8 @@ def main() -> None:
         Path(args.results_file),
         Path(args.output_file) if args.output_file else None,
         eval_runs_csv=Path(args.eval_runs_csv) if args.eval_runs_csv else None,
+        compute_aurc=not args.skip_aurc,
+        combined_alpha=args.combined_alpha,
     )
 
 
