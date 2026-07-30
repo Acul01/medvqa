@@ -372,10 +372,10 @@ def plot_comparison_curves(
 ) -> None:
     """Overlay entropy / combined / confidence risk-coverage curves in one figure."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    colors = {
-        "entropy": "tab:blue",
-        "combined": "tab:orange",
-        "confidence": "tab:green",
+    styles = {
+        "entropy": {"color": "tab:blue", "linestyle": "-", "marker": "o", "zorder": 3},
+        "combined": {"color": "tab:orange", "linestyle": "--", "marker": "s", "zorder": 2},
+        "confidence": {"color": "tab:green", "linestyle": ":", "marker": "^", "zorder": 1},
     }
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     for measure in UNCERTAINTY_MEASURES:
@@ -386,7 +386,19 @@ def plot_comparison_curves(
         y = [r["risk"] for r in curve]
         aurc = float(aurc_by_measure.get(measure, float("nan")))
         label = f"{measure} (AURC={aurc:.4f})" if not math.isnan(aurc) else measure
-        ax.plot(x, y, linewidth=2, color=colors.get(measure, None), label=label)
+        style = styles.get(measure, {})
+        # Subsample markers on dense curves so overlaps stay readable.
+        markevery = max(1, len(x) // 12) if len(x) > 12 else 1
+        ax.plot(
+            x,
+            y,
+            linewidth=2.5,
+            alpha=0.85,
+            markersize=6,
+            markevery=markevery,
+            label=label,
+            **style,
+        )
     ax.set_xlabel("Coverage")
     ax.set_ylabel("Risk")
     ax.set_title(title)
