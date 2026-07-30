@@ -20,18 +20,21 @@ EVAL_RUN_MC_COLUMNS = [
     "yesno_agreement",
     "yesno_aurc_entropy",
     "yesno_aurc_combined",
+    "yesno_aurc_confidence",
     "open_accuracy",
     "open_entropy",
     "open_confidence",
     "open_agreement",
     "open_aurc_entropy",
     "open_aurc_combined",
+    "open_aurc_confidence",
     "overall_accuracy",
     "overall_entropy",
     "overall_confidence",
     "overall_agreement",
     "overall_aurc_entropy",
     "overall_aurc_combined",
+    "overall_aurc_confidence",
     "combined_alpha",
 ]
 
@@ -74,7 +77,7 @@ def apply_aurc_to_wandb_summary(summary: Any, metrics: dict[str, Any]) -> None:
         return
     for split in ("closed", "open", "overall"):
         payload = metrics.get(split) or {}
-        for key in ("aurc_entropy", "aurc_combined"):
+        for key in ("aurc_entropy", "aurc_combined", "aurc_confidence"):
             value = payload.get(key)
             if isinstance(value, (int, float)) and not math.isnan(float(value)):
                 summary[f"{split}_{key}"] = float(value)
@@ -241,10 +244,13 @@ def run_mc_evaluation(
 
     closed_aurc_entropy = _aurc_value("closed", "aurc_entropy")
     closed_aurc_combined = _aurc_value("closed", "aurc_combined")
+    closed_aurc_confidence = _aurc_value("closed", "aurc_confidence")
     open_aurc_entropy = _aurc_value("open", "aurc_entropy")
     open_aurc_combined = _aurc_value("open", "aurc_combined")
+    open_aurc_confidence = _aurc_value("open", "aurc_confidence")
     overall_aurc_entropy = _aurc_value("overall", "aurc_entropy")
     overall_aurc_combined = _aurc_value("overall", "aurc_combined")
+    overall_aurc_confidence = _aurc_value("overall", "aurc_confidence")
 
     metrics: dict[str, Any] = {
         "start_time": start_time,
@@ -265,6 +271,7 @@ def run_mc_evaluation(
             "agreement": closed_agreement,
             "aurc_entropy": closed_aurc_entropy,
             "aurc_combined": closed_aurc_combined,
+            "aurc_confidence": closed_aurc_confidence,
         },
         "open": {
             "accuracy": open_acc,
@@ -273,6 +280,7 @@ def run_mc_evaluation(
             "agreement": open_agreement,
             "aurc_entropy": open_aurc_entropy,
             "aurc_combined": open_aurc_combined,
+            "aurc_confidence": open_aurc_confidence,
         },
         "overall": {
             "accuracy": overall_acc,
@@ -281,6 +289,7 @@ def run_mc_evaluation(
             "agreement": overall_agreement,
             "aurc_entropy": overall_aurc_entropy,
             "aurc_combined": overall_aurc_combined,
+            "aurc_confidence": overall_aurc_confidence,
         },
         "combined_alpha": combined_alpha if compute_aurc else None,
         "aurc": aurc_summary,
@@ -308,9 +317,13 @@ def run_mc_evaluation(
         else "          entropy/confidence/agreement=N/A"
     )
     print(
-        f"          aurc_entropy={closed_aurc_entropy:.6f}, aurc_combined={closed_aurc_combined:.6f}"
-        if not any(math.isnan(v) for v in [closed_aurc_entropy, closed_aurc_combined])
-        else "          aurc_entropy/aurc_combined=N/A"
+        f"          aurc_entropy={closed_aurc_entropy:.6f}, aurc_combined={closed_aurc_combined:.6f}, "
+        f"aurc_confidence={closed_aurc_confidence:.6f}"
+        if not any(
+            math.isnan(v)
+            for v in [closed_aurc_entropy, closed_aurc_combined, closed_aurc_confidence]
+        )
+        else "          aurc_entropy/aurc_combined/aurc_confidence=N/A"
     )
     print(f"Open    -> accuracy={open_acc:.4f}")
     print(
@@ -319,9 +332,12 @@ def run_mc_evaluation(
         else "          entropy/confidence/agreement=N/A"
     )
     print(
-        f"          aurc_entropy={open_aurc_entropy:.6f}, aurc_combined={open_aurc_combined:.6f}"
-        if not any(math.isnan(v) for v in [open_aurc_entropy, open_aurc_combined])
-        else "          aurc_entropy/aurc_combined=N/A"
+        f"          aurc_entropy={open_aurc_entropy:.6f}, aurc_combined={open_aurc_combined:.6f}, "
+        f"aurc_confidence={open_aurc_confidence:.6f}"
+        if not any(
+            math.isnan(v) for v in [open_aurc_entropy, open_aurc_combined, open_aurc_confidence]
+        )
+        else "          aurc_entropy/aurc_combined/aurc_confidence=N/A"
     )
     print(f"Overall -> accuracy={overall_acc:.4f}")
     print(
@@ -330,9 +346,13 @@ def run_mc_evaluation(
         else "          entropy/confidence/agreement=N/A"
     )
     print(
-        f"          aurc_entropy={overall_aurc_entropy:.6f}, aurc_combined={overall_aurc_combined:.6f}"
-        if not any(math.isnan(v) for v in [overall_aurc_entropy, overall_aurc_combined])
-        else "          aurc_entropy/aurc_combined=N/A"
+        f"          aurc_entropy={overall_aurc_entropy:.6f}, aurc_combined={overall_aurc_combined:.6f}, "
+        f"aurc_confidence={overall_aurc_confidence:.6f}"
+        if not any(
+            math.isnan(v)
+            for v in [overall_aurc_entropy, overall_aurc_combined, overall_aurc_confidence]
+        )
+        else "          aurc_entropy/aurc_combined/aurc_confidence=N/A"
     )
     if compute_aurc:
         print(f"combined_alpha={combined_alpha}")
@@ -347,18 +367,21 @@ def run_mc_evaluation(
         "yesno_agreement": "" if math.isnan(closed_agreement) else f"{closed_agreement:.6f}",
         "yesno_aurc_entropy": _format_optional_float(closed_aurc_entropy),
         "yesno_aurc_combined": _format_optional_float(closed_aurc_combined),
+        "yesno_aurc_confidence": _format_optional_float(closed_aurc_confidence),
         "open_accuracy": f"{open_acc:.4f}",
         "open_entropy": "" if math.isnan(open_entropy) else f"{open_entropy:.6f}",
         "open_confidence": "" if math.isnan(open_confidence) else f"{open_confidence:.6f}",
         "open_agreement": "" if math.isnan(open_agreement) else f"{open_agreement:.6f}",
         "open_aurc_entropy": _format_optional_float(open_aurc_entropy),
         "open_aurc_combined": _format_optional_float(open_aurc_combined),
+        "open_aurc_confidence": _format_optional_float(open_aurc_confidence),
         "overall_accuracy": f"{overall_acc:.4f}",
         "overall_entropy": "" if math.isnan(overall_entropy) else f"{overall_entropy:.6f}",
         "overall_confidence": "" if math.isnan(overall_confidence) else f"{overall_confidence:.6f}",
         "overall_agreement": "" if math.isnan(overall_agreement) else f"{overall_agreement:.6f}",
         "overall_aurc_entropy": _format_optional_float(overall_aurc_entropy),
         "overall_aurc_combined": _format_optional_float(overall_aurc_combined),
+        "overall_aurc_confidence": _format_optional_float(overall_aurc_confidence),
         "combined_alpha": f"{combined_alpha:.4f}" if compute_aurc else "",
     }
     runs_csv = Path(eval_runs_csv) if eval_runs_csv is not None else results_path.parent / "eval_runs_mc.csv"
