@@ -87,6 +87,13 @@ def parse_args():
     )
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--max_new_tokens", type=int, default=None)
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=["float16", "bfloat16", "float32"],
+        help="Model/compute dtype. Use bfloat16 (default) or float32 for stable --do_sample; float16 often NaNs in multinomial.",
+    )
     parser.add_argument("--do_sample", action="store_true", default=False)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
@@ -333,10 +340,35 @@ def _build_shuffle_assignment(samples, seed: int) -> dict[int, str]:
     return {idx: shuffled[idx] for idx in range(len(samples))}
 
 
+def _resolve_torch_dtype(name: str) -> torch.dtype:
+    mapping = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }
+    dtype = mapping[name]
+    if dtype is torch.bfloat16 and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
+        logger.warning("bfloat16 not supported on this GPU; falling back to float32 for stable sampling.")
+        return torch.float32
+    return dtype
+
+
+def _compute_dtype(model: torch.nn.Module, fallback: torch.dtype = torch.float16) -> torch.dtype:
+    dtype = getattr(model, "dtype", None)
+    if dtype is None:
+        try:
+            dtype = next(model.parameters()).dtype
+        except StopIteration:
+            dtype = fallback
+    return dtype
+
+
 def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
     """Load tokenizer, model, image_processor for inference (same logic as legacy main)."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gradcam_mode = getattr(args, "mode", "eval") == "path2" or bool(getattr(args, "use_gradcam", False))
+    torch_dtype = _resolve_torch_dtype(getattr(args, "dtype", "bfloat16"))
+    logger.info("Loading LLaVA-Med with dtype=%s", torch_dtype)
 
     model_path = Path(args.model_path)
     is_lora = model_path.exists() and (model_path / "adapter_config.json").exists()
@@ -345,7 +377,7 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
         from peft import PeftModel
 
         base_path = args.model_base or DEFAULT_MODEL_PATH
-        load_kwargs = {"torch_dtype": torch.float16}
+        load_kwargs = {"torch_dtype": torch_dtype}
         if not gradcam_mode:
             load_kwargs["device_map"] = "auto"
         base_model = LlavaMistralForCausalLM.from_pretrained(base_path, **load_kwargs)
@@ -354,26 +386,26 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
         vision_tower = base_model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
-        vision_tower.to(device=device, dtype=torch.float16)
+        vision_tower.to(device=device, dtype=torch_dtype)
 
         model = PeftModel.from_pretrained(base_model, str(model_path))
         model = model.merge_and_unload()
         if gradcam_mode:
-            model = model.to(device)
+            model = model.to(device=device, dtype=torch_dtype)
 
         tokenizer = AutoTokenizer.from_pretrained(base_path)
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
     elif model_path.exists() and (model_path / "config.json").exists():
-        load_kwargs = {"torch_dtype": torch.float16}
+        load_kwargs = {"torch_dtype": torch_dtype}
         if not gradcam_mode:
             load_kwargs["device_map"] = "auto"
         model = LlavaMistralForCausalLM.from_pretrained(str(model_path), **load_kwargs)
         if gradcam_mode:
-            model = model.to(device)
+            model = model.to(device=device, dtype=torch_dtype)
         vision_tower = model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
-        vision_tower.to(device=device, dtype=torch.float16)
+        vision_tower.to(device=device, dtype=torch_dtype)
 
         if (model_path / "tokenizer_config.json").exists():
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
@@ -388,8 +420,13 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
             model_name=model_name,
             device=str(device),
         )
+        model = model.to(dtype=torch_dtype)
         if gradcam_mode:
             model = model.to(device)
+        vision_tower = model.get_model().get_vision_tower()
+        if not vision_tower.is_loaded:
+            vision_tower.load_model()
+        vision_tower.to(device=device, dtype=torch_dtype)
 
     model.eval()
     if gradcam_mode:
@@ -410,7 +447,7 @@ def process_image(
     t = process_images([image.convert("RGB")], image_processor, model_config)
     if t.ndim == 3:
         t = t.unsqueeze(0)
-    dtype = getattr(model, "dtype", torch.float16)
+    dtype = _compute_dtype(model)
     return t.to(device=device, dtype=dtype)
 
 
@@ -633,6 +670,11 @@ def main():
 
     if args.use_reasoning_json and args.use_two_stage_reasoning:
         raise ValueError("--use_reasoning_json and --use_two_stage_reasoning cannot be used together.")
+    if args.dtype == "float16" and (args.do_sample or args.agreement_samples > 0):
+        logger.warning(
+            "dtype=float16 with sampling/agreement often produces NaN multinomial probs; "
+            "prefer --dtype bfloat16 (default) or float32."
+        )
     if args.max_new_tokens is None:
         args.max_new_tokens = (
             DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
@@ -674,8 +716,17 @@ def main():
     )
 
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
+    # Clamp temperature: near-zero + fp16 sampling often yields NaN/Inf multinomial probs.
+    sample_temperature = max(float(args.temperature), 0.1)
+    sample_top_p = min(max(float(args.top_p), 1e-5), 1.0)
     if args.do_sample:
-        gen_kwargs.update({"do_sample": True, "temperature": args.temperature, "top_p": args.top_p})
+        if args.temperature < 0.1:
+            logger.warning(
+                "temperature=%.4g is very low for sampling; clamping to %.2f for numerical stability.",
+                args.temperature,
+                sample_temperature,
+            )
+        gen_kwargs.update({"do_sample": True, "temperature": sample_temperature, "top_p": sample_top_p})
     else:
         gen_kwargs["do_sample"] = False
     if args.num_beams > 1:
@@ -685,8 +736,8 @@ def main():
     agreement_gen_kwargs = {
         "max_new_tokens": args.max_new_tokens,
         "do_sample": True,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
+        "temperature": sample_temperature,
+        "top_p": sample_top_p,
     }
 
     chunk_ranges: List[Tuple[int, int]]
@@ -730,7 +781,9 @@ def main():
                 image = Image.open(effective_image_path).convert("RGB")
                 if args.ablation_mode == "black":
                     image = Image.new("RGB", image.size, color=(0, 0, 0))
-                image_tensor = process_images([image], image_processor, model.config).to(device, dtype=torch.float16)
+                image_tensor = process_images([image], image_processor, model.config).to(
+                    device, dtype=_compute_dtype(model)
+                )
 
                 conv = conv_templates[args.conv_template].copy()
                 reasoning_raw = ""
@@ -809,7 +862,9 @@ def main():
                 conv.append_message(conv.roles[1], None)
                 prompt = conv.get_prompt()
 
-                stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(device, dtype=torch.float16)
+                stage2_image_tensor = process_images([stage2_image], image_processor, model.config).to(
+                    device, dtype=_compute_dtype(model)
+                )
                 input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(device)
                 generation_output = model.generate(
                     input_ids,
