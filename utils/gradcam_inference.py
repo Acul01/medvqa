@@ -1,4 +1,8 @@
-"""Shared GradCAM helpers for inference flows."""
+"""Shared GradCAM helpers for inference flows.
+
+GradCAM package imports are lazy so MC eval without ``--use_gradcam`` works
+even when the optional ``gradcam`` package is missing.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +12,6 @@ from typing import Any, Dict, Sequence, Tuple
 import numpy as np
 import torch
 from PIL import Image
-
-from gradcam.gradcam_llava import LLaVAGradCAM
-from gradcam.overlay import create_gradcam_overlay
-from llava.constants import IMAGE_TOKEN_INDEX
 
 from utils.mc_json_zeroshot import normalize_generation_sequences
 
@@ -32,6 +32,13 @@ def compute_reasoning_gradcam_overlay(
 ) -> Tuple[torch.Tensor | None, Image.Image, str, str]:
     """Compute GradCAM from reasoning tokens and return (heatmap, overlay, status, error)."""
     try:
+        from gradcam.gradcam_llava import LLaVAGradCAM
+        from gradcam.overlay import create_gradcam_overlay
+        from llava.constants import IMAGE_TOKEN_INDEX
+    except ImportError as e:
+        return None, image, "failed", f"gradcam package unavailable: {e}"
+
+    try:
         gradcam = LLaVAGradCAM(model, target_layers=[-1, -2, -3, -4])
         heatmap = gradcam.compute_gradcam(
             image_tensor=image_tensor,
@@ -44,11 +51,22 @@ def compute_reasoning_gradcam_overlay(
         _, overlay_pil = create_gradcam_overlay(image, heatmap, alpha=0.4)
         return heatmap, overlay_pil, "ok", ""
     except Exception as e:  # noqa: BLE001
-        _, overlay_pil = create_gradcam_overlay(image, None, alpha=0.4)
+        try:
+            from gradcam.overlay import create_gradcam_overlay
+
+            _, overlay_pil = create_gradcam_overlay(image, None, alpha=0.4)
+        except ImportError:
+            overlay_pil = image
         return None, overlay_pil, "failed", str(e)
 
 
-def save_gradcam_artifacts(base_dir: str | Path, sample_name: str, heatmap: torch.Tensor | None, overlay: Image.Image, logger: Any) -> Dict[str, str]:
+def save_gradcam_artifacts(
+    base_dir: str | Path,
+    sample_name: str,
+    heatmap: torch.Tensor | None,
+    overlay: Image.Image,
+    logger: Any,
+) -> Dict[str, str]:
     """Save overlay and optional heatmap npy without aborting on I/O failures."""
     out_dir = Path(base_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

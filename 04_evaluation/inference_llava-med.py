@@ -37,11 +37,7 @@ from utils.inference_resume import (
 )
 from utils.save_results import clean_answer, save_results
 from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
-from utils.gradcam_inference import (
-    compute_reasoning_gradcam_overlay,
-    normalize_generation_sequences,
-    save_gradcam_artifacts,
-)
+from utils.mc_json_zeroshot import normalize_generation_sequences
 
 logger = logging.getLogger(__name__)
 
@@ -550,6 +546,8 @@ def run_path2(
     )
     rationale = tok["rationale"]
 
+    from utils.gradcam_inference import compute_reasoning_gradcam_overlay, save_gradcam_artifacts
+
     heatmap, overlay_pil, status, err = compute_reasoning_gradcam_overlay(
         model=model,
         image=image,
@@ -765,6 +763,11 @@ def main():
                     reasoning_observation = parsed_reasoning["observation"]
                     reasoning_explanation = parsed_reasoning["reasoning"]
                     if gradcam_effective:
+                        from utils.gradcam_inference import (
+                            compute_reasoning_gradcam_overlay,
+                            save_gradcam_artifacts,
+                        )
+
                         heatmap, overlay_pil, gradcam_status, gradcam_error = compute_reasoning_gradcam_overlay(
                             model=model,
                             image=image,
