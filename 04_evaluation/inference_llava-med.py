@@ -7,6 +7,7 @@ import gc
 import json
 import logging
 import math
+import os
 import random
 import re
 from collections import Counter
@@ -40,6 +41,8 @@ from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, r
 from utils.mc_json_zeroshot import normalize_generation_sequences
 
 logger = logging.getLogger(__name__)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
 DATASET_MAX_NEW_TOKENS = {"pathvqa": 8, "slake": 8, "vqarad": 8, "medvqa2019": 8}
@@ -363,12 +366,33 @@ def _compute_dtype(model: torch.nn.Module, fallback: torch.dtype = torch.float16
     return dtype
 
 
+def _log_model_devices(model: torch.nn.Module) -> None:
+    devices = sorted({str(p.device) for p in model.parameters()})
+    logger.info("Model parameter devices: %s", devices)
+    if any(d.startswith("cpu") for d in devices):
+        logger.warning(
+            "Some parameters are on CPU — inference will be very slow. "
+            "Use one GPU per process: export CUDA_VISIBLE_DEVICES=<id>"
+        )
+
+
 def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
-    """Load tokenizer, model, image_processor for inference (same logic as legacy main)."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    """Load tokenizer, model, image_processor for inference.
+
+    Always place the full model on a single device (``cuda:0`` under
+    ``CUDA_VISIBLE_DEVICES=<one-id>``, else CPU). Avoids ``device_map="auto"``
+    CPU offload when several inference jobs start in parallel.
+    """
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     gradcam_mode = getattr(args, "mode", "eval") == "path2" or bool(getattr(args, "use_gradcam", False))
     torch_dtype = _resolve_torch_dtype(getattr(args, "dtype", "bfloat16"))
-    logger.info("Loading LLaVA-Med with dtype=%s", torch_dtype)
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>")
+    logger.info(
+        "Loading LLaVA-Med with dtype=%s device=%s CUDA_VISIBLE_DEVICES=%s",
+        torch_dtype,
+        device,
+        visible,
+    )
 
     model_path = Path(args.model_path)
     is_lora = model_path.exists() and (model_path / "adapter_config.json").exists()
@@ -377,12 +401,12 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
         from peft import PeftModel
 
         base_path = args.model_base or DEFAULT_MODEL_PATH
-        load_kwargs = {"torch_dtype": torch_dtype}
-        if not gradcam_mode:
-            load_kwargs["device_map"] = "auto"
-        base_model = LlavaMistralForCausalLM.from_pretrained(base_path, **load_kwargs)
-        if gradcam_mode:
-            base_model = base_model.to(device)
+        base_model = LlavaMistralForCausalLM.from_pretrained(
+            base_path,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+        )
+        base_model = base_model.to(device=device, dtype=torch_dtype)
         vision_tower = base_model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
@@ -390,18 +414,17 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
 
         model = PeftModel.from_pretrained(base_model, str(model_path))
         model = model.merge_and_unload()
-        if gradcam_mode:
-            model = model.to(device=device, dtype=torch_dtype)
+        model = model.to(device=device, dtype=torch_dtype)
 
         tokenizer = AutoTokenizer.from_pretrained(base_path)
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
     elif model_path.exists() and (model_path / "config.json").exists():
-        load_kwargs = {"torch_dtype": torch_dtype}
-        if not gradcam_mode:
-            load_kwargs["device_map"] = "auto"
-        model = LlavaMistralForCausalLM.from_pretrained(str(model_path), **load_kwargs)
-        if gradcam_mode:
-            model = model.to(device=device, dtype=torch_dtype)
+        model = LlavaMistralForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+        )
+        model = model.to(device=device, dtype=torch_dtype)
         vision_tower = model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
@@ -420,15 +443,14 @@ def load_llava_med_bundle(args) -> Tuple[torch.device, Any, Any, Any]:
             model_name=model_name,
             device=str(device),
         )
-        model = model.to(dtype=torch_dtype)
-        if gradcam_mode:
-            model = model.to(device)
+        model = model.to(device=device, dtype=torch_dtype)
         vision_tower = model.get_model().get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
         vision_tower.to(device=device, dtype=torch_dtype)
 
     model.eval()
+    _log_model_devices(model)
     if gradcam_mode:
         # Path2 needs gradients for GradCAM backward pass.
         for p in model.parameters():
