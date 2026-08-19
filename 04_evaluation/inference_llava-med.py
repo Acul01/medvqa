@@ -37,7 +37,7 @@ from utils.inference_resume import (
     setup_inference_checkpoint,
 )
 from utils.save_results import clean_answer, save_results
-from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
 from utils.mc_json_zeroshot import normalize_generation_sequences
 
 logger = logging.getLogger(__name__)
@@ -1100,6 +1100,7 @@ def main():
         results_path,
         compute_aurc=not args.skip_aurc,
         combined_alpha=args.combined_alpha,
+        eval_runs_csv=resolve_eval_runs_csv(args),
     )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc

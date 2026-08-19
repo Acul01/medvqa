@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 from utils.load_data import MedicalVQALoader
-from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
 from utils.mc_json_zeroshot import (
     DEFAULT_JSON_MAX_NEW_TOKENS,
     DEFAULT_RATIONALE_MAX_NEW_TOKENS,
@@ -584,6 +584,7 @@ def main():
         results_path,
         compute_aurc=not args.skip_aurc,
         combined_alpha=args.combined_alpha,
+        eval_runs_csv=resolve_eval_runs_csv(args),
     )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc

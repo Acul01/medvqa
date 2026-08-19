@@ -13,7 +13,7 @@ from tqdm import tqdm
 from transformers import AutoProcessor, GenerationConfig, Qwen2VLForConditionalGeneration
 
 from utils.load_data import MedicalVQALoader
-from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
 from utils.medvlm_r1 import (
     DEFAULT_MODEL_PATH,
     build_medvlm_conversation,
@@ -299,6 +299,7 @@ def main():
         results_path,
         compute_aurc=not args.skip_aurc,
         combined_alpha=args.combined_alpha,
+        eval_runs_csv=resolve_eval_runs_csv(args),
     )
 
     if not args.disable_wandb:

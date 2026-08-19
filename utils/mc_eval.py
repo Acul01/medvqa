@@ -57,7 +57,7 @@ def _format_optional_float(value: float | None, digits: int = 6) -> str:
 
 
 def add_aurc_cli_arguments(parser) -> None:
-    """Shared CLI flags for post-inference dual AURC evaluation."""
+    """Shared CLI flags for post-inference MC evaluation / dual AURC."""
     parser.add_argument(
         "--combined_alpha",
         type=float,
@@ -69,6 +69,21 @@ def add_aurc_cli_arguments(parser) -> None:
         action="store_true",
         help="Skip dual AURC after inference (accuracy metrics only)",
     )
+    parser.add_argument(
+        "--eval_runs_csv",
+        type=str,
+        default=None,
+        help=(
+            "Append aggregate metrics row to this CSV path (independent of results_dir). "
+            "Default: <results_json_dir>/eval_runs_mc.csv"
+        ),
+    )
+
+
+def resolve_eval_runs_csv(args) -> Path | None:
+    """Return Path for --eval_runs_csv if set, else None (use default next to results JSON)."""
+    path = getattr(args, "eval_runs_csv", None)
+    return Path(path) if path else None
 
 
 def apply_aurc_to_wandb_summary(summary: Any, metrics: dict[str, Any]) -> None:

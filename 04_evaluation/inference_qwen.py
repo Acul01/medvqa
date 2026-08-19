@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers import AutoProcessor
 
 from utils.load_data import MedicalVQALoader
-from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, run_mc_evaluation
+from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
 from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
 from utils.som import SomResolver, draw_region_marks
@@ -580,6 +580,7 @@ def main():
         results_path,
         compute_aurc=not args.skip_aurc,
         combined_alpha=args.combined_alpha,
+        eval_runs_csv=resolve_eval_runs_csv(args),
     )
 
     wandb.summary["mc_overall_accuracy"] = overall_acc
