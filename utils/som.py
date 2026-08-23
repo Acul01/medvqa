@@ -38,6 +38,76 @@ _PALETTE = [
 ]
 
 
+def apply_clahe(
+    image: Image.Image,
+    *,
+    clip_limit: float = 2.0,
+    tile_grid_size: tuple[int, int] = (8, 8),
+) -> Image.Image:
+    """Contrast-Limited Adaptive Histogram Equalization on luminance.
+
+    Geometry is unchanged, so masks from the enhanced image still align with
+    the original. Prefers OpenCV; falls back to scikit-image.
+    """
+    rgb = np.array(image.convert("RGB"))
+    try:
+        import cv2
+
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+        l_ch, a_ch, b_ch = cv2.split(lab)
+        clahe = cv2.createCLAHE(
+            clipLimit=float(clip_limit),
+            tileGridSize=(int(tile_grid_size[0]), int(tile_grid_size[1])),
+        )
+        l_eq = clahe.apply(l_ch)
+        merged = cv2.merge([l_eq, a_ch, b_ch])
+        out = cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
+        return Image.fromarray(out)
+    except ImportError:
+        pass
+
+    try:
+        from skimage import color, exposure
+
+        # equalize_adapthist expects float in [0, 1]
+        img_f = rgb.astype(np.float32) / 255.0
+        lab = color.rgb2lab(img_f)
+        l_norm = lab[..., 0] / 100.0
+        l_eq = exposure.equalize_adapthist(
+            l_norm,
+            kernel_size=tile_grid_size,
+            clip_limit=max(clip_limit, 0.01) / 100.0,
+        )
+        lab[..., 0] = l_eq * 100.0
+        out = np.clip(color.lab2rgb(lab) * 255.0, 0, 255).astype(np.uint8)
+        return Image.fromarray(out)
+    except ImportError as e:
+        raise ImportError(
+            "CLAHE preprocess requires opencv-python or scikit-image. "
+            "Install with: pip install opencv-python-headless"
+        ) from e
+
+
+def preprocess_image_for_som(
+    image: Image.Image,
+    preprocess: str = "none",
+    *,
+    clahe_clip_limit: float = 2.0,
+    clahe_tile_size: int = 8,
+) -> Image.Image:
+    """Return a copy of *image* ready for the segmenter (same HxW)."""
+    name = (preprocess or "none").lower().strip()
+    if name in ("", "none", "off"):
+        return image.convert("RGB")
+    if name == "clahe":
+        return apply_clahe(
+            image,
+            clip_limit=clahe_clip_limit,
+            tile_grid_size=(clahe_tile_size, clahe_tile_size),
+        )
+    raise ValueError(f"Unknown SoM preprocess {preprocess!r}; expected 'none' or 'clahe'.")
+
+
 def color_for_label(label: str) -> tuple[int, int, int]:
     """Colour of a region mark, derived from its label rather than its position.
 
@@ -222,11 +292,17 @@ def annotate_image_with_som(
     bg_mean: float = 18.0,
     max_mask_frac: float = 0.85,
     min_roi_frac: float = 0.5,
+    preprocess: str = "none",
+    clahe_clip_limit: float = 2.0,
+    clahe_tile_size: int = 8,
 ) -> tuple[Image.Image, list[dict]]:
     """Segment *image* and overlay numbered free-form mask borders.
 
     Pass *generator* (from build_som_generator) when annotating many images;
     the sam_*/medsam_* arguments are then already baked into it.
+
+    *preprocess* ``clahe`` runs CLAHE on a copy used only for the segmenter;
+    masks are drawn back onto the original RGB (geometry unchanged).
 
     Post-filters (all backends):
     - drop near-full-image masks (area ``> max_mask_frac``)
@@ -255,12 +331,18 @@ def annotate_image_with_som(
         )
 
     img_rgb = image.convert("RGB")
-    img_np = np.array(img_rgb)
-    masks = generator.generate(img_np)
+    seg_rgb = preprocess_image_for_som(
+        img_rgb,
+        preprocess,
+        clahe_clip_limit=clahe_clip_limit,
+        clahe_tile_size=clahe_tile_size,
+    )
+    masks = generator.generate(np.array(seg_rgb))
 
     from utils.medsam_som import body_roi, mask_inside_roi_frac, to_gray_u8
 
-    gray = to_gray_u8(img_np)
+    # ROI from the original image so CLAHE does not inflate the body hull.
+    gray = to_gray_u8(np.array(img_rgb))
     h, w = gray.shape[:2]
     roi = body_roi(gray, bg_mean=bg_mean)
     max_area = int(max_mask_frac * h * w)

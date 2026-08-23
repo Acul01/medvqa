@@ -149,6 +149,26 @@ def parse_args() -> argparse.Namespace:
         help="SAM stability-score threshold. Lower = more (less stable) regions kept.",
     )
     parser.add_argument(
+        "--preprocess",
+        type=str,
+        default="none",
+        choices=["none", "clahe"],
+        help="Image preprocess before segmentation only (marks drawn on original). "
+        "clahe = Contrast-Limited Adaptive Histogram Equalization (good for CXR).",
+    )
+    parser.add_argument(
+        "--clahe_clip_limit",
+        type=float,
+        default=2.0,
+        help="CLAHE clip limit (OpenCV clipLimit; default 2.0).",
+    )
+    parser.add_argument(
+        "--clahe_tile_size",
+        type=int,
+        default=8,
+        help="CLAHE tile grid size (NxN; default 8).",
+    )
+    parser.add_argument(
         "--data_root",
         type=str,
         default=get_data_root(),
@@ -293,6 +313,9 @@ def _process_dataset(
                 min_mask_region_area=args.min_mask_area,
                 bg_mean=args.bg_mean,
                 generator=generator_holder.get(),
+                preprocess=args.preprocess,
+                clahe_clip_limit=args.clahe_clip_limit,
+                clahe_tile_size=args.clahe_tile_size,
             )
 
             # Preserve subdirectory structure to avoid name collisions
@@ -323,8 +346,12 @@ def _process_dataset(
                 "som_path": rel_som_path,
                 "original_path": img_path_str,
                 "backend": args.backend,
+                "preprocess": args.preprocess,
                 "regions": region_entries,
             }
+            if args.preprocess == "clahe":
+                entry["clahe_clip_limit"] = args.clahe_clip_limit
+                entry["clahe_tile_size"] = args.clahe_tile_size
             if args.backend == "medsam":
                 entry["medsam_model_id"] = args.medsam_model_id
             else:
@@ -357,8 +384,8 @@ def main() -> None:
     som_dir.mkdir(parents=True, exist_ok=True)
 
     print(
-        f"SoM backend={args.backend}  max_marks={args.max_marks}  "
-        f"points_per_side={args.points_per_side}"
+        f"SoM backend={args.backend}  preprocess={args.preprocess}  "
+        f"max_marks={args.max_marks}  points_per_side={args.points_per_side}"
     )
 
     datasets = ALL_DATASETS if args.dataset == "all" else [args.dataset]
