@@ -123,6 +123,20 @@ def parse_args() -> argparse.Namespace:
         help="Minimum pixel area to keep a region (filters tiny artefacts).",
     )
     parser.add_argument(
+        "--bg_mean",
+        type=float,
+        default=18.0,
+        help="MedSAM: gray intensity (0–255) treated as background. Boxes/masks "
+        "at or below this mean are skipped (default: 18).",
+    )
+    parser.add_argument(
+        "--min_fg_frac",
+        type=float,
+        default=0.08,
+        help="MedSAM: minimum fraction of box pixels above --bg_mean to keep "
+        "the prompt (default: 0.08).",
+    )
+    parser.add_argument(
         "--pred_iou_thresh",
         type=float,
         default=0.88,
@@ -191,6 +205,8 @@ class _LazySomGenerator:
                 min_mask_region_area=self.args.min_mask_area,
                 medsam_model_id=self.args.medsam_model_id,
                 max_marks=self.args.max_marks,
+                bg_mean=self.args.bg_mean,
+                min_fg_frac=self.args.min_fg_frac,
             )
         return self._generator
 

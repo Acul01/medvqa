@@ -154,6 +154,8 @@ def build_som_generator(
     min_mask_region_area: int = 400,
     medsam_model_id: str = "wanglab/medsam-vit-base",
     max_marks: int = 24,
+    bg_mean: float = 18.0,
+    min_fg_frac: float = 0.08,
 ):
     """Load a mask generator for SoM annotation (SAM or MedSAM box-grid).
 
@@ -174,6 +176,8 @@ def build_som_generator(
             points_per_side=points_per_side,
             min_mask_region_area=min_mask_region_area,
             max_marks=max_marks,
+            bg_mean=bg_mean,
+            min_fg_frac=min_fg_frac,
         )
 
     if backend != "sam":
