@@ -46,6 +46,13 @@ def parse_args():
         description="Zero-shot LLaVA-Med inference with JSON answer+rationale output"
     )
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=["float32", "float16", "bfloat16"],
+        help="Model dtype. bfloat16 halves memory vs float32 (default: bfloat16).",
+    )
     parser.add_argument("--conv_template", type=str, default="mistral_instruct")
     parser.add_argument("--data_root", type=str, default=get_data_root())
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
@@ -222,7 +229,7 @@ def _prepare_llava_med_inputs(
     conv.append_message(conv.roles[1], None)
     prompt = conv.get_prompt()
     image_tensor = process_images([image], image_processor, model.config).to(
-        device, dtype=torch.float16
+        device, dtype=next(model.parameters()).dtype
     )
     input_ids = tokenizer_image_token(
         prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
@@ -241,7 +248,7 @@ def _generated_suffix(sequences: torch.Tensor, input_ids: torch.Tensor) -> torch
     return generated_ids[0]
 
 
-def load_llava_med_pretrained(model_path: str, device: torch.device):
+def load_llava_med_pretrained(model_path: str, device: torch.device, torch_dtype: torch.dtype):
     """Load pretrained LLaVA-Med from HuggingFace (zero-shot, no LoRA)."""
     model_name = Path(model_path).name or "llava-med-v1.5-mistral-7b"
     tokenizer, model, image_processor, _ = load_pretrained_model(
@@ -250,6 +257,11 @@ def load_llava_med_pretrained(model_path: str, device: torch.device):
         model_name=model_name,
         device=str(device),
     )
+    model = model.to(device=device, dtype=torch_dtype)
+    vision_tower = model.get_model().get_vision_tower()
+    if not vision_tower.is_loaded:
+        vision_tower.load_model()
+    vision_tower.to(device=device, dtype=torch_dtype)
     model.eval()
     return tokenizer, model, image_processor
 
@@ -282,7 +294,11 @@ def main():
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer, model, image_processor = load_llava_med_pretrained(args.model_path, device)
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    load_dtype = dtype_map[args.dtype]
+    tokenizer, model, image_processor = load_llava_med_pretrained(
+        args.model_path, device, load_dtype
+    )
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)

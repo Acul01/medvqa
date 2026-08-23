@@ -47,6 +47,13 @@ def parse_args():
         description="Zero-shot LLaVA 1.5 inference with JSON answer+rationale output"
     )
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=["float32", "float16", "bfloat16"],
+        help="Model dtype. bfloat16 halves memory vs float32 (default: bfloat16).",
+    )
     parser.add_argument("--data_root", type=str, default=get_data_root())
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
     parser.add_argument(
@@ -238,8 +245,10 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+    load_dtype = dtype_map[args.dtype]
     model = LlavaForConditionalGeneration.from_pretrained(
-        args.model_path, torch_dtype=torch.float32, device_map="auto"
+        args.model_path, torch_dtype=load_dtype, device_map="auto"
     )
     model.eval()
 
