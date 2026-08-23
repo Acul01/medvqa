@@ -199,6 +199,10 @@ def build_som_generator(
         pred_iou_thresh=pred_iou_thresh,
         stability_score_thresh=stability_score_thresh,
         min_mask_region_area=min_mask_region_area,
+        # One crop layer: run the point grid on image crops as well so smaller
+        # interior structures (e.g. lung subregions) are not missed.
+        crop_n_layers=1,
+        crop_n_points_downscale_factor=2,
     )
 
 
@@ -217,22 +221,23 @@ def annotate_image_with_som(
     medsam_model_id: str = "wanglab/medsam-vit-base",
     bg_mean: float = 18.0,
     max_mask_frac: float = 0.85,
+    min_roi_frac: float = 0.5,
 ) -> tuple[Image.Image, list[dict]]:
     """Segment *image* and overlay numbered free-form mask borders.
 
     Pass *generator* (from build_som_generator) when annotating many images;
-    the sam_*/medsam_* and threshold arguments are then already baked into it
-    and ignored (except *max_marks* / intensity filters, which always apply).
+    the sam_*/medsam_* arguments are then already baked into it.
 
-    Near-black masks (mean gray ``<= bg_mean``) and near-full-image masks
-    (area ``> max_mask_frac`` of the image) are dropped for every backend so
-    CT/X-ray background does not dominate the SoM overlay.
+    Post-filters (all backends):
+    - drop near-full-image masks (area ``> max_mask_frac``)
+    - drop masks whose pixels mostly lie *outside* the body ROI (padding /
+      table), using ``bg_mean`` only to *find* the ROI — not to reject dark
+      lung air, which would otherwise be wiped on CT/X-ray
 
     Returns:
         annotated_image: PIL.Image with all regions marked (preview/fallback image).
         regions: list of dicts with keys "label" (str), "bbox" ([x,y,w,h]),
-                 "mask" (np.ndarray bool, H x W) — the raw per-region mask,
-                 for the caller to persist individually if desired.
+                 "mask" (np.ndarray bool, H x W).
     """
     if generator is None:
         generator = build_som_generator(
@@ -253,10 +258,11 @@ def annotate_image_with_som(
     img_np = np.array(img_rgb)
     masks = generator.generate(img_np)
 
-    from utils.medsam_som import mask_mean_intensity, to_gray_u8
+    from utils.medsam_som import body_roi, mask_inside_roi_frac, to_gray_u8
 
     gray = to_gray_u8(img_np)
     h, w = gray.shape[:2]
+    roi = body_roi(gray, bg_mean=bg_mean)
     max_area = int(max_mask_frac * h * w)
     cleaned = []
     for m in masks:
@@ -264,15 +270,29 @@ def annotate_image_with_som(
         area = int(m.get("area", int(seg.sum())))
         if area < min_mask_region_area or area > max_area:
             continue
-        if mask_mean_intensity(gray, seg) <= bg_mean:
+        # Keep dark anatomy (lungs); only reject masks stuck in black padding.
+        if mask_inside_roi_frac(seg, roi) < min_roi_frac:
             continue
         cleaned.append({**m, "area": area})
-    masks = sorted(cleaned, key=lambda m: m["area"], reverse=True)[:max_marks]
+
+    # Prefer SAM's own confidence when present, else area — covers small but
+    # confident interior regions better than "largest only".
+    def _rank(m: dict) -> tuple:
+        iou = float(m.get("predicted_iou", 0.0) or 0.0)
+        stab = float(m.get("stability_score", 0.0) or 0.0)
+        return (iou + stab, m["area"])
+
+    masks = sorted(cleaned, key=_rank, reverse=True)[:max_marks]
 
     regions: list[dict] = []
     for idx, mask in enumerate(masks):
         label = str(idx + 1)
-        x, y, w_box, h_box = (int(v) for v in mask["bbox"])
+        bbox = mask.get("bbox")
+        if bbox is None:
+            from utils.medsam_som import bbox_xywh_from_mask
+
+            bbox = bbox_xywh_from_mask(mask["segmentation"])
+        x, y, w_box, h_box = (int(v) for v in bbox)
         regions.append(
             {"label": label, "bbox": [x, y, w_box, h_box], "mask": mask["segmentation"]}
         )

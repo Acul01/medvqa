@@ -161,6 +161,19 @@ def bbox_xywh_from_mask(mask: np.ndarray) -> list[int]:
     return [x0, y0, x1 - x0 + 1, y1 - y0 + 1]
 
 
+def mask_inside_roi_frac(
+    seg: np.ndarray,
+    roi: tuple[int, int, int, int],
+) -> float:
+    """Fraction of mask pixels that fall inside *roi* ``(x0, y0, x1, y1)``."""
+    if not seg.any():
+        return 0.0
+    x0, y0, x1, y1 = roi
+    ys, xs = np.where(seg)
+    inside = (xs >= x0) & (xs < x1) & (ys >= y0) & (ys < y1)
+    return float(inside.mean())
+
+
 def filter_and_nms_masks(
     masks: list[dict],
     *,
