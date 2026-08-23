@@ -290,6 +290,8 @@ def _process_dataset(
             annotated, regions = annotate_image_with_som(
                 image,
                 max_marks=args.max_marks,
+                min_mask_region_area=args.min_mask_area,
+                bg_mean=args.bg_mean,
                 generator=generator_holder.get(),
             )
 

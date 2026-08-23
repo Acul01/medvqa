@@ -215,12 +215,18 @@ def annotate_image_with_som(
     generator=None,
     backend: str = "sam",
     medsam_model_id: str = "wanglab/medsam-vit-base",
+    bg_mean: float = 18.0,
+    max_mask_frac: float = 0.85,
 ) -> tuple[Image.Image, list[dict]]:
     """Segment *image* and overlay numbered free-form mask borders.
 
     Pass *generator* (from build_som_generator) when annotating many images;
     the sam_*/medsam_* and threshold arguments are then already baked into it
-    and ignored (except *max_marks*, which is always applied after generate).
+    and ignored (except *max_marks* / intensity filters, which always apply).
+
+    Near-black masks (mean gray ``<= bg_mean``) and near-full-image masks
+    (area ``> max_mask_frac`` of the image) are dropped for every backend so
+    CT/X-ray background does not dominate the SoM overlay.
 
     Returns:
         annotated_image: PIL.Image with all regions marked (preview/fallback image).
@@ -240,20 +246,36 @@ def annotate_image_with_som(
             min_mask_region_area=min_mask_region_area,
             medsam_model_id=medsam_model_id,
             max_marks=max_marks,
+            bg_mean=bg_mean,
         )
 
     img_rgb = image.convert("RGB")
     img_np = np.array(img_rgb)
     masks = generator.generate(img_np)
 
-    # Keep largest regions, up to max_marks (MedSAM generator may already cap).
-    masks = sorted(masks, key=lambda m: m["area"], reverse=True)[:max_marks]
+    from utils.medsam_som import mask_mean_intensity, to_gray_u8
+
+    gray = to_gray_u8(img_np)
+    h, w = gray.shape[:2]
+    max_area = int(max_mask_frac * h * w)
+    cleaned = []
+    for m in masks:
+        seg = m["segmentation"]
+        area = int(m.get("area", int(seg.sum())))
+        if area < min_mask_region_area or area > max_area:
+            continue
+        if mask_mean_intensity(gray, seg) <= bg_mean:
+            continue
+        cleaned.append({**m, "area": area})
+    masks = sorted(cleaned, key=lambda m: m["area"], reverse=True)[:max_marks]
 
     regions: list[dict] = []
     for idx, mask in enumerate(masks):
         label = str(idx + 1)
-        x, y, w, h = (int(v) for v in mask["bbox"])
-        regions.append({"label": label, "bbox": [x, y, w, h], "mask": mask["segmentation"]})
+        x, y, w_box, h_box = (int(v) for v in mask["bbox"])
+        regions.append(
+            {"label": label, "bbox": [x, y, w_box, h_box], "mask": mask["segmentation"]}
+        )
 
     annotated = draw_region_marks(img_rgb, regions)
     return annotated, regions
