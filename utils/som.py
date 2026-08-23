@@ -124,24 +124,21 @@ def draw_region_marks(
 
 # ── Core annotation function ─────────────────────────────────────────────────
 
-def annotate_image_with_som(
-    image: Image.Image,
+def build_som_generator(
+    *,
     sam_checkpoint: str = "checkpoints/sam_vit_b_01ec64.pth",
     sam_model_type: str = "vit_b",
     device: str = "cuda",
-    max_marks: int = 12,
     points_per_side: int = 16,
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_mask_region_area: int = 400,
-) -> tuple[Image.Image, list[dict]]:
-    """Segment *image* with SAM and overlay numbered free-form mask borders.
+):
+    """Load SAM and return its automatic mask generator.
 
-    Returns:
-        annotated_image: PIL.Image with all regions marked (preview/fallback image).
-        regions: list of dicts with keys "label" (str), "bbox" ([x,y,w,h]),
-                 "mask" (np.ndarray bool, H x W) — the raw per-region mask,
-                 for the caller to persist individually if desired.
+    Anyone annotating more than one image must build this once and reuse it:
+    re-creating it per image re-reads the checkpoint from disk and re-uploads
+    the weights to the GPU, which dominates the runtime.
     """
     try:
         from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
@@ -153,13 +150,48 @@ def annotate_image_with_som(
 
     sam = sam_model_registry[sam_model_type](checkpoint=sam_checkpoint)
     sam.to(device)
-    generator = SamAutomaticMaskGenerator(
+    return SamAutomaticMaskGenerator(
         sam,
         points_per_side=points_per_side,
         pred_iou_thresh=pred_iou_thresh,
         stability_score_thresh=stability_score_thresh,
         min_mask_region_area=min_mask_region_area,
     )
+
+
+def annotate_image_with_som(
+    image: Image.Image,
+    sam_checkpoint: str = "checkpoints/sam_vit_b_01ec64.pth",
+    sam_model_type: str = "vit_b",
+    device: str = "cuda",
+    max_marks: int = 12,
+    points_per_side: int = 16,
+    pred_iou_thresh: float = 0.88,
+    stability_score_thresh: float = 0.95,
+    min_mask_region_area: int = 400,
+    generator=None,
+) -> tuple[Image.Image, list[dict]]:
+    """Segment *image* with SAM and overlay numbered free-form mask borders.
+
+    Pass *generator* (from build_som_generator) when annotating many images;
+    the sam_* and threshold arguments are then already baked into it and ignored.
+
+    Returns:
+        annotated_image: PIL.Image with all regions marked (preview/fallback image).
+        regions: list of dicts with keys "label" (str), "bbox" ([x,y,w,h]),
+                 "mask" (np.ndarray bool, H x W) — the raw per-region mask,
+                 for the caller to persist individually if desired.
+    """
+    if generator is None:
+        generator = build_som_generator(
+            sam_checkpoint=sam_checkpoint,
+            sam_model_type=sam_model_type,
+            device=device,
+            points_per_side=points_per_side,
+            pred_iou_thresh=pred_iou_thresh,
+            stability_score_thresh=stability_score_thresh,
+            min_mask_region_area=min_mask_region_area,
+        )
 
     img_rgb = image.convert("RGB")
     img_np = np.array(img_rgb)

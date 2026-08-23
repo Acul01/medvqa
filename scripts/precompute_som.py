@@ -33,7 +33,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.load_data import MedicalVQALoader
 from utils.paths import get_data_root, get_mc_data_root, get_som_dir
-from utils.som import MANIFEST_FILENAME, annotate_image_with_som, save_region_mask
+from utils.som import (
+    MANIFEST_FILENAME,
+    annotate_image_with_som,
+    build_som_generator,
+    save_region_mask,
+)
 
 DATASET_CHOICES = ["pathvqa", "slake", "vqarad", "medvqa2019", "all"]
 ALL_DATASETS = ["pathvqa", "slake", "vqarad", "medvqa2019"]
@@ -131,6 +136,34 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class _LazySamGenerator:
+    """Builds the SAM mask generator on first use, then hands out the same one.
+
+    Built lazily so a fully resumed run, where every image is already annotated,
+    never pays for loading the checkpoint at all.
+    """
+
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self._generator = None
+
+    def get(self):
+        if self._generator is None:
+            print(
+                f"  Loading SAM {self.args.sam_model_type} from {self.args.sam_checkpoint} ..."
+            )
+            self._generator = build_som_generator(
+                sam_checkpoint=self.args.sam_checkpoint,
+                sam_model_type=self.args.sam_model_type,
+                device=self.args.device,
+                points_per_side=self.args.points_per_side,
+                pred_iou_thresh=self.args.pred_iou_thresh,
+                stability_score_thresh=self.args.stability_score_thresh,
+                min_mask_region_area=self.args.min_mask_area,
+            )
+        return self._generator
+
+
 def _collect_unique_image_paths(
     loader: MedicalVQALoader,
     dataset_slug: str,
@@ -163,6 +196,7 @@ def _process_dataset(
     splits: list[str] | None,
     som_dir: Path,
     args: argparse.Namespace,
+    sam: _LazySamGenerator,
 ) -> None:
     print(f"\n=== {dataset_slug} ===")
 
@@ -208,14 +242,8 @@ def _process_dataset(
             image = Image.open(img_path).convert("RGB")
             annotated, regions = annotate_image_with_som(
                 image,
-                sam_checkpoint=args.sam_checkpoint,
-                sam_model_type=args.sam_model_type,
-                device=args.device,
                 max_marks=args.max_marks,
-                points_per_side=args.points_per_side,
-                pred_iou_thresh=args.pred_iou_thresh,
-                stability_score_thresh=args.stability_score_thresh,
-                min_mask_region_area=args.min_mask_area,
+                generator=sam.get(),
             )
 
             # Preserve subdirectory structure to avoid name collisions
@@ -274,9 +302,10 @@ def main() -> None:
     som_dir.mkdir(parents=True, exist_ok=True)
 
     datasets = ALL_DATASETS if args.dataset == "all" else [args.dataset]
+    sam = _LazySamGenerator(args)
 
     for dataset_slug in datasets:
-        _process_dataset(dataset_slug, loader, args.splits, som_dir, args)
+        _process_dataset(dataset_slug, loader, args.splits, som_dir, args, sam)
 
     print("\nAll done.")
 

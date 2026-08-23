@@ -202,13 +202,11 @@ def _write_manifest(path: Path, manifest: dict) -> None:
 def _process_dataset(
     dataset_slug: str,
     loader: MedicalVQALoader,
+    som: SomResolver,
     bundle,
     args: argparse.Namespace,
 ) -> None:
     print(f"\n=== {dataset_slug} ===")
-
-    som = SomResolver(args.som_dir)
-    som.load_dataset(dataset_slug)
 
     dataset_out_dir = Path(args.selection_dir) / dataset_slug
     manifest_path = dataset_out_dir / SELECTION_MANIFEST_FILENAME
@@ -298,11 +296,19 @@ def main() -> None:
     )
     datasets = ALL_DATASETS if args.dataset == "all" else [args.dataset]
 
+    # Check every manifest up front: a missing one should not cost the minutes it
+    # takes to pull the selector weights onto the GPU.
+    resolvers: dict[str, SomResolver] = {}
+    for dataset_slug in datasets:
+        resolver = SomResolver(args.som_dir)
+        resolver.load_dataset(dataset_slug)
+        resolvers[dataset_slug] = resolver
+
     print(f"Loading selector {args.selector_model} (dtype={args.dtype})...")
     bundle = load_qwen_bundle(args.selector_model, args.dtype)
 
     for dataset_slug in datasets:
-        _process_dataset(dataset_slug, loader, bundle, args)
+        _process_dataset(dataset_slug, loader, resolvers[dataset_slug], bundle, args)
 
     print("\nAll done.")
 
