@@ -6,6 +6,7 @@ images are skipped automatically.
 
 Example usage:
     python scripts/precompute_som.py --dataset slake
+    python scripts/precompute_som.py --dataset slake --backend medsam --max_marks 24
     python scripts/precompute_som.py --dataset all --sam_checkpoint checkpoints/sam_vit_b_01ec64.pth
 
 Output layout:
@@ -32,6 +33,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.load_data import MedicalVQALoader
+from utils.medsam_som import DEFAULT_MEDSAM_MODEL_ID
 from utils.paths import get_data_root, get_mc_data_root, get_som_dir
 from utils.som import (
     MANIFEST_FILENAME,
@@ -69,10 +71,23 @@ def parse_args() -> argparse.Namespace:
         help="Root directory for SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
     )
     parser.add_argument(
+        "--backend",
+        type=str,
+        default="sam",
+        choices=["sam", "medsam"],
+        help="Segmentation backend: vanilla SAM Automatic, or MedSAM with a box grid.",
+    )
+    parser.add_argument(
+        "--medsam_model_id",
+        type=str,
+        default=DEFAULT_MEDSAM_MODEL_ID,
+        help=f"HuggingFace MedSAM id (default: {DEFAULT_MEDSAM_MODEL_ID}).",
+    )
+    parser.add_argument(
         "--sam_checkpoint",
         type=str,
         default="01_external/checkpoints/sam_vit_b_01ec64.pth",
-        help="Path to SAM checkpoint (.pth file).",
+        help="Path to SAM checkpoint (.pth file); only used with --backend sam.",
     )
     parser.add_argument(
         "--sam_model_type",
@@ -85,19 +100,21 @@ def parse_args() -> argparse.Namespace:
         "--device",
         type=str,
         default="cuda",
-        help="Device for SAM inference (cuda or cpu).",
+        help="Device for segmentation (cuda or cpu).",
     )
     parser.add_argument(
         "--max_marks",
         type=int,
-        default=12,
-        help="Maximum number of region marks per image.",
+        default=None,
+        help="Maximum number of region marks per image "
+        "(default: 12 for sam, 24 for medsam).",
     )
     parser.add_argument(
         "--points_per_side",
         type=int,
-        default=16,
-        help="SAM grid density. Lower = faster but fewer regions.",
+        default=None,
+        help="SAM: grid density (default 16). MedSAM: coarse box-grid size "
+        "(default 4; a denser grid of size+2 is always added).",
     )
     parser.add_argument(
         "--min_mask_area",
@@ -133,11 +150,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Limit to the first N unique images per dataset (for quick testing).",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.max_marks is None:
+        args.max_marks = 24 if args.backend == "medsam" else 12
+    if args.points_per_side is None:
+        args.points_per_side = 4 if args.backend == "medsam" else 16
+    return args
 
 
-class _LazySamGenerator:
-    """Builds the SAM mask generator on first use, then hands out the same one.
+class _LazySomGenerator:
+    """Builds the SoM mask generator on first use, then hands out the same one.
 
     Built lazily so a fully resumed run, where every image is already annotated,
     never pays for loading the checkpoint at all.
@@ -149,10 +171,17 @@ class _LazySamGenerator:
 
     def get(self):
         if self._generator is None:
-            print(
-                f"  Loading SAM {self.args.sam_model_type} from {self.args.sam_checkpoint} ..."
-            )
+            if self.args.backend == "medsam":
+                print(
+                    f"  Loading MedSAM from {self.args.medsam_model_id} "
+                    f"(box grid points_per_side={self.args.points_per_side}) ..."
+                )
+            else:
+                print(
+                    f"  Loading SAM {self.args.sam_model_type} from {self.args.sam_checkpoint} ..."
+                )
             self._generator = build_som_generator(
+                backend=self.args.backend,
                 sam_checkpoint=self.args.sam_checkpoint,
                 sam_model_type=self.args.sam_model_type,
                 device=self.args.device,
@@ -160,6 +189,8 @@ class _LazySamGenerator:
                 pred_iou_thresh=self.args.pred_iou_thresh,
                 stability_score_thresh=self.args.stability_score_thresh,
                 min_mask_region_area=self.args.min_mask_area,
+                medsam_model_id=self.args.medsam_model_id,
+                max_marks=self.args.max_marks,
             )
         return self._generator
 
@@ -196,7 +227,7 @@ def _process_dataset(
     splits: list[str] | None,
     som_dir: Path,
     args: argparse.Namespace,
-    sam: _LazySamGenerator,
+    generator_holder: _LazySomGenerator,
 ) -> None:
     print(f"\n=== {dataset_slug} ===")
 
@@ -243,7 +274,7 @@ def _process_dataset(
             annotated, regions = annotate_image_with_som(
                 image,
                 max_marks=args.max_marks,
-                generator=sam.get(),
+                generator=generator_holder.get(),
             )
 
             # Preserve subdirectory structure to avoid name collisions
@@ -254,7 +285,7 @@ def _process_dataset(
             annotated.save(out_path, format="PNG")
 
             # Persist each region's mask individually so a later step can
-            # render an arbitrary subset of marks without re-running SAM.
+            # render an arbitrary subset of marks without re-running segmentation.
             region_entries = []
             for region in regions:
                 mask_name = f"{base_name}_region{region['label']}.png"
@@ -270,11 +301,17 @@ def _process_dataset(
 
             # Store path relative to som_dir so it's portable
             rel_som_path = str((dataset_slug / Path("images") / out_name))
-            manifest[filename] = {
+            entry = {
                 "som_path": rel_som_path,
                 "original_path": img_path_str,
+                "backend": args.backend,
                 "regions": region_entries,
             }
+            if args.backend == "medsam":
+                entry["medsam_model_id"] = args.medsam_model_id
+            else:
+                entry["sam_model_type"] = args.sam_model_type
+            manifest[filename] = entry
             processed += 1
 
         except Exception as exc:
@@ -301,11 +338,16 @@ def main() -> None:
     som_dir = Path(args.som_dir)
     som_dir.mkdir(parents=True, exist_ok=True)
 
+    print(
+        f"SoM backend={args.backend}  max_marks={args.max_marks}  "
+        f"points_per_side={args.points_per_side}"
+    )
+
     datasets = ALL_DATASETS if args.dataset == "all" else [args.dataset]
-    sam = _LazySamGenerator(args)
+    generator_holder = _LazySomGenerator(args)
 
     for dataset_slug in datasets:
-        _process_dataset(dataset_slug, loader, args.splits, som_dir, args, sam)
+        _process_dataset(dataset_slug, loader, args.splits, som_dir, args, generator_holder)
 
     print("\nAll done.")
 

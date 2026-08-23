@@ -79,18 +79,34 @@ def load_region_mask(path: Path) -> np.ndarray:
 
 # ── Drawing ──────────────────────────────────────────────────────────────────
 
+def _adaptive_circle_radius(seg: np.ndarray, override: Optional[int] = None) -> int:
+    """Label-dot radius scaled to the segment so small masks stay readable."""
+    if override is not None:
+        return max(1, int(override))
+    ys, xs = np.where(seg)
+    if len(xs) == 0:
+        return 6
+    w = int(xs.max() - xs.min() + 1)
+    h = int(ys.max() - ys.min() + 1)
+    return int(np.clip(0.12 * min(w, h), 4, 9))
+
+
 def draw_region_marks(
     image: Image.Image,
     regions: list[dict],
     *,
     border_thickness: int = 2,
-    circle_radius: int = 11,
+    circle_radius: Optional[int] = None,
 ) -> Image.Image:
     """Draw numbered free-form mask borders for *regions* onto *image*.
 
     Each region dict must have "label" (str) and "mask" (np.ndarray bool, H==image.height).
     Color follows the label, so a region keeps its color whether the full set or
     only a filtered subset is drawn.
+
+    *circle_radius* defaults to an adaptive size from each segment's bbox so a
+    fixed 11px disc no longer swallows small structures. Pass an int to force
+    a constant radius.
     """
     base = image.convert("RGB").convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -111,13 +127,15 @@ def draw_region_marks(
         if len(xs) == 0:
             continue
         cx, cy = int(xs.mean()), int(ys.mean())
+        radius = _adaptive_circle_radius(seg, circle_radius)
 
         draw.ellipse(
-            [cx - circle_radius, cy - circle_radius, cx + circle_radius, cy + circle_radius],
+            [cx - radius, cy - radius, cx + radius, cy + radius],
             fill=(r, g, b, 230),
         )
-        tx = cx - 3 * len(label)
-        draw.text((tx, cy - 7), label, fill=(255, 255, 255, 255))
+        # Keep digits roughly centred; smaller radius → slightly tighter text offset.
+        tx = cx - max(2, radius // 2) * len(label)
+        draw.text((tx, cy - max(4, radius // 2)), label, fill=(255, 255, 255, 255))
 
     return Image.alpha_composite(base, overlay).convert("RGB")
 
@@ -126,6 +144,7 @@ def draw_region_marks(
 
 def build_som_generator(
     *,
+    backend: str = "sam",
     sam_checkpoint: str = "checkpoints/sam_vit_b_01ec64.pth",
     sam_model_type: str = "vit_b",
     device: str = "cuda",
@@ -133,13 +152,33 @@ def build_som_generator(
     pred_iou_thresh: float = 0.88,
     stability_score_thresh: float = 0.95,
     min_mask_region_area: int = 400,
+    medsam_model_id: str = "wanglab/medsam-vit-base",
+    max_marks: int = 24,
 ):
-    """Load SAM and return its automatic mask generator.
+    """Load a mask generator for SoM annotation (SAM or MedSAM box-grid).
 
     Anyone annotating more than one image must build this once and reuse it:
     re-creating it per image re-reads the checkpoint from disk and re-uploads
     the weights to the GPU, which dominates the runtime.
+
+    Both backends expose ``.generate(rgb_hwc_uint8) -> list[mask_dict]`` with
+    keys ``segmentation``, ``area``, ``bbox``.
     """
+    backend = (backend or "sam").lower().strip()
+    if backend == "medsam":
+        from utils.medsam_som import build_medsam_generator
+
+        return build_medsam_generator(
+            model_id=medsam_model_id,
+            device=device,
+            points_per_side=points_per_side,
+            min_mask_region_area=min_mask_region_area,
+            max_marks=max_marks,
+        )
+
+    if backend != "sam":
+        raise ValueError(f"Unknown SoM backend {backend!r}; expected 'sam' or 'medsam'.")
+
     try:
         from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
     except ImportError as e:
@@ -170,11 +209,14 @@ def annotate_image_with_som(
     stability_score_thresh: float = 0.95,
     min_mask_region_area: int = 400,
     generator=None,
+    backend: str = "sam",
+    medsam_model_id: str = "wanglab/medsam-vit-base",
 ) -> tuple[Image.Image, list[dict]]:
-    """Segment *image* with SAM and overlay numbered free-form mask borders.
+    """Segment *image* and overlay numbered free-form mask borders.
 
     Pass *generator* (from build_som_generator) when annotating many images;
-    the sam_* and threshold arguments are then already baked into it and ignored.
+    the sam_*/medsam_* and threshold arguments are then already baked into it
+    and ignored (except *max_marks*, which is always applied after generate).
 
     Returns:
         annotated_image: PIL.Image with all regions marked (preview/fallback image).
@@ -184,6 +226,7 @@ def annotate_image_with_som(
     """
     if generator is None:
         generator = build_som_generator(
+            backend=backend,
             sam_checkpoint=sam_checkpoint,
             sam_model_type=sam_model_type,
             device=device,
@@ -191,13 +234,15 @@ def annotate_image_with_som(
             pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
             min_mask_region_area=min_mask_region_area,
+            medsam_model_id=medsam_model_id,
+            max_marks=max_marks,
         )
 
     img_rgb = image.convert("RGB")
     img_np = np.array(img_rgb)
     masks = generator.generate(img_np)
 
-    # Keep largest regions, up to max_marks
+    # Keep largest regions, up to max_marks (MedSAM generator may already cap).
     masks = sorted(masks, key=lambda m: m["area"], reverse=True)[:max_marks]
 
     regions: list[dict] = []
