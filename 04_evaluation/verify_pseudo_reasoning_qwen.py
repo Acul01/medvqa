@@ -19,6 +19,7 @@ from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
     DEFAULT_MODEL_PATH,
     QWEN_VERIFY_FIELD,
+    QWEN_VERIFY_STEM_SUFFIX,
     build_pseudo_reasoning_verify_conversation,
     configure_qwen_processor_pixels,
     qwen_verify_from_metadata,
@@ -35,11 +36,17 @@ def verify_row_key(row: Dict[str, Any]) -> str:
 
 
 def default_verify_output_path(input_path: Path) -> Path:
+    """Sibling path for the verified export.
+
+    Any pseudo-reasoning suffix is kept and only extended, so a variant such as
+    ``*_pseudo_som`` stays distinguishable from plain ``*_pseudo`` downstream.
+    An already-verified file is updated in place.
+    """
     stem = input_path.stem
-    if stem.endswith(DEFAULT_MC_EXPORT_SUFFIX_PSEUDO):
-        new_stem = (
-            stem[: -len(DEFAULT_MC_EXPORT_SUFFIX_PSEUDO)] + DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY
-        )
+    if stem.endswith(QWEN_VERIFY_STEM_SUFFIX):
+        return input_path
+    if DEFAULT_MC_EXPORT_SUFFIX_PSEUDO in stem:
+        new_stem = stem + QWEN_VERIFY_STEM_SUFFIX
     else:
         new_stem = stem + DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY
     return input_path.with_name(new_stem + input_path.suffix)

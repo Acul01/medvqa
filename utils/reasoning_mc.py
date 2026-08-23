@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 END_REASONING_TOKEN = "<END_REASONING>"
 
@@ -12,17 +12,44 @@ def build_reasoning_prompt(
     question: str,
     *,
     correct_answer: str,
+    som_labels: Optional[Sequence[str]] = None,
 ) -> str:
-    """Build the prompt sent to GPT-4o-mini for pseudo-reasoning generation."""
+    """Build the prompt sent to the generator model for pseudo-reasoning generation.
+
+    When *som_labels* is given, the image carries numbered outlines around exactly
+    those regions and the reasoning is required to cite them, which ties it to
+    visible evidence instead of a free-floating anatomical name. Without labels
+    the prompt stays as-is: naming region numbers that the image does not show
+    would only invite hallucinated references.
+    """
+    if som_labels:
+        listed = ", ".join(str(label) for label in som_labels)
+        som_intro = (
+            f"The image has numbered, colour-outlined regions ({listed}) that were "
+            "pre-selected as relevant to this question.\n"
+        )
+        format_block = (
+            "REGION: [the marked region number(s) and the anatomical region they cover, "
+            'e.g. "region 3 (left lung field)"]\n'
+            "OBSERVATION: [what you observe inside those marked regions, citing their numbers]\n"
+            "REASONING: [why this observation explains the correct answer, citing the region numbers]\n"
+        )
+    else:
+        som_intro = ""
+        format_block = (
+            "REGION: [anatomical region most relevant to this question]\n"
+            "OBSERVATION: [what you observe in that region]\n"
+            "REASONING: [why this observation explains the correct answer]\n"
+        )
+
     return (
         "You are a medical imaging expert analyzing an image and providing a reasoning for the correct answer.\n"
+        f"{som_intro}"
         f"Question: {question}\n"
         f"The correct answer is: {correct_answer}\n"
         "\nRespond in exactly this format:\n"
-        "REGION: [anatomical region most relevant to this question]\n"
-        "OBSERVATION: [what you observe in that region]\n"
-        "REASONING: [why this observation explains the correct answer]\n\n"
-        f"End your response with exactly this token: {END_REASONING_TOKEN}"
+        f"{format_block}"
+        f"\nEnd your response with exactly this token: {END_REASONING_TOKEN}"
     )
 
 

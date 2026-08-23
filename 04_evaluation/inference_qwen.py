@@ -16,13 +16,21 @@ from transformers import AutoProcessor
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
 from utils.mc_vqa import parse_predicted_letter
-from utils.paths import get_data_root, get_mc_data_root, get_results_dir, get_som_dir
+from utils.paths import (
+    get_data_root,
+    get_mc_data_root,
+    get_results_dir,
+    get_som_dir,
+    get_som_selection_dir,
+)
 from utils.som import SomResolver, draw_region_marks
 from utils.som_select import (
     DEFAULT_SELECTION_MAX_NEW_TOKENS,
     parse_selected_labels,
+    question_with_selected_som_hint,
     question_with_som_hint,
 )
+from utils.som_selection import SomSelectionResolver
 from utils.qwen_model import (
     default_base_model_for_path,
     is_lora_checkpoint,
@@ -131,6 +139,19 @@ def parse_args():
         type=str,
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
+    parser.add_argument(
+        "--use_som_selection",
+        action="store_true",
+        default=False,
+        help="Use the pre-computed segment selection instead of selecting at runtime, "
+        "so eval images match those seen during training with --use_som_selection.",
+    )
+    parser.add_argument(
+        "--selection_dir",
+        type=str,
+        default=get_som_selection_dir(),
+        help="Root of selection manifests (default: MEDVQA_SOM_SELECTION_DIR or 02_data/som_selection).",
     )
     add_inference_resume_cli_arguments(parser)
     return parser.parse_args()
@@ -270,6 +291,11 @@ def _compute_token_entropies_from_logits(
 
 def main():
     args = parse_args()
+    if args.use_som and args.use_som_selection:
+        raise ValueError(
+            "--use_som selects segments at runtime, --use_som_selection reads the "
+            "pre-computed selection; pick one."
+        )
     if args.max_new_tokens is None:
         args.max_new_tokens = (
             DEFAULT_REASONING_JSON_MAX_NEW_TOKENS
@@ -347,6 +373,22 @@ def main():
         som_resolver.load_dataset(args.dataset)
         print(f"SoM enabled — model selects relevant regions per question, from {args.som_dir}/{args.dataset}")
 
+    som_selection: SomSelectionResolver | None = None
+    if args.use_som_selection:
+        som_selection = SomSelectionResolver(args.som_dir, args.selection_dir)
+        som_selection.load_dataset(args.dataset)
+        found, total = som_selection.coverage((s.image_path, s.question) for s in samples)
+        print(
+            f"SoM selection enabled — {found}/{total} eval samples have a selection "
+            f"({args.selection_dir}/{args.dataset})"
+        )
+        if found == 0:
+            raise ValueError(
+                "No eval sample matches the selection manifest. Re-run "
+                f"scripts/precompute_som_selection.py --dataset {args.dataset} "
+                f"--splits {args.split}."
+            )
+
     gen_kwargs = {"max_new_tokens": args.max_new_tokens}
     if args.do_sample:
         gen_kwargs.update({"do_sample": True, "temperature": args.temperature, "top_p": args.top_p})
@@ -387,7 +429,17 @@ def main():
             som_selected_regions: list[str] = []
             som_selection_response = ""
 
-            if som_resolver is not None and args.ablation_mode == "none":
+            if som_selection is not None and args.ablation_mode == "none":
+                image, som_selected_regions = som_selection.render_with_labels(
+                    effective_image_path, sample.question
+                )
+                som_selection_response = som_selection.get_selection_response(
+                    effective_image_path, sample.question
+                )
+                question_for_prompt = question_with_selected_som_hint(
+                    sample.question, som_selected_regions
+                )
+            elif som_resolver is not None and args.ablation_mode == "none":
                 region_meta = som_resolver.get_regions(effective_image_path)
                 original_image = Image.open(effective_image_path).convert("RGB")
                 if region_meta:

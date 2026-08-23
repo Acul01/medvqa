@@ -17,7 +17,10 @@ from utils.reasoning_mc import format_reasoning_block_for_training
 DEFAULT_MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
 QWEN3_DEFAULT_MODEL_PATH = "Qwen/Qwen3-VL-8B-Instruct"
 DEFAULT_MC_EXPORT_SUFFIX_PSEUDO = "_pseudo"
-DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = "_pseudo_pr_qwen_verify"
+# Appended to whatever pseudo-reasoning suffix a file carries, so variants such as
+# "_pseudo_som" survive the verify step as "_pseudo_som_pr_qwen_verify".
+QWEN_VERIFY_STEM_SUFFIX = "_pr_qwen_verify"
+DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY = DEFAULT_MC_EXPORT_SUFFIX_PSEUDO + QWEN_VERIFY_STEM_SUFFIX
 QWEN_VERIFY_FIELD = "qwen_verify"
 # Alias used by simple_qwen_verify.py and some *_verify MC exports
 QWEN_VERIFY_FIELD_ALIASES = ("is_correct", "pseudo_reasoning_test")

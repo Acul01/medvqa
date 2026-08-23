@@ -17,8 +17,16 @@ from transformers.trainer_utils import set_seed
 
 from utils.ablation import FgrTrainLookup, load_fgr_supervised_train_lookup, normalize_ablation_image_key
 from utils.load_data import MedicalVQALoader, VQASample
-from utils.paths import get_data_root, get_mc_data_root, get_train_output_dir_qwen, get_som_dir
+from utils.paths import (
+    get_data_root,
+    get_mc_data_root,
+    get_som_dir,
+    get_som_selection_dir,
+    get_train_output_dir_qwen,
+)
 from utils.som import SomResolver
+from utils.som_select import question_with_selected_som_hint
+from utils.som_selection import SomSelectionResolver
 from utils.qwen_model import default_base_model_for_path, load_qwen_vl_model, resolve_local_model_path
 from utils.qwen_vl import (
     DEFAULT_MC_EXPORT_SUFFIX_PSEUDO_VERIFY,
@@ -51,6 +59,7 @@ class QwenMCTrainDataset(Dataset):
         fgr_lookup: FgrTrainLookup | None = None,
         data_root: str | None = None,
         som_resolver: SomResolver | None = None,
+        som_selection: SomSelectionResolver | None = None,
     ):
         self.samples = samples
         self.processor = processor
@@ -60,6 +69,7 @@ class QwenMCTrainDataset(Dataset):
         self.fgr_lookup = fgr_lookup
         self.data_root = data_root
         self.som_resolver = som_resolver
+        self.som_selection = som_selection
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
@@ -76,12 +86,20 @@ class QwenMCTrainDataset(Dataset):
             path = self.som_resolver.resolve_or_original(path)
         return path
 
+    def _load_image(self, sample: VQASample) -> tuple[Image.Image, list[str]]:
+        """Return (image, SoM labels drawn on it); labels are empty without selection."""
+        if self.som_selection is not None:
+            return self.som_selection.render_with_labels(sample.image_path, sample.question)
+        return Image.open(self._resolve_image_path(sample)).convert("RGB"), []
+
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        image = Image.open(self._resolve_image_path(sample)).convert("RGB")
+        image, som_labels = self._load_image(sample)
+        # Must match the prompt inference builds for the same sample.
+        question = question_with_selected_som_hint(sample.question, som_labels)
 
         if not sample.mc_options:
             raise ValueError("MC options missing; ensure mc_data_root points to MC exports.")
@@ -91,7 +109,7 @@ class QwenMCTrainDataset(Dataset):
             if not reasoning_raw:
                 raise ValueError("pseudo_reasoning_raw missing for reasoning training sample.")
             conversation = build_mc_reasoning_conversation(
-                sample.question,
+                question,
                 sample.mc_options,
                 reasoning_raw=reasoning_raw,
                 answer=sample.answer,
@@ -100,7 +118,7 @@ class QwenMCTrainDataset(Dataset):
             )
         else:
             conversation = build_mc_conversation(
-                sample.question,
+                question,
                 sample.mc_options,
                 answer=sample.answer,
                 image=image,
@@ -198,6 +216,19 @@ def parse_args():
         default=get_som_dir(),
         help="Root directory of SoM outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
     )
+    p.add_argument(
+        "--use_som_selection",
+        action="store_true",
+        default=False,
+        help="Draw only the SoM segments pre-selected for each question (per image AND "
+        "question, unlike --use_som). Run scripts/precompute_som_selection.py first.",
+    )
+    p.add_argument(
+        "--selection_dir",
+        type=str,
+        default=get_som_selection_dir(),
+        help="Root of selection manifests (default: MEDVQA_SOM_SELECTION_DIR or 02_data/som_selection).",
+    )
     return p.parse_args()
 
 
@@ -226,6 +257,14 @@ def _subsample_train_samples(samples: list[VQASample], max_n: int, *, seed: int 
 def main():
     args = parse_args()
     set_seed(args.seed)
+
+    if args.use_som and args.use_som_selection:
+        raise ValueError(
+            "--use_som (all marks per image) and --use_som_selection (marks selected "
+            "per question) both replace the image; pick one."
+        )
+    if args.use_som_selection and args.fgr_crops_json:
+        raise ValueError("--use_som_selection renders from the source image; --fgr_crops_json would be ignored.")
 
     reasoning_tag = ("reasoning-answer-first-" if args.answer_first else "reasoning-") if args.use_reasoning else ""
     ft_tag = reasoning_tag + ("lora" if args.use_lora else "full-ft")
@@ -337,13 +376,32 @@ def main():
             f"(max_train_samples={args.max_train_samples}, seed=42)"
         )
 
+    som_datasets = ["pathvqa", "slake", "vqarad", "medvqa2019"] if use_all else [args.dataset]
+
     som_resolver: SomResolver | None = None
     if args.use_som:
         som_resolver = SomResolver(args.som_dir)
-        datasets_to_load = ["pathvqa", "slake", "vqarad", "medvqa2019"] if args.dataset == "all" else [args.dataset]
-        for ds in datasets_to_load:
+        for ds in som_datasets:
             som_resolver.load_dataset(ds)
         print(f"SoM enabled — images loaded from {args.som_dir}")
+
+    som_selection: SomSelectionResolver | None = None
+    if args.use_som_selection:
+        som_selection = SomSelectionResolver(args.som_dir, args.selection_dir)
+        for ds in som_datasets:
+            som_selection.load_dataset(ds)
+        found, total = som_selection.coverage(
+            (s.image_path, s.question) for s in train_samples
+        )
+        print(
+            f"SoM selection enabled — {found}/{total} train samples have a selection "
+            f"({args.selection_dir})"
+        )
+        if found == 0:
+            raise ValueError(
+                "No train sample matches the selection manifest. Re-run "
+                "scripts/precompute_som_selection.py for this dataset and split."
+            )
 
     train_dataset = QwenMCTrainDataset(
         train_samples,
@@ -354,6 +412,7 @@ def main():
         fgr_lookup=fgr_lookup,
         data_root=args.data_root,
         som_resolver=som_resolver,
+        som_selection=som_selection,
     )
     if use_all and not args.use_reasoning:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
@@ -381,6 +440,7 @@ def main():
             args.max_length,
             data_root=args.data_root,
             som_resolver=som_resolver,
+            som_selection=som_selection,
         )
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:

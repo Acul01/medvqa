@@ -38,7 +38,18 @@ _PALETTE = [
 ]
 
 
-def _label_color(idx: int) -> tuple[int, int, int]:
+def color_for_label(label: str) -> tuple[int, int, int]:
+    """Colour of a region mark, derived from its label rather than its position.
+
+    Rendering only a subset of an image's regions must not recolour them: a
+    reasoning that cites "region 3" has to point at the same coloured outline
+    the annotator saw when all regions were drawn.
+    """
+    text = str(label)
+    try:
+        idx = int(text) - 1
+    except ValueError:
+        idx = sum(ord(c) for c in text)
     return _PALETTE[idx % len(_PALETTE)]
 
 
@@ -78,18 +89,17 @@ def draw_region_marks(
     """Draw numbered free-form mask borders for *regions* onto *image*.
 
     Each region dict must have "label" (str) and "mask" (np.ndarray bool, H==image.height).
-    Color is assigned by position in the list, so callers should pass regions
-    in their original (precompute-time) order to keep colors stable across
-    full vs. filtered renders.
+    Color follows the label, so a region keeps its color whether the full set or
+    only a filtered subset is drawn.
     """
     base = image.convert("RGB").convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    for idx, region in enumerate(regions):
+    for region in regions:
         label = region["label"]
         seg: np.ndarray = region["mask"]
-        r, g, b = _label_color(idx)
+        r, g, b = color_for_label(label)
 
         border = _mask_border(seg, thickness=border_thickness)
         mask_rgba = np.zeros((*seg.shape, 4), dtype=np.uint8)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import io
 import json
 import os
 import time
@@ -39,7 +40,9 @@ from utils.build_mc_datasets_openai import (
     load_existing_records,
 )
 from utils.load_data import MedicalVQALoader
+from utils.paths import get_som_dir, get_som_selection_dir
 from utils.reasoning_mc import build_reasoning_prompt, parse_reasoning_fields
+from utils.som_selection import SomSelectionResolver
 
 
 MODEL_CHOICES = {
@@ -79,6 +82,14 @@ def image_path_to_data_url(path: Path) -> str:
     }.get(suffix, "image/jpeg")
     b64 = base64.standard_b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{b64}"
+
+
+def pil_image_to_data_url(image: Any) -> str:
+    """Data URL for an in-memory image; SoM renders have no file on disk."""
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    b64 = base64.standard_b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
 
 
 def parse_options_cell(row: Dict[str, Any]) -> Optional[List[str]]:
@@ -186,13 +197,22 @@ def request_n_reasonings(
     image_detail: str,
     max_retries: int,
     sleep_between_retries_s: float,
+    image: Any = None,
+    som_labels: Optional[List[str]] = None,
 ) -> List[str]:
-    """Return exactly ``n`` raw reasoning strings from a single API call."""
+    """Return exactly ``n`` raw reasoning strings from a single API call.
+
+    *image* overrides *image_path* when the caller has a rendered image in
+    memory (SoM-filtered marks).
+    """
     _ = options  # gold answer text is used in the prompt; options kept for call-site parity
-    data_url = image_path_to_data_url(image_path)
+    data_url = (
+        pil_image_to_data_url(image) if image is not None else image_path_to_data_url(image_path)
+    )
     user_text = build_reasoning_prompt(
         question,
         correct_answer=correct_answer,
+        som_labels=som_labels,
     )
     last_err: Optional[Exception] = None
     for attempt in range(1, max_retries + 1):
@@ -249,15 +269,24 @@ def request_n_reasonings_qwen(
     max_new_tokens: int,
     max_retries: int,
     sleep_between_retries_s: float,
+    image: Any = None,
+    som_labels: Optional[List[str]] = None,
 ) -> List[str]:
-    """Return exactly ``n`` raw reasoning strings via local Qwen VL sampling."""
+    """Return exactly ``n`` raw reasoning strings via local Qwen VL sampling.
+
+    *image* overrides *image_path* when the caller has a rendered image in
+    memory (SoM-filtered marks).
+    """
     import torch
     from PIL import Image
 
     from utils.qwen_vl import prepare_qwen_inputs
 
-    user_text = build_reasoning_prompt(question, correct_answer=correct_answer)
-    image = Image.open(image_path).convert("RGB")
+    user_text = build_reasoning_prompt(
+        question, correct_answer=correct_answer, som_labels=som_labels
+    )
+    if image is None:
+        image = Image.open(image_path).convert("RGB")
     conversation = [
         {
             "role": "user",
@@ -320,7 +349,14 @@ def request_n_reasonings_qwen(
 # ── row expansion ─────────────────────────────────────────────────────────────
 
 
-def expand_row(base_row: Dict[str, Any], raws: List[str], model: str) -> List[Dict[str, Any]]:
+def expand_row(
+    base_row: Dict[str, Any],
+    raws: List[str],
+    model: str,
+    *,
+    som_selected_labels: Optional[List[str]] = None,
+    som_selector_model: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Return one dict per reasoning variant, each a copy of base_row + reasoning fields."""
     generated_at = datetime.now(timezone.utc).isoformat()
     expanded: List[Dict[str, Any]] = []
@@ -336,6 +372,9 @@ def expand_row(base_row: Dict[str, Any], raws: List[str], model: str) -> List[Di
         row["pseudo_reasoning_generated_at"] = generated_at
         row["pseudo_reasoning_index"] = idx
         row["pseudo_reasoning_total"] = len(raws)
+        if som_selected_labels is not None:
+            row["som_selected_labels"] = som_selected_labels
+            row["som_selector_model"] = som_selector_model
         row.pop("pseudo_reasoning_test", None)
         row.pop("qwen_verify", None)
         row.pop("pseudo_reasoning_error", None)
@@ -363,6 +402,22 @@ def resolve_record_image_path(loader: MedicalVQALoader, row: Dict[str, Any]) -> 
         config=config,
         image_path=str(row.get("image_path", "")),
     )
+
+
+def som_entry_for_row(
+    som_selection: Optional[SomSelectionResolver],
+    loader: MedicalVQALoader,
+    row: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Selection manifest entry for a row; empty dict when unavailable."""
+    if som_selection is None:
+        return {}
+    try:
+        img_path = resolve_record_image_path(loader, row)
+    except (KeyError, ValueError):
+        return {}
+    entry = som_selection.get_entry(str(img_path), str(row.get("question", "")))
+    return entry or {}
 
 
 def _splits_for_dataset(args: argparse.Namespace, loader: MedicalVQALoader, slug: str) -> List[str]:
@@ -395,6 +450,12 @@ def process_dataset(
     model_choice = args.model
     backend = MODEL_CHOICES[model_choice]["backend"]
     backend_model_id = MODEL_CHOICES[model_choice]["id"]
+
+    som_selection: Optional[SomSelectionResolver] = None
+    if args.use_som_selection:
+        som_selection = SomSelectionResolver(args.som_dir, args.selection_dir)
+        som_selection.load_dataset(slug)
+        print(f"  SoM selection enabled — filtered marks from {args.selection_dir}/{slug}")
 
     for split in splits:
         json_in = in_dir / f"{slug}_{split}_mc_openai.json"
@@ -441,10 +502,26 @@ def process_dataset(
                 n_skip += 1
                 continue
 
+            som_entry = som_entry_for_row(som_selection, loader, row)
+            som_labels = (
+                [str(label) for label in som_entry.get("selected_labels", [])]
+                if som_selection is not None
+                else None
+            )
+            som_selector_model = som_entry.get("selector_model")
+
             # Cache hit
             if args.resume and key in cache and not args.overwrite:
                 raws = cache[key]
-                out_records.extend(expand_row(row, raws, model_choice))
+                out_records.extend(
+                    expand_row(
+                        row,
+                        raws,
+                        model_choice,
+                        som_selected_labels=som_labels,
+                        som_selector_model=som_selector_model,
+                    )
+                )
                 existing_keys.add(key)
                 n_cache += 1
                 continue
@@ -454,6 +531,14 @@ def process_dataset(
                 img_path = resolve_record_image_path(loader, row)
                 if not img_path.is_file():
                     raise FileNotFoundError(f"Image not found: {img_path}")
+
+                som_image = None
+                if som_selection is not None:
+                    # The drawn labels, not the manifest's, are what the generator sees.
+                    som_image, som_labels = som_selection.render_with_labels(
+                        str(img_path), str(row.get("question", ""))
+                    )
+
                 if backend == "openai":
                     raws = request_n_reasonings(
                         client=openai_client,
@@ -468,6 +553,8 @@ def process_dataset(
                         image_detail=args.image_detail,
                         max_retries=args.max_retries,
                         sleep_between_retries_s=args.sleep_between_retries_s,
+                        image=som_image,
+                        som_labels=som_labels,
                     )
                 else:
                     assert qwen_bundle is not None
@@ -484,9 +571,19 @@ def process_dataset(
                         max_new_tokens=args.max_completion_tokens,
                         max_retries=args.max_retries,
                         sleep_between_retries_s=args.sleep_between_retries_s,
+                        image=som_image,
+                        som_labels=som_labels,
                     )
                 cache[key] = raws
-                out_records.extend(expand_row(row, raws, model_choice))
+                out_records.extend(
+                    expand_row(
+                        row,
+                        raws,
+                        model_choice,
+                        som_selected_labels=som_labels,
+                        som_selector_model=som_selector_model,
+                    )
+                )
                 existing_keys.add(key)
                 n_api += 1
             except Exception as exc:  # noqa: BLE001
@@ -594,6 +691,25 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resume", action="store_true", help="Skip already-processed rows using cache.")
     p.add_argument("--overwrite", action="store_true", help="Regenerate even if cached.")
     p.add_argument("--save_every", type=int, default=25)
+    p.add_argument(
+        "--use_som_selection",
+        action="store_true",
+        help="Generate on images showing only the SoM segments pre-selected for the "
+        "question, and require the reasoning to cite their numbers. "
+        "Run scripts/precompute_som_selection.py first.",
+    )
+    p.add_argument(
+        "--som_dir",
+        type=str,
+        default=get_som_dir(),
+        help="Root of precompute_som.py outputs (default: MEDVQA_SOM_DIR or 02_data/som).",
+    )
+    p.add_argument(
+        "--selection_dir",
+        type=str,
+        default=get_som_selection_dir(),
+        help="Root of selection manifests (default: MEDVQA_SOM_SELECTION_DIR or 02_data/som_selection).",
+    )
     return p.parse_args()
 
 
@@ -620,6 +736,13 @@ def main() -> None:
 
     print(f"Generating {args.n_reasonings} reasoning(s) per sample with {args.model}")
     print(f"  temperature={args.temperature}  output_suffix={args.output_suffix!r}")
+    if args.use_som_selection:
+        print(f"  SoM selection: {args.selection_dir} (reasoning cites the marked regions)")
+        if args.output_suffix == "_pseudo":
+            print(
+                "  Warning: --output_suffix is still '_pseudo'; pass e.g. '_pseudo_som' "
+                "to keep SoM and non-SoM datasets apart."
+            )
     if args.output_dir:
         print(f"  output_dir={args.output_dir}")
     if args.split:
