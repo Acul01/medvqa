@@ -1,4 +1,4 @@
-"""Zero-shot inference for Qwen2.5-VL with JSON answer+rationale output."""
+"""Zero-shot inference for Qwen-VL (2.5 / 3) with JSON answer+rationale output."""
 
 import argparse
 import json
@@ -11,7 +11,7 @@ import torch
 import wandb
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
@@ -36,6 +36,11 @@ from utils.som_select import (
     parse_selected_labels,
     question_with_som_hint,
 )
+from utils.qwen_model import (
+    default_base_model_for_path,
+    load_qwen_vl_for_inference,
+    resolve_local_model_path,
+)
 from utils.qwen_vl import (
     DEFAULT_MODEL_PATH,
     build_segment_selection_conversation,
@@ -54,7 +59,7 @@ from utils.save_results import clean_answer, save_results
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Zero-shot Qwen2.5-VL inference with JSON answer+rationale output"
+        description="Zero-shot Qwen-VL (2.5 / 3) inference with JSON answer+rationale output"
     )
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     parser.add_argument(
@@ -231,12 +236,18 @@ def main():
 
     dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     load_dtype = dtype_map[args.dtype]
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        args.model_path, torch_dtype=load_dtype, device_map="auto"
+    model_path = resolve_local_model_path(args.model_path)
+    model, model_path = load_qwen_vl_for_inference(
+        model_path,
+        torch_dtype=load_dtype,
+        device_map="auto",
     )
     model.eval()
 
-    processor_path = resolve_processor_path(args.model_path)
+    processor_path = resolve_processor_path(
+        model_path,
+        default_path=default_base_model_for_path(model_path),
+    )
     processor = AutoProcessor.from_pretrained(processor_path)
     configure_qwen_processor_pixels(processor)
 
