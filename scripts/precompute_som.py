@@ -1,8 +1,8 @@
 """Pre-compute Set-of-Mark (SoM) annotations for all images of a dataset.
 
 Annotated images and a manifest are saved to <som_dir>/<dataset_slug>/.
-Running the script again on an already-processed dataset is safe: existing
-images are skipped automatically.
+Running the script again is safe: keys already in manifest.json are skipped.
+The manifest is flushed periodically (and on exit) so a mid-run kill can resume.
 
 Example usage:
     python scripts/precompute_som.py --dataset slake
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -184,6 +185,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Limit to the first N unique images per dataset (for quick testing).",
     )
+    parser.add_argument(
+        "--manifest_flush_every",
+        type=int,
+        default=1,
+        help="Write manifest.json to disk every N newly processed images "
+        "(default: 1 = mid-run resume after each image). Always flushed on exit.",
+    )
     args = parser.parse_args()
     if args.max_marks is None:
         args.max_marks = 24 if args.backend == "medsam" else 12
@@ -257,6 +265,17 @@ def _collect_unique_image_paths(
     return paths
 
 
+def _atomic_write_manifest(path: Path, manifest: dict) -> None:
+    """Write *manifest* via temp file + replace so a kill mid-write cannot corrupt it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def _process_dataset(
     dataset_slug: str,
     loader: MedicalVQALoader,
@@ -286,91 +305,104 @@ def _process_dataset(
     else:
         manifest = {}
 
+    flush_every = max(1, int(args.manifest_flush_every))
+    print(
+        f"  Manifest entries already done: {len(manifest)}  "
+        f"(flush every {flush_every} new image(s))"
+    )
+
     skipped = 0
     processed = 0
     failed = 0
+    dirty = False
 
-    for img_path_str in tqdm(image_paths, desc=f"  Annotating {dataset_slug}"):
-        img_path = Path(img_path_str)
-        # Use last 2 path components as key to handle datasets where images share
-        # the same filename across subdirectories (e.g. SLAKE: xmlab0/source.jpg)
-        filename = "/".join(img_path.parts[-2:])
+    try:
+        for img_path_str in tqdm(image_paths, desc=f"  Annotating {dataset_slug}"):
+            img_path = Path(img_path_str)
+            # Use last 2 path components as key to handle datasets where images share
+            # the same filename across subdirectories (e.g. SLAKE: xmlab0/source.jpg)
+            filename = "/".join(img_path.parts[-2:])
 
-        if filename in manifest:
-            skipped += 1
-            continue
+            if filename in manifest:
+                skipped += 1
+                continue
 
-        if not img_path.exists():
-            tqdm.write(f"  [WARN] Image not found, skipping: {img_path}")
-            failed += 1
-            continue
+            if not img_path.exists():
+                tqdm.write(f"  [WARN] Image not found, skipping: {img_path}")
+                failed += 1
+                continue
 
-        try:
-            image = Image.open(img_path).convert("RGB")
-            annotated, regions = annotate_image_with_som(
-                image,
-                max_marks=args.max_marks,
-                min_mask_region_area=args.min_mask_area,
-                bg_mean=args.bg_mean,
-                generator=generator_holder.get(),
-                preprocess=args.preprocess,
-                clahe_clip_limit=args.clahe_clip_limit,
-                clahe_tile_size=args.clahe_tile_size,
-            )
-
-            # Preserve subdirectory structure to avoid name collisions
-            subdir = img_path.parent.name
-            base_name = f"{subdir}_{img_path.stem}"
-            out_name = f"{base_name}_som.png"
-            out_path = images_out_dir / out_name
-            annotated.save(out_path, format="PNG")
-
-            # Persist each region's mask individually so a later step can
-            # render an arbitrary subset of marks without re-running segmentation.
-            region_entries = []
-            for region in regions:
-                mask_name = f"{base_name}_region{region['label']}.png"
-                mask_out_path = masks_out_dir / mask_name
-                save_region_mask(region["mask"], mask_out_path)
-                region_entries.append(
-                    {
-                        "label": region["label"],
-                        "bbox": region["bbox"],
-                        "mask_path": str(dataset_slug / Path("masks") / mask_name),
-                    }
+            try:
+                image = Image.open(img_path).convert("RGB")
+                annotated, regions = annotate_image_with_som(
+                    image,
+                    max_marks=args.max_marks,
+                    min_mask_region_area=args.min_mask_area,
+                    bg_mean=args.bg_mean,
+                    generator=generator_holder.get(),
+                    preprocess=args.preprocess,
+                    clahe_clip_limit=args.clahe_clip_limit,
+                    clahe_tile_size=args.clahe_tile_size,
                 )
 
-            # Store path relative to som_dir so it's portable
-            rel_som_path = str((dataset_slug / Path("images") / out_name))
-            entry = {
-                "som_path": rel_som_path,
-                "original_path": img_path_str,
-                "backend": args.backend,
-                "preprocess": args.preprocess,
-                "regions": region_entries,
-            }
-            if args.preprocess == "clahe":
-                entry["clahe_clip_limit"] = args.clahe_clip_limit
-                entry["clahe_tile_size"] = args.clahe_tile_size
-            if args.backend == "medsam":
-                entry["medsam_model_id"] = args.medsam_model_id
-            else:
-                entry["sam_model_type"] = args.sam_model_type
-            manifest[filename] = entry
-            processed += 1
+                # Preserve subdirectory structure to avoid name collisions
+                subdir = img_path.parent.name
+                base_name = f"{subdir}_{img_path.stem}"
+                out_name = f"{base_name}_som.png"
+                out_path = images_out_dir / out_name
+                annotated.save(out_path, format="PNG")
 
-        except Exception as exc:
-            tqdm.write(f"  [ERROR] {img_path.name}: {exc}")
-            failed += 1
+                # Persist each region's mask individually so a later step can
+                # render an arbitrary subset of marks without re-running segmentation.
+                region_entries = []
+                for region in regions:
+                    mask_name = f"{base_name}_region{region['label']}.png"
+                    mask_out_path = masks_out_dir / mask_name
+                    save_region_mask(region["mask"], mask_out_path)
+                    region_entries.append(
+                        {
+                            "label": region["label"],
+                            "bbox": region["bbox"],
+                            "mask_path": str(dataset_slug / Path("masks") / mask_name),
+                        }
+                    )
 
-    # Write manifest after each dataset (safe even if interrupted mid-run)
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+                # Store path relative to som_dir so it's portable
+                rel_som_path = str((dataset_slug / Path("images") / out_name))
+                entry = {
+                    "som_path": rel_som_path,
+                    "original_path": img_path_str,
+                    "backend": args.backend,
+                    "preprocess": args.preprocess,
+                    "regions": region_entries,
+                }
+                if args.preprocess == "clahe":
+                    entry["clahe_clip_limit"] = args.clahe_clip_limit
+                    entry["clahe_tile_size"] = args.clahe_tile_size
+                if args.backend == "medsam":
+                    entry["medsam_model_id"] = args.medsam_model_id
+                else:
+                    entry["sam_model_type"] = args.sam_model_type
+                manifest[filename] = entry
+                processed += 1
+                dirty = True
+
+                if processed % flush_every == 0:
+                    _atomic_write_manifest(manifest_path, manifest)
+                    dirty = False
+
+            except Exception as exc:
+                tqdm.write(f"  [ERROR] {img_path.name}: {exc}")
+                failed += 1
+    finally:
+        # Persist progress on clean exit, Ctrl+C, or unexpected errors.
+        if dirty or processed > 0:
+            _atomic_write_manifest(manifest_path, manifest)
 
     print(
         f"  Done — processed: {processed}, skipped (already done): {skipped}, failed: {failed}"
     )
-    print(f"  Manifest: {manifest_path}")
+    print(f"  Manifest: {manifest_path} ({len(manifest)} entries)")
 
 
 def main() -> None:
