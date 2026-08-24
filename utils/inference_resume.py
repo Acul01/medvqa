@@ -10,7 +10,15 @@ from typing import Any
 
 InferenceKey = tuple[str, str]
 
-RESUME_META_FIELDS = ("dataset", "split", "model_path", "use_reasoning_json", "answer_first", "n_samples")
+RESUME_META_FIELDS = (
+    "dataset",
+    "split",
+    "model_path",
+    "use_reasoning_json",
+    "answer_first",
+    "json_order",
+    "n_samples",
+)
 
 
 def inference_result_key(row: dict[str, Any]) -> InferenceKey:
@@ -183,6 +191,7 @@ def build_inference_resume_meta(args: Any) -> dict[str, Any]:
         "model_path": args.model_path,
         "use_reasoning_json": bool(getattr(args, "use_reasoning_json", False)),
         "answer_first": bool(getattr(args, "answer_first", False)),
+        "json_order": getattr(args, "json_order", None),
         "n_samples": getattr(args, "n_samples", None),
     }
 
@@ -193,6 +202,7 @@ def setup_inference_checkpoint(
     resume: bool,
     checkpoint_every: int,
     partial_path: str | None,
+    name_suffix: str | None = None,
 ) -> tuple[InferenceCheckpointManager, str]:
     from utils.save_results import build_results_base_name
 
@@ -200,6 +210,7 @@ def setup_inference_checkpoint(
         args.model_path,
         args.dataset,
         args.n_samples,
+        name_suffix=name_suffix,
     )
     resolved_partial = (
         Path(partial_path)

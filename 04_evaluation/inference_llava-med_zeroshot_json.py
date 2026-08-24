@@ -36,6 +36,11 @@ from utils.mc_json_zeroshot import (
 )
 from utils.mc_vqa import parse_predicted_letter
 from utils.paths import get_data_root, get_mc_data_root, get_results_dir
+from utils.inference_resume import (
+    add_inference_resume_cli_arguments,
+    sample_inference_key,
+    setup_inference_checkpoint,
+)
 from utils.save_results import clean_answer, save_results
 
 DEFAULT_MODEL_PATH = "microsoft/llava-med-v1.5-mistral-7b"
@@ -94,6 +99,7 @@ def parse_args():
     parser.add_argument("--wandb_project", type=str, default="medvqa")
     parser.add_argument("--wandb_run_name", type=str, default=None)
     add_aurc_cli_arguments(parser)
+    add_inference_resume_cli_arguments(parser)
     return parser.parse_args()
 
 
@@ -329,13 +335,23 @@ def main():
 
     answer_letter_token_ids = get_answer_letter_token_ids(tokenizer)
 
-    results = []
+    ckpt_manager, _ = setup_inference_checkpoint(
+        args,
+        resume=args.resume,
+        checkpoint_every=args.checkpoint_every,
+        partial_path=args.partial_path,
+        name_suffix=args.json_order,
+    )
+
     with torch.no_grad():
         for sample_idx, sample in enumerate(tqdm(samples)):
             if not sample.mc_options or sample.mc_correct_index is None:
                 continue
 
             source_image_path = sample.image_path
+            if ckpt_manager.try_skip(sample_inference_key(source_image_path, sample.question)):
+                continue
+
             effective_image_path = shuffle_assignment.get(sample_idx, source_image_path)
             image = Image.open(effective_image_path).convert("RGB")
             if args.ablation_mode == "black":
@@ -608,8 +624,10 @@ def main():
                         "two_stage_cot": True,
                     }
 
-            results.append(row_out)
+            ckpt_manager.append_new(row_out)
 
+    ckpt_manager.print_summary()
+    results = ckpt_manager.results
     total = len(results)
     closed_rows = [r for r in results if r.get("question_type") == "closed"]
     open_rows = [r for r in results if r.get("question_type") == "open"]
@@ -628,6 +646,7 @@ def main():
     if open_acc is not None:
         print(f"Open accuracy: {open_correct}/{len(open_rows)} = {open_acc:.4f}")
 
+    ckpt_manager.finalize(complete=True)
     results_path = save_results(
         results=results,
         model_path=args.model_path,
