@@ -1,17 +1,24 @@
 """
-Spatial filter layer for Qwen2.5-VL visual tokens.
+Spatial filter layer for Qwen-VL (2.5 / 3) and LLaVA visual tokens.
 
-Shared between training (train_qwen_modified.py) and inference (inference_qwen.py).
+Shared between training (train_qwen_modified.py, train_llava_modified.py) and
+inference (inference_qwen.py, inference_llava.py).
+
+Qwen: forward-hook on visual.merger (needs image_grid_thw).
+LLaVA: forward-hook on multi_modal_projector (fixed grid, typically 24x24).
 """
 
 from __future__ import annotations
+
+import math
+from typing import Literal, Optional, Union
 
 import torch
 import torch.nn as nn
 
 
 # ---------------------------------------------------------------------------
-# Merger discovery helpers
+# Merger / projector discovery helpers
 # ---------------------------------------------------------------------------
 
 def find_visual_merger(model: nn.Module) -> nn.Module:
@@ -21,7 +28,7 @@ def find_visual_merger(model: nn.Module) -> nn.Module:
     """
     candidate_paths = [
         "visual.merger",        # Qwen2.5-VL (some transformers versions)
-        "model.visual.merger",  # Qwen2.5-VL (other transformers versions)
+        "model.visual.merger",  # Qwen2.5-VL / Qwen3-VL
         "vision_model.merger",
     ]
     for path in candidate_paths:
@@ -68,6 +75,53 @@ def get_visual_merger_output_dim(model: nn.Module) -> int:
     )
 
 
+def find_llava_projector(model: nn.Module) -> nn.Module:
+    """Return LLaVA multi_modal_projector, searching common attribute paths."""
+    candidate_paths = [
+        "model.multi_modal_projector",
+        "multi_modal_projector",
+    ]
+    for path in candidate_paths:
+        obj = model
+        try:
+            for part in path.split("."):
+                obj = getattr(obj, part)
+            return obj
+        except AttributeError:
+            continue
+    raise RuntimeError(
+        f"Cannot find LLaVA multi_modal_projector. Tried: {candidate_paths}. "
+        "Inspect model architecture and extend candidate_paths."
+    )
+
+
+def get_llava_projector_output_dim(model: nn.Module) -> int:
+    """Infer projector output dim (= LLM hidden size) for LLaVA."""
+    try:
+        projector = find_llava_projector(model)
+        for m in reversed(list(projector.modules())):
+            if isinstance(m, nn.Linear):
+                return m.out_features
+    except RuntimeError:
+        pass
+    try:
+        return model.lm_head.in_features
+    except AttributeError:
+        pass
+    for attr in ("text_config.hidden_size", "hidden_size"):
+        try:
+            obj = model.config
+            for part in attr.split("."):
+                obj = getattr(obj, part)
+            return int(obj)
+        except AttributeError:
+            pass
+    raise RuntimeError(
+        "Cannot infer LLaVA projector output dimension. "
+        "Check model.multi_modal_projector or model.lm_head."
+    )
+
+
 def _get_spatial_merge_size(merger: nn.Module, base_model: nn.Module) -> int:
     """Resolve the spatial_merge_size used by the PatchMerger.
 
@@ -84,6 +138,22 @@ def _get_spatial_merge_size(merger: nn.Module, base_model: nn.Module) -> int:
     if ms is None:
         ms = 2  # Qwen2-VL and Qwen2.5-VL always use spatial_merge_size = 2
     return int(ms)
+
+
+def _detect_spatial_filter_family(model: nn.Module) -> Literal["qwen", "llava"]:
+    try:
+        find_visual_merger(model)
+        return "qwen"
+    except RuntimeError:
+        pass
+    try:
+        find_llava_projector(model)
+        return "llava"
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Cannot detect spatial-filter family: no visual.merger and no "
+            "multi_modal_projector found on model."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +213,7 @@ class SpatialFilterLayer(nn.Module):
 
     def forward(
         self,
-        tokens: torch.Tensor,  # (N, D) — flat merger output for one image
+        tokens: torch.Tensor,  # (N, D) — flat merger/projector output for one image
         grid_h: int,
         grid_w: int,
         grid_t: int = 1,
@@ -156,12 +226,12 @@ class SpatialFilterLayer(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Wrapper model
+# Wrapper models
 # ---------------------------------------------------------------------------
 
 class QwenWithSpatialFilter(nn.Module):
-    """Wrapper around Qwen2_5_VLForConditionalGeneration that installs a
-    forward hook on visual.merger to apply SpatialFilterLayer transparently.
+    """Wrapper around Qwen-VL (2.5 / 3) that installs a forward hook on
+    visual.merger to apply SpatialFilterLayer transparently.
     """
 
     def __init__(self, base_model: nn.Module, d_model: int, bottleneck: int = 64):
@@ -232,8 +302,76 @@ class QwenWithSpatialFilter(nn.Module):
             return getattr(self.model, name)
 
 
+class LlavaWithSpatialFilter(nn.Module):
+    """Wrapper around LlavaForConditionalGeneration that hooks multi_modal_projector.
+
+    Projector output is typically (B, 576, D) for LLaVA-1.5 (24x24 after CLS drop).
+    Grid size is derived as sqrt(N); no image_grid_thw is required.
+    """
+
+    def __init__(self, base_model: nn.Module, d_model: int, bottleneck: int = 64):
+        super().__init__()
+        self.model = base_model
+        self.spatial_filter = SpatialFilterLayer(d_model, bottleneck)
+        object.__setattr__(self, "_projector", find_llava_projector(base_model))
+
+    def _make_hook(self):
+        spatial_filter = self.spatial_filter
+
+        def hook(module, inp, output):  # noqa: ARG001
+            if not torch.is_tensor(output):
+                raise TypeError(
+                    f"Expected projector tensor output, got {type(output)!r}"
+                )
+            if output.ndim != 3:
+                raise ValueError(
+                    f"Expected projector output shape (B, N, D), got {tuple(output.shape)}"
+                )
+            result = output.clone()
+            _b, n, _d = result.shape
+            h = int(math.isqrt(n))
+            w = h
+            if h * w != n:
+                raise ValueError(
+                    f"Projector token count N={n} is not a perfect square; "
+                    "cannot infer spatial grid for LLaVA-1.5-style filtering."
+                )
+            for i in range(result.shape[0]):
+                result[i] = spatial_filter(output[i], h, w, 1)
+            return result
+
+        return hook
+
+    def forward(self, input_ids=None, attention_mask=None, pixel_values=None,
+                labels=None, **kwargs):
+        handle = self._projector.register_forward_hook(self._make_hook())
+        try:
+            return self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
+                labels=labels,
+                **kwargs,
+            )
+        finally:
+            handle.remove()
+
+    def generate(self, **kwargs):
+        handle = self._projector.register_forward_hook(self._make_hook())
+        try:
+            return self.model.generate(**kwargs)
+        finally:
+            handle.remove()
+
+    def __getattr__(self, name: str):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.model, name)
+
+
 # ---------------------------------------------------------------------------
-# Convenience loader (used by inference)
+# Convenience loaders (used by inference)
 # ---------------------------------------------------------------------------
 
 def load_spatial_filter_checkpoint(
@@ -242,18 +380,26 @@ def load_spatial_filter_checkpoint(
     bottleneck: int = 64,
     *,
     strict: bool = True,
-) -> QwenWithSpatialFilter:
+    family: Optional[Literal["qwen", "llava"]] = None,
+) -> Union[QwenWithSpatialFilter, LlavaWithSpatialFilter]:
     """Wrap base_model with SpatialFilterLayer and load weights from filter_path.
 
     Args:
-        base_model:  Loaded Qwen2_5_VLForConditionalGeneration (eval mode).
-        filter_path: Path to spatial_filter.pt produced by train_qwen_modified.py.
+        base_model:  Loaded Qwen-VL or LLaVA model (eval mode).
+        filter_path: Path to spatial_filter.pt from train_*_modified.py.
         bottleneck:  Must match the value used during training (default 64).
         strict:      Passed to load_state_dict.
+        family:      "qwen" or "llava"; auto-detected when None.
 
     Returns:
-        QwenWithSpatialFilter in eval mode with filter weights restored.
+        Wrapped model in eval mode with filter weights restored.
     """
+    resolved_family = family or _detect_spatial_filter_family(base_model)
+    if resolved_family == "llava":
+        return load_llava_spatial_filter_checkpoint(
+            base_model, filter_path, bottleneck=bottleneck, strict=strict
+        )
+
     d_model = get_visual_merger_output_dim(base_model)
     wrapped = QwenWithSpatialFilter(base_model, d_model=d_model, bottleneck=bottleneck)
     state = torch.load(filter_path, map_location="cpu", weights_only=True)
@@ -264,4 +410,26 @@ def load_spatial_filter_checkpoint(
     wrapped.spatial_filter.to(device=merger_param.device, dtype=merger_param.dtype)
     wrapped.eval()
     print(f"Spatial filter loaded from {filter_path}  (d_model={d_model}, bottleneck={bottleneck})")
+    return wrapped
+
+
+def load_llava_spatial_filter_checkpoint(
+    base_model: nn.Module,
+    filter_path: str,
+    bottleneck: int = 64,
+    *,
+    strict: bool = True,
+) -> LlavaWithSpatialFilter:
+    """Wrap LLaVA with SpatialFilterLayer and load weights from filter_path."""
+    d_model = get_llava_projector_output_dim(base_model)
+    wrapped = LlavaWithSpatialFilter(base_model, d_model=d_model, bottleneck=bottleneck)
+    state = torch.load(filter_path, map_location="cpu", weights_only=True)
+    wrapped.spatial_filter.load_state_dict(state, strict=strict)
+    projector_param = next(wrapped._projector.parameters())
+    wrapped.spatial_filter.to(device=projector_param.device, dtype=projector_param.dtype)
+    wrapped.eval()
+    print(
+        f"LLaVA spatial filter loaded from {filter_path}  "
+        f"(d_model={d_model}, bottleneck={bottleneck})"
+    )
     return wrapped

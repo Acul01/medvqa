@@ -384,6 +384,18 @@ def main():
         model = LlavaForConditionalGeneration.from_pretrained(args.model_path, torch_dtype=torch.float32, device_map="auto")
     model.eval()
 
+    # Auto-detect spatial filter checkpoint produced by train_llava_modified.py.
+    spatial_filter_ckpt = Path(args.model_path) / "spatial_filter.pt"
+    if spatial_filter_ckpt.exists():
+        from utils.spatial_filter import load_llava_spatial_filter_checkpoint
+
+        model = load_llava_spatial_filter_checkpoint(
+            model, str(spatial_filter_ckpt), bottleneck=64
+        )
+        print(f"Spatial filter applied ({spatial_filter_ckpt})")
+    else:
+        print("No spatial_filter.pt found — running without spatial filter.")
+
     if is_lora:
         processor_path = args.base_model or DEFAULT_MODEL_PATH
     else:

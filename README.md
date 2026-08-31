@@ -49,6 +49,7 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Training Standard-LLaVA (HF `LlavaForConditionalGeneration` + `Trainer`) | **Implementiert** (`03_training/train.py`) |
 | Training LLaVA-Med (Microsoft-`llava` + `Trainer`) | **Implementiert** (`03_training/train_med.py`, benötigt installiertes LLaVA-Med) |
 | Training Qwen-VL 2.5 / 3 (HF + `Trainer`) | **Implementiert** (`03_training/train_qwen.py`, Default Qwen2.5; Qwen3 via `--model_path`) |
+| Training Qwen/LLaVA + Spatial Filter | **Implementiert** (`03_training/train_qwen_modified.py`, `03_training/train_llava_modified.py`) |
 | Inferenz LLaVA + Unsicherheitsmetriken (`entropy`, `agreement`, `confidence`) | **Implementiert** (`04_evaluation/inference.py`) |
 | Inferenz LLaVA-Med | **Implementiert** (`04_evaluation/inference_med.py`) |
 | Inferenz Qwen-VL (2.5 / 3) + Unsicherheitsmetriken | **Implementiert** (`04_evaluation/inference_qwen.py`) |
@@ -356,6 +357,42 @@ python 03_training/train_qwen.py \
 ```
 
 LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
+
+### Spatial Filter (Qwen-VL / LLaVA)
+
+Learnable per-patch filter on visual tokens (position-aware scorer + fusion). Training scripts wrap the base model, save unwrapped weights, and write `spatial_filter.pt` next to the checkpoint. Inference auto-loads the filter when that file is present (`inference_qwen.py`, `inference_llava.py`).
+
+**Qwen2.5 full + Spatial Filter (VQA-Rad):**
+
+```bash
+python 03_training/train_qwen_modified.py \
+  --model_path Qwen/Qwen2.5-VL-7B-Instruct \
+  --dataset vqarad \
+  --mc_data_root 02_data/data_mc_openai \
+  --val_split test \
+  --bf16 --gradient_checkpointing --use_8bit_optimizer \
+  --max_length 512 --num_train_epochs 5 \
+  --per_device_train_batch_size 1 --gradient_accumulation_steps 1 \
+  --learning_rate 2e-5 --dataloader_num_workers 1 \
+  --output_dir ./05_outputs/mc/FINAL/noX/qwen/vqarad_MC_full_spatial
+```
+
+**Qwen3 LoRA + Spatial Filter (Med-VQA-2019):** same script with `--model_path Qwen/Qwen3-VL-8B-Instruct --use_lora --val_split validation` and e.g. `--output_dir ./05_outputs/mc/FINAL/noX/qwen3/medvqa2019_MC_LoRA_spatial` (LoRA is merged on save → full weights + `spatial_filter.pt`).
+
+**LLaVA full + Spatial Filter (SLAKE):**
+
+```bash
+python 03_training/train_llava_modified.py \
+  --model_path llava-hf/llava-1.5-7b-hf \
+  --dataset slake \
+  --mc_data_root 02_data/data_mc_openai \
+  --val_split validate \
+  --bf16 --gradient_checkpointing --use_8bit_optimizer \
+  --max_length 512 --num_train_epochs 5 \
+  --per_device_train_batch_size 1 --gradient_accumulation_steps 1 \
+  --learning_rate 2e-5 --dataloader_num_workers 1 \
+  --output_dir ./05_outputs/mc/FINAL/noX/llava/slake_MC_full_spatial
+```
 
 ### Stufen-Strategie (Thesis / Blueprint)
 
