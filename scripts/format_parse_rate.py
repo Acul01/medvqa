@@ -94,6 +94,9 @@ def collect_json_files(roots: list[Path]) -> list[Path]:
             print(f"warning: root missing, skip: {root}", file=sys.stderr)
             continue
         for path in sorted(root.rglob("*.json")):
+            # Skip ablation runs (path segment or filename)
+            if "ablation" in str(path).replace("\\", "/").lower():
+                continue
             key = path.resolve()
             if key in seen:
                 continue
