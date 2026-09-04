@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Aggregate format-parse success rates over FINAL eval prediction JSONs.
+"""Aggregate letter-extraction rates over FINAL eval prediction JSONs.
 
-For JSON reasoning / zeroshot runs (rows with ``predicted_json_parse_ok``):
-  format_ok = predicted_json_parse_ok is True
-
-For answer-only / letter-only runs (key absent on all rows):
-  format_ok = predicted_letter is not None
+format_ok = predicted_letter is a non-empty value, for all modes
+(noX, zeroshot, pseudo-reasoning SFT). JSON schema success
+(``predicted_json_parse_ok``) is ignored.
 """
 
 from __future__ import annotations
@@ -75,14 +73,17 @@ def _is_prediction_json(path: Path, data: object) -> bool:
     return any(k in first for k in PRED_MARKERS)
 
 
+def _letter_extracted(row: dict) -> bool:
+    letter = row.get("predicted_letter")
+    if letter is None:
+        return False
+    return str(letter).strip() != ""
+
+
 def analyze_rows(rows: list[dict]) -> tuple[str, int, int]:
     """Return (metric, n, format_ok_count)."""
-    has_json_flag = any("predicted_json_parse_ok" in r for r in rows)
     n = len(rows)
-    if has_json_flag:
-        ok = sum(1 for r in rows if r.get("predicted_json_parse_ok") is True)
-        return "json_parse", n, ok
-    ok = sum(1 for r in rows if r.get("predicted_letter") is not None)
+    ok = sum(1 for r in rows if _letter_extracted(r))
     return "letter_extract", n, ok
 
 
@@ -177,7 +178,7 @@ def _write_outputs(stem: Path, rows: list[dict]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Compute format-parse success rates for FINAL eval JSONs."
+        description="Compute letter-extraction rates for FINAL eval JSONs."
     )
     parser.add_argument(
         "--roots",
