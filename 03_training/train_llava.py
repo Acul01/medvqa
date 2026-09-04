@@ -72,6 +72,7 @@ class LLaVATrainDataset(Dataset):
         *,
         use_reasoning: bool = False,
         answer_first: bool = False,
+        both_json_orders: bool = False,
     ):
         self.samples = samples
         self.processor = processor
@@ -79,6 +80,7 @@ class LLaVATrainDataset(Dataset):
         self.som_resolver = som_resolver
         self.use_reasoning = use_reasoning
         self.answer_first = answer_first
+        self.both_json_orders = bool(both_json_orders and use_reasoning)
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
@@ -87,11 +89,20 @@ class LLaVATrainDataset(Dataset):
         if getattr(processor, "vision_feature_select_strategy", None) is None:
             processor.vision_feature_select_strategy = "default"
 
+        # (sample_index, answer_first) — dual mode doubles each sample as RF then AF.
+        if self.both_json_orders:
+            self._index: list[tuple[int, bool]] = [
+                pair for i in range(len(samples)) for pair in ((i, False), (i, True))
+            ]
+        else:
+            self._index = [(i, answer_first) for i in range(len(samples))]
+
     def __len__(self):
-        return len(self.samples)
+        return len(self._index)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
+        sample_i, answer_first = self._index[idx]
+        sample = self.samples[sample_i]
         image_path = (
             self.som_resolver.resolve_or_original(sample.image_path)
             if self.som_resolver is not None
@@ -109,12 +120,12 @@ class LLaVATrainDataset(Dataset):
             user_text = format_mc_reasoning_user_text(
                 sample.question,
                 sample.mc_options,
-                answer_first=self.answer_first,
+                answer_first=answer_first,
             )
             assistant_text = format_mc_reasoning_assistant_json(
                 reasoning_raw,
                 sample.answer,
-                answer_first=self.answer_first,
+                answer_first=answer_first,
             )
         else:
             user_text = format_mc_user_text(sample.question, sample.mc_options)
@@ -213,6 +224,12 @@ def parse_args():
         action="store_true",
         help="Use answer-first JSON schema {answer, reasoning}. Only effective with --use_reasoning.",
     )
+    parser.add_argument(
+        "--both_json_orders",
+        action="store_true",
+        help="With --use_reasoning: train on both RF and AF JSON for each sample (2x examples). "
+        "Incompatible with --answer_first. Val stays rationale-first.",
+    )
     parser.add_argument("--dataset", type=str, required=True,
                         choices=["pathvqa", "slake", "vqarad", "medvqa2019", "all"],
                         help="Dataset to use; 'all' = PathVQA+SLAKE+VQA-Rad+Med-VQA-2019 (prompt names from each sample)")
@@ -308,8 +325,21 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    if args.both_json_orders and not args.use_reasoning:
+        raise ValueError("--both_json_orders requires --use_reasoning.")
+    if args.both_json_orders and args.answer_first:
+        raise ValueError("--both_json_orders is incompatible with --answer_first.")
+
     model_short = _model_short_name(args.model_path)
-    reasoning_tag = ("reasoning-answer-first-" if args.answer_first else "reasoning-") if args.use_reasoning else ""
+    if args.use_reasoning:
+        if args.both_json_orders:
+            reasoning_tag = "reasoning-both-"
+        elif args.answer_first:
+            reasoning_tag = "reasoning-answer-first-"
+        else:
+            reasoning_tag = "reasoning-"
+    else:
+        reasoning_tag = ""
     ft_tag = reasoning_tag + ("lora" if args.use_lora else "full-ft")
     run_name = args.wandb_run_name or f"{model_short}_{args.dataset}_{ft_tag}_train"
     wandb.init(
@@ -422,6 +452,12 @@ def main():
             f"(max_train_samples={args.max_train_samples}, seed=42)"
         )
 
+    if args.both_json_orders:
+        print(
+            f"Train examples: {len(train_samples) * 2} "
+            f"({len(train_samples)} samples × 2 JSON orders RF+AF)"
+        )
+
     train_dataset = LLaVATrainDataset(
         train_samples,
         processor,
@@ -430,6 +466,7 @@ def main():
         som_resolver=som_resolver,
         use_reasoning=args.use_reasoning,
         answer_first=args.answer_first,
+        both_json_orders=args.both_json_orders,
     )
     if use_all and not args.use_reasoning:
         print(f"  per dataset: {dict(Counter(s.dataset for s in train_samples))}")
@@ -455,6 +492,9 @@ def main():
             args.max_length,
             dataset=args.dataset,
             som_resolver=som_resolver,
+            use_reasoning=False,
+            answer_first=False,
+            both_json_orders=False,
         )
         if use_all:
             print(f"Validation: {len(val_dataset)} samples ({dict(Counter(s.dataset for s in val_samples))})")
@@ -497,7 +537,12 @@ def main():
     )
 
     if args.use_reasoning:
-        order = "answer + reasoning" if args.answer_first else "reasoning + answer"
+        if args.both_json_orders:
+            order = "both RF {reasoning,answer} and AF {answer,reasoning}"
+        elif args.answer_first:
+            order = "answer + reasoning"
+        else:
+            order = "reasoning + answer"
         loss_desc = f"assistant JSON ({order})"
     else:
         loss_desc = "assistant answer tokens only"
@@ -517,9 +562,11 @@ def main():
     wandb.log({
         "final_train_loss": result.training_loss,
         "train_samples": len(train_dataset),
+        "train_unique_samples": len(train_samples),
         "train_samples_total_before_filter": train_total,
         "train_samples_after_verify_filter": train_samples_after_filter if args.use_reasoning else None,
         "max_train_samples": args.max_train_samples,
+        "both_json_orders": bool(args.both_json_orders),
         "val_samples": len(val_dataset) if val_dataset else 0,
     })
     wandb.finish()

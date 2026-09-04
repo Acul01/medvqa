@@ -281,7 +281,7 @@ Wichtige Optionen (Auszug): `--data_root`, `--train_split`, `--val_split` (bei S
 
 **Hinweis:** HF-LLaVA läuft über `03_training/train_llava.py` (Default `llava-hf/llava-1.5-7b-hf`). **LLaVA-Med** läuft über `03_training/train_llava-med.py` (Default `microsoft/llava-med-v1.5-mistral-7b`). **Qwen-VL** (2.5 und 3) läuft über `03_training/train_qwen.py` (Default `Qwen/Qwen2.5-VL-7B-Instruct`; Qwen3 via `--model_path Qwen/Qwen3-VL-8B-Instruct`).
 
-**Pseudo-Reasoning (LLaVA / LLaVA-Med):** gleiche JSON-Prompts wie Qwen (`utils/qwen_vl.py`). Flags: `--use_reasoning`, `--answer_first`, `--mc_export_suffix` (z. B. `_verify`), `--max_train_samples`. Bei Reasoning `--max_length 2048` empfohlen.
+**Pseudo-Reasoning (LLaVA / LLaVA-Med):** gleiche JSON-Prompts wie Qwen (`utils/qwen_vl.py`). Flags: `--use_reasoning`, `--answer_first`, `--both_json_orders` (RF+AF, ≈2×), `--mc_export_suffix` (z. B. `_verify`), `--max_train_samples`. Bei Reasoning `--max_length 2048` empfohlen.
 
 ```bash
 python 03_training/train_llava.py \
@@ -301,6 +301,20 @@ python 03_training/train_llava-med.py \
   --use_reasoning --answer_first \
   --max_length 2048 --bf16 --gradient_checkpointing --use_8bit_optimizer \
   --output_dir ./05_outputs/mc/llava-med/llava_med_vqarad_af
+```
+
+Beide JSON-Orders (RF + AF) — gleiches Flag wie bei Qwen:
+
+```bash
+python 03_training/train_llava.py \
+  --dataset vqarad \
+  --mc_data_root 02_data/data_mc_openai \
+  --mc_export_suffix _verifyQWEN3 \
+  --val_split test \
+  --use_reasoning --both_json_orders \
+  --max_train_samples 10000 --max_length 2048 \
+  --bf16 --gradient_checkpointing --use_8bit_optimizer \
+  --output_dir ./05_outputs/mc/llava/llava_vqarad_both/
 ```
 
 ### Qwen-VL trainieren (MC-Baseline)
@@ -356,7 +370,7 @@ python 03_training/train_qwen.py \
   --bf16 --gradient_checkpointing
 ```
 
-Beide JSON-Orders (RF + AF) pro Sample (≈2× Trainingsbeispiele; Val bleibt answer-only / ohne Dual):
+Beide JSON-Orders (RF + AF) pro Sample (≈2× Trainingsbeispiele; Val bleibt answer-only / ohne Dual). Qwen2.5 und Qwen3 teilen sich `train_qwen.py` — nur `--model_path` ändern:
 
 ```bash
 python 03_training/train_qwen.py \
@@ -369,6 +383,17 @@ python 03_training/train_qwen.py \
   --max_train_samples 10000 --max_length 2048 \
   --bf16 --use_8bit_optimizer --gradient_checkpointing \
   --output_dir ./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_slake_both/
+
+python 03_training/train_qwen.py \
+  --dataset vqarad \
+  --val_split test \
+  --model_path Qwen/Qwen3-VL-8B-Instruct \
+  --mc_data_root 02_data/data_mc_openai \
+  --mc_export_suffix _verifyQWEN3 \
+  --use_reasoning --both_json_orders \
+  --max_train_samples 10000 --max_length 2048 \
+  --bf16 --use_8bit_optimizer --gradient_checkpointing \
+  --output_dir ./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen3/qwen3_vqarad_both/
 ```
 
 LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
