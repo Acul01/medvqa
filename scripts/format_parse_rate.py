@@ -11,10 +11,11 @@ For answer-only / letter-only runs (key absent on all rows):
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from pathlib import Path
+
+import pandas as pd
 
 
 DEFAULT_ROOTS = [
@@ -23,6 +24,9 @@ DEFAULT_ROOTS = [
     "06_results/FINAL/withX/pseudo_qwen3",
     "06_results/FINAL/withX/pseudo_som",
 ]
+
+DEFAULT_OUT = "06_results/FINAL/format_parse_rates"
+FIELDNAMES = ["file", "category", "n", "format_ok", "format_ok_pct", "metric"]
 
 PRED_MARKERS = ("predicted_answer", "predicted_letter")
 
@@ -123,9 +127,8 @@ def analyze_file(path: Path, roots: list[Path]) -> dict | None:
 
 
 def _print_markdown(rows: list[dict]) -> None:
-    headers = ["file", "category", "n", "format_ok", "format_ok_pct", "metric"]
-    print("| " + " | ".join(headers) + " |")
-    print("| " + " | ".join("---" for _ in headers) + " |")
+    print("| " + " | ".join(FIELDNAMES) + " |")
+    print("| " + " | ".join("---" for _ in FIELDNAMES) + " |")
     for r in rows:
         print(
             "| "
@@ -143,14 +146,30 @@ def _print_markdown(rows: list[dict]) -> None:
         )
 
 
-def _write_csv(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["file", "category", "n", "format_ok", "format_ok_pct", "metric"]
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
+def _out_stem(path: Path) -> Path:
+    """Treat ``.csv`` / ``.xlsx`` as stem suffixes so both formats share one base path."""
+    if path.suffix.lower() in {".csv", ".xlsx", ".xls"}:
+        return path.with_suffix("")
+    return path
+
+
+def _write_outputs(stem: Path, rows: list[dict]) -> None:
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows, columns=FIELDNAMES)
+
+    csv_path = stem.with_suffix(".csv")
+    df.to_csv(csv_path, index=False, encoding="utf-8")
+    print(f"Wrote CSV: {csv_path}", file=sys.stderr)
+
+    xlsx_path = stem.with_suffix(".xlsx")
+    try:
+        df.to_excel(xlsx_path, index=False)
+        print(f"Wrote XLSX: {xlsx_path}", file=sys.stderr)
+    except ModuleNotFoundError:
+        print(
+            "Skipped XLSX (install openpyxl: pip install openpyxl)",
+            file=sys.stderr,
+        )
 
 
 def main() -> int:
@@ -164,10 +183,20 @@ def main() -> int:
         help="Directories to scan recursively (default: FINAL noX / zeroshot / pseudo*).",
     )
     parser.add_argument(
+        "--out",
+        type=str,
+        default=DEFAULT_OUT,
+        help=(
+            "Output path stem (writes .csv and .xlsx). "
+            f"Default: {DEFAULT_OUT}"
+        ),
+    )
+    # Back-compat alias for older cmds that used --csv
+    parser.add_argument(
         "--csv",
         type=str,
         default=None,
-        help="Optional path to write a CSV summary.",
+        help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
 
@@ -186,10 +215,8 @@ def main() -> int:
     results.sort(key=lambda r: (r["category"], r["file"]))
     _print_markdown(results)
 
-    if args.csv:
-        out = Path(args.csv)
-        _write_csv(out, results)
-        print(f"\nWrote CSV: {out}", file=sys.stderr)
+    out_arg = args.csv if args.csv is not None else args.out
+    _write_outputs(_out_stem(Path(out_arg)), results)
 
     # Category totals
     print("\n### Totals by category", file=sys.stderr)
