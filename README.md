@@ -356,6 +356,21 @@ python 03_training/train_qwen.py \
   --bf16 --gradient_checkpointing
 ```
 
+Beide JSON-Orders (RF + AF) pro Sample (≈2× Trainingsbeispiele; Val bleibt answer-only / ohne Dual):
+
+```bash
+python 03_training/train_qwen.py \
+  --dataset slake \
+  --val_split validate \
+  --model_path Qwen/Qwen2.5-VL-7B-Instruct \
+  --mc_data_root 02_data/data_mc_openai \
+  --mc_export_suffix _verifyQWEN3 \
+  --use_reasoning --both_json_orders \
+  --max_train_samples 10000 --max_length 2048 \
+  --bf16 --use_8bit_optimizer --gradient_checkpointing \
+  --output_dir ./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_slake_both/
+```
+
 LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
 
 ### Spatial Filter (Qwen-VL / LLaVA)

@@ -56,6 +56,7 @@ class QwenMCTrainDataset(Dataset):
         *,
         use_reasoning: bool = False,
         answer_first: bool = False,
+        both_json_orders: bool = False,
         fgr_lookup: FgrTrainLookup | None = None,
         data_root: str | None = None,
         som_resolver: SomResolver | None = None,
@@ -66,12 +67,20 @@ class QwenMCTrainDataset(Dataset):
         self.max_length = max_length
         self.use_reasoning = use_reasoning
         self.answer_first = answer_first
+        self.both_json_orders = bool(both_json_orders and use_reasoning)
         self.fgr_lookup = fgr_lookup
         self.data_root = data_root
         self.som_resolver = som_resolver
         self.som_selection = som_selection
         if processor.tokenizer.pad_token is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
+        # (sample_index, answer_first) — dual mode doubles each sample as RF then AF.
+        if self.both_json_orders:
+            self._index: list[tuple[int, bool]] = [
+                pair for i in range(len(samples)) for pair in ((i, False), (i, True))
+            ]
+        else:
+            self._index = [(i, answer_first) for i in range(len(samples))]
 
     def _resolve_image_path(self, sample: VQASample) -> str:
         if self.fgr_lookup is not None:
@@ -93,10 +102,11 @@ class QwenMCTrainDataset(Dataset):
         return Image.open(self._resolve_image_path(sample)).convert("RGB"), []
 
     def __len__(self):
-        return len(self.samples)
+        return len(self._index)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
+        sample_i, answer_first = self._index[idx]
+        sample = self.samples[sample_i]
         image, som_labels = self._load_image(sample)
         # Must match the prompt inference builds for the same sample.
         question = question_with_selected_som_hint(sample.question, som_labels)
@@ -114,7 +124,7 @@ class QwenMCTrainDataset(Dataset):
                 reasoning_raw=reasoning_raw,
                 answer=sample.answer,
                 image=image,
-                answer_first=self.answer_first,
+                answer_first=answer_first,
             )
         else:
             conversation = build_mc_conversation(
@@ -153,6 +163,12 @@ def parse_args():
         "--answer_first",
         action="store_true",
         help="Use answer-first JSON schema {answer, reasoning} instead of {reasoning, answer}. Only effective with --use_reasoning.",
+    )
+    p.add_argument(
+        "--both_json_orders",
+        action="store_true",
+        help="With --use_reasoning: train on both RF and AF JSON for each sample (2x examples). "
+        "Incompatible with --answer_first. Val stays rationale-first.",
     )
     p.add_argument(
         "--dataset",
@@ -258,6 +274,10 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    if args.both_json_orders and not args.use_reasoning:
+        raise ValueError("--both_json_orders requires --use_reasoning.")
+    if args.both_json_orders and args.answer_first:
+        raise ValueError("--both_json_orders is incompatible with --answer_first.")
     if args.use_som and args.use_som_selection:
         raise ValueError(
             "--use_som (all marks per image) and --use_som_selection (marks selected "
@@ -266,7 +286,15 @@ def main():
     if args.use_som_selection and args.fgr_crops_json:
         raise ValueError("--use_som_selection renders from the source image; --fgr_crops_json would be ignored.")
 
-    reasoning_tag = ("reasoning-answer-first-" if args.answer_first else "reasoning-") if args.use_reasoning else ""
+    if args.use_reasoning:
+        if args.both_json_orders:
+            reasoning_tag = "reasoning-both-"
+        elif args.answer_first:
+            reasoning_tag = "reasoning-answer-first-"
+        else:
+            reasoning_tag = "reasoning-"
+    else:
+        reasoning_tag = ""
     ft_tag = reasoning_tag + ("lora" if args.use_lora else "full-ft")
     model_short = model_short_name(args.model_path)
     wandb.init(
@@ -376,6 +404,12 @@ def main():
             f"(max_train_samples={args.max_train_samples}, seed=42)"
         )
 
+    if args.both_json_orders:
+        print(
+            f"Train examples: {len(train_samples) * 2} "
+            f"({len(train_samples)} samples × 2 JSON orders RF+AF)"
+        )
+
     som_datasets = ["pathvqa", "slake", "vqarad", "medvqa2019"] if use_all else [args.dataset]
 
     som_resolver: SomResolver | None = None
@@ -409,6 +443,7 @@ def main():
         args.max_length,
         use_reasoning=args.use_reasoning,
         answer_first=args.answer_first,
+        both_json_orders=args.both_json_orders,
         fgr_lookup=fgr_lookup,
         data_root=args.data_root,
         som_resolver=som_resolver,
@@ -441,6 +476,9 @@ def main():
             data_root=args.data_root,
             som_resolver=som_resolver,
             som_selection=som_selection,
+            use_reasoning=False,
+            answer_first=False,
+            both_json_orders=False,
         )
         print(f"Validation: {len(val_dataset)} samples")
     except Exception as e:
@@ -479,7 +517,12 @@ def main():
     )
 
     if args.use_reasoning:
-        order = "answer + reasoning" if args.answer_first else "reasoning + answer"
+        if args.both_json_orders:
+            order = "both RF {reasoning,answer} and AF {answer,reasoning}"
+        elif args.answer_first:
+            order = "answer + reasoning"
+        else:
+            order = "reasoning + answer"
         loss_desc = f"assistant JSON ({order})"
     else:
         loss_desc = "assistant answer tokens only"
@@ -496,9 +539,11 @@ def main():
         {
             "final_train_loss": result.training_loss,
             "train_samples": len(train_dataset),
+            "train_unique_samples": len(train_samples),
             "train_samples_total_before_filter": train_total,
             "train_samples_after_verify_filter": train_samples_after_filter if args.use_reasoning else None,
             "max_train_samples": args.max_train_samples,
+            "both_json_orders": bool(args.both_json_orders),
             "val_samples": len(val_dataset) if val_dataset else 0,
         }
     )
