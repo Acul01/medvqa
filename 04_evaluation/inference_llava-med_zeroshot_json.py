@@ -13,10 +13,11 @@ import torch
 import wandb
 from PIL import Image
 from tqdm import tqdm
+from transformers import AutoTokenizer, CLIPImageProcessor
 from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
 from llava.conversation import conv_templates
 from llava.mm_utils import process_images, tokenizer_image_token
-from llava.model.builder import load_pretrained_model
+from llava.model import LlavaMistralForCausalLM
 
 from utils.load_data import MedicalVQALoader
 from utils.mc_eval import add_aurc_cli_arguments, apply_aurc_to_wandb_summary, resolve_eval_runs_csv, run_mc_evaluation
@@ -255,19 +256,28 @@ def _generated_suffix(sequences: torch.Tensor, input_ids: torch.Tensor) -> torch
 
 
 def load_llava_med_pretrained(model_path: str, device: torch.device, torch_dtype: torch.dtype):
-    """Load pretrained LLaVA-Med from HuggingFace (zero-shot, no LoRA)."""
-    model_name = Path(model_path).name or "llava-med-v1.5-mistral-7b"
-    tokenizer, model, image_processor, _ = load_pretrained_model(
-        model_path=model_path,
-        model_base=None,
-        model_name=model_name,
-        device=str(device),
+    """Load pretrained LLaVA-Med without device_map (HF + local checkpoints)."""
+    path = Path(model_path)
+    if path.exists() and (path / "config.json").exists():
+        resolved = str(path)
+        tokenizer_src = resolved if (path / "tokenizer_config.json").exists() else DEFAULT_MODEL_PATH
+    else:
+        resolved = model_path
+        tokenizer_src = model_path
+
+    model = LlavaMistralForCausalLM.from_pretrained(
+        resolved,
+        torch_dtype=torch_dtype,
+        low_cpu_mem_usage=True,
     )
     model = model.to(device=device, dtype=torch_dtype)
     vision_tower = model.get_model().get_vision_tower()
     if not vision_tower.is_loaded:
         vision_tower.load_model()
     vision_tower.to(device=device, dtype=torch_dtype)
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_src)
+    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
     model.eval()
     return tokenizer, model, image_processor
 
