@@ -6,47 +6,47 @@
   "question_types": ["closed", "open", "overall"],
   "output_dir": "06_results/FINAL/rcc_compare",
   "slots": ["noX", "zeroshot", "pseudo_sft"],
-  "selection_note": "Fill results paths with the chosen best run per slot (e.g. lowest overall aurc_combined or highest overall accuracy from *_eval.json). Prefer merged AF+RF JSONs for both/pseudo experiments.",
+  "selection_note": "Fill results paths with the chosen best run per slot (e.g. lowest overall aurc_combined or highest overall accuracy from *_eval.json). Prefer merged AF+RF JSONs for both/pseudo experiments. Labels appear in the plot legend (plus entropy/combined).",
   "datasets": {
     "slake": {
       "noX": {
-        "label": "Answer-only",
+        "label": "Answer-only LLaVA-1.5 full",
         "results": "06_results/FINAL/noX/full/llava_full/slake/llava_slake_all.json"
       },
       "zeroshot": {
-        "label": "Zeroshot-Reasoning",
+        "label": "Zeroshot Qwen2.5-VL AF",
         "results": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_slake_all_answer_first.json"
       },
       "pseudo_sft": {
-        "label": "Pseudo-Reasoning SFT",
+        "label": "Pseudo-SFT Qwen2.5-VL (Qwen3-pseudo, RF+AF merged)",
         "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/slake/qwen2.5/qwen2.5-vl_slake_all.json"
       }
     },
     "vqarad": {
       "noX": {
-        "label": "Answer-only",
+        "label": "Answer-only Qwen2.5-VL full",
         "results": "06_results/FINAL/noX/full/qwen2.5_full/vqarad_MC_full_vqarad_all.json"
       },
       "zeroshot": {
-        "label": "Zeroshot-Reasoning",
+        "label": "Zeroshot Qwen3-VL AF",
         "results": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_vqarad_all_answer_first.json"
       },
       "pseudo_sft": {
-        "label": "Pseudo-Reasoning SFT",
+        "label": "Pseudo-SFT Qwen2.5-VL AF (Qwen3-pseudo)",
         "results": "06_results/FINAL/withX/pseudo_qwen3/af/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json"
       }
     },
     "medvqa2019": {
       "noX": {
-        "label": "Answer-only",
+        "label": "Answer-only Qwen3-VL LoRA",
         "results": "06_results/FINAL/noX/LoRA/qwen3_LoRA/medvqa2019/qwen3-vl_medvqa2019_all.json"
       },
       "zeroshot": {
-        "label": "Zeroshot-Reasoning",
+        "label": "Zeroshot Qwen3-VL AF",
         "results": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_medvqa2019_all_answer_first.json"
       },
       "pseudo_sft": {
-        "label": "Pseudo-Reasoning SFT",
+        "label": "Pseudo-SFT Qwen3-VL AF (Qwen3-pseudo)",
         "results": "06_results/FINAL/withX/pseudo_qwen3/af/medvqa2019/qwen3-vl_medvqa2019_all.json"
       }
     }
