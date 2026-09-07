@@ -1,10 +1,9 @@
 """
 Compare risk-coverage curves across experiment slots for each dataset.
 
-For every dataset and question type, builds a two-panel figure:
-  left  = entropy ranking
-  right = combined uncertainty ranking
-with one curve per configured slot (default: noX, zeroshot, pseudo_sft).
+For every dataset and question type, builds one figure with six curves:
+  color = experiment slot (noX / zeroshot / pseudo_sft)
+  solid = entropy ranking, dashed = combined uncertainty ranking
 
 Reuses curve / AURC helpers from risk_coverage_entropy.py.
 """
@@ -27,13 +26,17 @@ DEFAULT_SLOTS = ["noX", "zeroshot", "pseudo_sft"]
 DEFAULT_QUESTION_TYPES = ["closed", "open", "overall"]
 ANSWER_TYPE_LABEL = {"closed": "closed", "open": "open", "overall": "all"}
 
-# Color = experiment slot; linestyle fixed per panel (entropy / combined).
+# Color = experiment slot; linestyle = uncertainty measure.
 SLOT_COLORS = {
     "noX": "tab:blue",
     "zeroshot": "tab:orange",
     "pseudo_sft": "tab:green",
 }
 FALLBACK_COLORS = ["tab:purple", "tab:red", "tab:brown", "tab:pink", "tab:gray"]
+MEASURE_STYLE = {
+    "entropy": {"linestyle": "-", "curve_key": "curve_entropy", "aurc_key": "aurc_entropy"},
+    "combined": {"linestyle": "--", "curve_key": "curve_combined", "aurc_key": "aurc_combined"},
+}
 
 
 def _load_risk_coverage_module():
@@ -107,41 +110,40 @@ def plot_dataset_question_type(
     out_path: Path,
     combined_alpha: float,
 ) -> None:
-    """Two-panel RCC: entropy (left) vs combined (right), one curve per slot."""
+    """Single-axis RCC: per slot solid=entropy, dashed=combined (same color)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
-    panels = [
-        ("curve_entropy", "aurc_entropy", "Entropy ranking", axes[0]),
-        ("curve_combined", "aurc_combined", f"Combined ranking (α={combined_alpha:g})", axes[1]),
-    ]
-
-    for curve_key, aurc_key, panel_title, ax in panels:
-        for idx, payload in enumerate(slot_payloads):
-            curve = payload.get(curve_key) or []
+    for idx, payload in enumerate(slot_payloads):
+        color = slot_color(payload["slot"], idx)
+        for measure, style in MEASURE_STYLE.items():
+            curve = payload.get(style["curve_key"]) or []
             if not curve:
                 continue
             x = [row["coverage"] for row in curve]
             y = [row["risk"] for row in curve]
-            aurc = float(payload.get(aurc_key, float("nan")))
-            label = payload["label"]
+            aurc = float(payload.get(style["aurc_key"], float("nan")))
+            label = f"{payload['label']} {measure}"
             if not math.isnan(aurc):
                 label = f"{label} (AURC={aurc:.4f})"
             ax.plot(
                 x,
                 y,
                 linewidth=2.2,
-                color=slot_color(payload["slot"], idx),
+                color=color,
+                linestyle=style["linestyle"],
                 label=label,
             )
-        ax.set_title(panel_title)
-        ax.set_xlabel("Coverage")
-        ax.grid(alpha=0.25)
-        ax.legend(fontsize=8, loc="best")
 
-    axes[0].set_ylabel("Risk")
-    fig.suptitle(f"Risk–Coverage comparison — {dataset} / {answer_label}", fontsize=12)
+    ax.set_xlabel("Coverage")
+    ax.set_ylabel("Risk")
+    ax.set_title(
+        f"Risk–Coverage comparison — {dataset} / {answer_label} "
+        f"(α={combined_alpha:g})"
+    )
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     fig.savefig(out_path, dpi=180)
     plt.close(fig)

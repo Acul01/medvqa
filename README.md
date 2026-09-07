@@ -917,7 +917,7 @@ python 04_evaluation/risk_coverage_entropy.py \
 
 ### RCC-Modellvergleich (`plot_rcc_model_comparison.py`)
 
-Vergleicht pro Datensatz und Fragetyp die Risk–Coverage-Kurven der gewählten Runs: **noX**, **bestes zeroshot**, **bestes pseudo-SFT**. Jede Figur hat zwei Panels (entropy | combined).
+Vergleicht pro Datensatz und Fragetyp die Risk–Coverage-Kurven der gewählten Runs: **noX**, **bestes zeroshot**, **bestes pseudo-SFT**. Pro Modell zwei Kurven in **derselben Farbe** (durchgezogen = entropy, gestrichelt = combined).
 
 1. Pfade in [`configs/rcc_model_compare.json`](configs/rcc_model_compare.json) setzen (beste Runs manuell wählen, z. B. nach `overall.aurc_combined` / Accuracy in `*_eval.json`; bei both/pseudo die **merged** JSON).
 2. Ausführen:
