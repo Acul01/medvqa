@@ -396,6 +396,18 @@ python 03_training/train_qwen.py \
   --output_dir ./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen3/qwen3_vqarad_both/
 ```
 
+Dual-Order-Eval: zwei Inference-Läufe (RF ohne `--answer_first`, AF mit) auf demselben `*_both`-Checkpoint, dann poolen:
+
+```bash
+python 04_evaluation/merge_rf_af_results.py \
+  --rf 06_results/FINAL/withX/pseudo_qwen3/both/rf/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json \
+  --af 06_results/FINAL/withX/pseudo_qwen3/both/af/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json \
+  --output 06_results/FINAL/withX/pseudo_qwen3/both/merged/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json \
+  --evaluate
+```
+
+`agreement_samples` werden konkateniert (Default 5+5=10); `agreement` / `entropy` / `confidence` neu gemittelt; `predicted_letter` = Majority über die 10 Draws.
+
 LoRA statt Full-FT: `--use_lora` (Default-Targets: `q_proj k_proj v_proj o_proj`). Default `--output_dir`: `$MEDVQA_OUTPUTS_DIR/qwen`.
 
 ### Spatial Filter (Qwen-VL / LLaVA)
