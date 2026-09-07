@@ -10,44 +10,44 @@
   "datasets": {
     "slake": {
       "noX": {
-        "label": "noX",
-        "results": "06_results/FINAL/noX/REPLACE_WITH_BEST/slake_all.json"
+        "label": "Answer-only",
+        "results": "06_results/FINAL/noX/full/llava_full/slake/llava_slake_all.json"
       },
       "zeroshot": {
-        "label": "zeroshot",
-        "results": "06_results/FINAL/withX/zeroshot/REPLACE_WITH_BEST/slake_all.json"
+        "label": "Zeroshot-Reasoning",
+        "results": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_slake_all_answer_first.json"
       },
       "pseudo_sft": {
-        "label": "pseudo SFT",
+        "label": "Pseudo-Reasoning SFT",
         "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/slake/qwen2.5/qwen2.5-vl_slake_all.json"
       }
     },
     "vqarad": {
       "noX": {
-        "label": "noX",
-        "results": "06_results/FINAL/noX/REPLACE_WITH_BEST/vqarad_all.json"
+        "label": "Answer-only",
+        "results": "06_results/FINAL/noX/full/qwen2.5_full/vqarad_MC_full_vqarad_all.json"
       },
       "zeroshot": {
-        "label": "zeroshot",
-        "results": "06_results/FINAL/withX/zeroshot/REPLACE_WITH_BEST/vqarad_all.json"
+        "label": "Zeroshot-Reasoning",
+        "results": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_vqarad_all_answer_first.json"
       },
       "pseudo_sft": {
-        "label": "pseudo SFT",
-        "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json"
+        "label": "Pseudo-Reasoning SFT",
+        "results": "06_results/FINAL/withX/pseudo_qwen3/af/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json"
       }
     },
     "medvqa2019": {
       "noX": {
-        "label": "noX",
-        "results": "06_results/FINAL/noX/REPLACE_WITH_BEST/medvqa2019_all.json"
+        "label": "Answer-only",
+        "results": "06_results/FINAL/noX/LoRA/qwen3_LoRA/medvqa2019/qwen3-vl_medvqa2019_all.json"
       },
       "zeroshot": {
-        "label": "zeroshot",
-        "results": "06_results/FINAL/withX/zeroshot/REPLACE_WITH_BEST/medvqa2019_all.json"
+        "label": "Zeroshot-Reasoning",
+        "results": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_medvqa2019_all_answer_first.json"
       },
       "pseudo_sft": {
-        "label": "pseudo SFT",
-        "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/medvqa2019/qwen2.5/qwen2.5-vl_medvqa2019_all.json"
+        "label": "Pseudo-Reasoning SFT",
+        "results": "06_results/FINAL/withX/pseudo_qwen3/af/medvqa2019/qwen3-vl_medvqa2019_all.json"
       }
     }
   }
