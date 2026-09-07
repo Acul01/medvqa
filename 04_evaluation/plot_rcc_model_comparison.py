@@ -1,9 +1,11 @@
 """
 Compare risk-coverage curves across experiment slots for each dataset.
 
-For every dataset and question type, builds one figure with six curves:
+For every dataset and question type, writes one PDF (no title/legend) with six curves:
   color = experiment slot (noX / zeroshot / pseudo_sft)
   solid = entropy ranking, dashed = combined uncertainty ranking
+
+Caption/legend details go to rcc_model_compare_meta.json.
 
 Reuses curve / AURC helpers from risk_coverage_entropy.py.
 """
@@ -34,8 +36,18 @@ SLOT_COLORS = {
 }
 FALLBACK_COLORS = ["tab:purple", "tab:red", "tab:brown", "tab:pink", "tab:gray"]
 MEASURE_STYLE = {
-    "entropy": {"linestyle": "-", "curve_key": "curve_entropy", "aurc_key": "aurc_entropy"},
-    "combined": {"linestyle": "--", "curve_key": "curve_combined", "aurc_key": "aurc_combined"},
+    "entropy": {
+        "linestyle": "-",
+        "linestyle_name": "solid",
+        "curve_key": "curve_entropy",
+        "aurc_key": "aurc_entropy",
+    },
+    "combined": {
+        "linestyle": "--",
+        "linestyle_name": "dashed",
+        "curve_key": "curve_combined",
+        "aurc_key": "aurc_combined",
+    },
 }
 
 
@@ -109,11 +121,12 @@ def plot_dataset_question_type(
     question_type: str,
     out_path: Path,
     combined_alpha: float,
-) -> None:
-    """Single-axis RCC: per slot solid=entropy, dashed=combined (same color)."""
+) -> Dict[str, Any]:
+    """Single-axis RCC without title/legend: solid=entropy, dashed=combined."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+    curves_meta: List[Dict[str, Any]] = []
 
     for idx, payload in enumerate(slot_payloads):
         color = slot_color(payload["slot"], idx)
@@ -124,29 +137,52 @@ def plot_dataset_question_type(
             x = [row["coverage"] for row in curve]
             y = [row["risk"] for row in curve]
             aurc = float(payload.get(style["aurc_key"], float("nan")))
-            label = f"{payload['label']} {measure}"
-            if not math.isnan(aurc):
-                label = f"{label} (AURC={aurc:.4f})"
             ax.plot(
                 x,
                 y,
                 linewidth=2.2,
                 color=color,
                 linestyle=style["linestyle"],
-                label=label,
+            )
+            curves_meta.append(
+                {
+                    "slot": payload["slot"],
+                    "label": payload["label"],
+                    "measure": measure,
+                    "linestyle": style["linestyle_name"],
+                    "color": color,
+                    "aurc": None if math.isnan(aurc) else aurc,
+                    "valid_samples": payload.get("valid_samples"),
+                    "filtered_rows": payload.get("filtered_rows"),
+                    "results_file": payload.get("results_file"),
+                }
             )
 
     ax.set_xlabel("Coverage")
     ax.set_ylabel("Risk")
-    ax.set_title(
-        f"Risk–Coverage comparison — {dataset} / {answer_label} "
-        f"(α={combined_alpha:g})"
-    )
     ax.grid(alpha=0.25)
-    ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
-    fig.savefig(out_path, dpi=180)
+    fig.savefig(out_path, format="pdf")
     plt.close(fig)
+
+    return {
+        "file": out_path.name,
+        "path": str(out_path),
+        "dataset": dataset,
+        "question_type": question_type,
+        "answer_type_label": answer_label,
+        "title_suggested": (
+            f"Risk–Coverage comparison — {dataset} / {answer_label} "
+            f"(α={combined_alpha:g})"
+        ),
+        "axis_labels": {"x": "Coverage", "y": "Risk"},
+        "encoding": {
+            "color": "experiment slot (model)",
+            "linestyle_solid": "entropy ranking",
+            "linestyle_dashed": "combined uncertainty ranking",
+        },
+        "curves": curves_meta,
+    }
 
 
 def write_aurc_table_csv(rows: List[Dict[str, Any]], path: Path) -> None:
@@ -271,6 +307,7 @@ def main() -> None:
 
     rce = _load_risk_coverage_module()
     all_table_rows: List[Dict[str, Any]] = []
+    figure_metas: List[Dict[str, Any]] = []
     summary: Dict[str, Any] = {
         "config": str(config_path),
         "combined_alpha": combined_alpha,
@@ -364,14 +401,15 @@ def main() -> None:
                 }
 
             answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
-            fig_path = out_dir / f"{dataset}_{answer_label}.png"
-            plot_dataset_question_type(
+            fig_path = out_dir / f"{dataset}_{answer_label}.pdf"
+            fig_meta = plot_dataset_question_type(
                 slot_payloads,
                 dataset=dataset,
                 question_type=question_type,
                 out_path=fig_path,
                 combined_alpha=combined_alpha,
             )
+            figure_metas.append(fig_meta)
             ds_summary["figures"][question_type] = str(fig_path)
             print(f"Saved: {fig_path}")
 
@@ -380,12 +418,33 @@ def main() -> None:
 
     table_path = out_dir / "rcc_model_compare_aurc.csv"
     summary_path = out_dir / "rcc_model_compare_summary.json"
+    meta_path = out_dir / "rcc_model_compare_meta.json"
     write_aurc_table_csv(all_table_rows, table_path)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
+    meta = {
+        "config": str(config_path),
+        "combined_alpha": combined_alpha,
+        "num_thresholds": num_thresholds,
+        "risk_metric": risk_metric,
+        "max_entropy": max_entropy,
+        "slots": slots,
+        "question_types": question_types,
+        "output_dir": str(out_dir),
+        "legend_encoding": {
+            "color": "experiment slot / model (see curves[].color)",
+            "solid": "entropy ranking",
+            "dashed": "combined uncertainty ranking",
+        },
+        "figures": figure_metas,
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
     print(f"\nSaved: {table_path}")
     print(f"Saved: {summary_path}")
+    print(f"Saved: {meta_path}")
 
 
 if __name__ == "__main__":

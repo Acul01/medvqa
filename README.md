@@ -928,7 +928,7 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 # optional: --datasets slake vqarad --output_dir 06_results/FINAL/rcc_compare
 ```
 
-Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.png`, `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Nutzt dieselbe Dual-AURC-Logik wie `risk_coverage_entropy.py` (`combined_alpha` aus Config, Default 0.5).
+Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.pdf` (ohne Titel/Legende), `rcc_model_compare_meta.json` (Labels, Farben, Linienstil, AURC für Captions), `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Nutzt dieselbe Dual-AURC-Logik wie `risk_coverage_entropy.py` (`combined_alpha` aus Config, Default 0.5).
 
 ### Geplant: ECE & erweiterte Kalibrierung
 
