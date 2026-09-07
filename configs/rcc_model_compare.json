@@ -1,0 +1,54 @@
+{
+  "combined_alpha": 0.5,
+  "num_thresholds": 200,
+  "risk_metric": "match",
+  "max_entropy": null,
+  "question_types": ["closed", "open", "overall"],
+  "output_dir": "06_results/FINAL/rcc_compare",
+  "slots": ["noX", "zeroshot", "pseudo_sft"],
+  "selection_note": "Fill results paths with the chosen best run per slot (e.g. lowest overall aurc_combined or highest overall accuracy from *_eval.json). Prefer merged AF+RF JSONs for both/pseudo experiments.",
+  "datasets": {
+    "slake": {
+      "noX": {
+        "label": "noX",
+        "results": "06_results/FINAL/noX/REPLACE_WITH_BEST/slake_all.json"
+      },
+      "zeroshot": {
+        "label": "zeroshot",
+        "results": "06_results/FINAL/withX/zeroshot/REPLACE_WITH_BEST/slake_all.json"
+      },
+      "pseudo_sft": {
+        "label": "pseudo SFT",
+        "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/slake/qwen2.5/qwen2.5-vl_slake_all.json"
+      }
+    },
+    "vqarad": {
+      "noX": {
+        "label": "noX",
+        "results": "06_results/FINAL/noX/REPLACE_WITH_BEST/vqarad_all.json"
+      },
+      "zeroshot": {
+        "label": "zeroshot",
+        "results": "06_results/FINAL/withX/zeroshot/REPLACE_WITH_BEST/vqarad_all.json"
+      },
+      "pseudo_sft": {
+        "label": "pseudo SFT",
+        "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/vqarad/qwen2.5/qwen2.5-vl_vqarad_all.json"
+      }
+    },
+    "medvqa2019": {
+      "noX": {
+        "label": "noX",
+        "results": "06_results/FINAL/noX/REPLACE_WITH_BEST/medvqa2019_all.json"
+      },
+      "zeroshot": {
+        "label": "zeroshot",
+        "results": "06_results/FINAL/withX/zeroshot/REPLACE_WITH_BEST/medvqa2019_all.json"
+      },
+      "pseudo_sft": {
+        "label": "pseudo SFT",
+        "results": "06_results/FINAL/withX/pseudo_qwen3/both/merged/medvqa2019/qwen2.5/qwen2.5-vl_medvqa2019_all.json"
+      }
+    }
+  }
+}

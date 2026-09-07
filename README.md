@@ -55,7 +55,7 @@ Dieses Repository dient gleichzeitig als Codebasis für eine **Masterarbeit** zu
 | Inferenz Qwen-VL (2.5 / 3) + Unsicherheitsmetriken | **Implementiert** (`04_evaluation/inference_qwen.py`) |
 | Inferenz MedVLM-R1 (off-the-shelf, Accuracy + Agreement) | **Implementiert** (`04_evaluation/inference_medvlm_r1.py`) |
 | Metriken auf Ergebnis-JSON (Accuracy-Gruppen, BLEU, ROUGE-L, BERTScore, mittlere Token-Entropie) | **Implementiert** (`04_evaluation/evaluate.py`) |
-| Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`04_evaluation/risk_coverage_entropy.py`) |
+| Risk–Coverage-Sweep, AURC, Plots | **Implementiert** (`risk_coverage_entropy.py`, `plot_rcc_model_comparison.py`) |
 | Selector / MLP-Workflow (LLaVA-Med-Features) | **Implementiert** (`04_evaluation/selector_multimodal.py`) |
 | **5-fach Sampling + Agreement** | **Implementiert** (`04_evaluation/inference.py`, `inference_med.py`) |
 | **Pfad 2: Evidence-JSON, konditionierte finale Antwort** | **Geplant** |
@@ -130,6 +130,7 @@ flowchart LR
 | `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
 | `04_evaluation/evaluate.py` | Aggregierte Metriken aus JSON |
 | `04_evaluation/risk_coverage_entropy.py` | Entropie-Schwellen, Risk–Coverage, **AURC** |
+| `04_evaluation/plot_rcc_model_comparison.py` | RCC-Vergleich noX / zeroshot / pseudo-SFT (Config) |
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
 | `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
@@ -913,6 +914,21 @@ python 04_evaluation/risk_coverage_entropy.py \
 - Terminal: kompakte **AURC-Tabelle** in der Reihenfolge `closed | open | overall`.
 
 **Logik:** Bei `entropy` werden Samples mit **kleiner/gleich Schwelle** beantwortet; bei `agreement`/`confidence` mit **größer/gleich Schwelle**.
+
+### RCC-Modellvergleich (`plot_rcc_model_comparison.py`)
+
+Vergleicht pro Datensatz und Fragetyp die Risk–Coverage-Kurven der gewählten Runs: **noX**, **bestes zeroshot**, **bestes pseudo-SFT**. Jede Figur hat zwei Panels (entropy | combined).
+
+1. Pfade in [`configs/rcc_model_compare.json`](configs/rcc_model_compare.json) setzen (beste Runs manuell wählen, z. B. nach `overall.aurc_combined` / Accuracy in `*_eval.json`; bei both/pseudo die **merged** JSON).
+2. Ausführen:
+
+```bash
+python 04_evaluation/plot_rcc_model_comparison.py \
+  --config configs/rcc_model_compare.json
+# optional: --datasets slake vqarad --output_dir 06_results/FINAL/rcc_compare
+```
+
+Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.png`, `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Nutzt dieselbe Dual-AURC-Logik wie `risk_coverage_entropy.py` (`combined_alpha` aus Config, Default 0.5).
 
 ### Geplant: ECE & erweiterte Kalibrierung
 
