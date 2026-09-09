@@ -938,7 +938,7 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 # optional: --experiments zeroshot --datasets vqarad
 ```
 
-Ausgaben unter `06_results/FINAL/rcc_experiment_specs/{answer_only|zeroshot|pseudo_sft}/`. Templates in der Config bei Bedarf an eure echten Dateinamen anpassen.
+Ausgaben unter `06_results/FINAL/rcc_experiment_specs/{answer_only|zeroshot|pseudo_sft}/` (PDFs + je Ordner Meta/CSV). Die kombinierten Dateien im Parent-Ordner werden aus den Experiment-Unterordnern zusammengebaut, damit `--experiments pseudo_sft` Answer-only/Zeroshot nicht überschreibt.
 
 ### Geplant: ECE & erweiterte Kalibrierung
 

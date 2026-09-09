@@ -495,6 +495,63 @@ def _write_outputs(
     print(f"Saved: {meta_path}")
 
 
+def _read_csv_rows(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _write_combined_from_experiment_dirs(out_dir: Path, extra_meta: Dict[str, Any]) -> None:
+    """Rebuild top-level JSON/CSV from per-experiment artifacts so subset reruns do not wipe others."""
+    table_rows: List[Dict[str, Any]] = []
+    figures: List[Dict[str, Any]] = []
+    experiments: Dict[str, Any] = {}
+    experiment_ids: List[str] = []
+    for child in sorted(p for p in out_dir.iterdir() if p.is_dir()):
+        meta_path = child / "rcc_model_compare_meta.json"
+        summary_path = child / "rcc_model_compare_summary.json"
+        csv_path = child / "rcc_model_compare_aurc.csv"
+        if not meta_path.exists():
+            continue
+        experiment_ids.append(child.name)
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        figures.extend(meta.get("figures") or [])
+        table_rows.extend(_read_csv_rows(csv_path))
+        if summary_path.exists():
+            with open(summary_path, encoding="utf-8") as f:
+                summary = json.load(f)
+            exp_block = (summary.get("experiments") or {}).get(child.name)
+            if exp_block:
+                experiments[child.name] = exp_block
+    combined_summary = {
+        **{k: extra_meta.get(k) for k in (
+            "config", "mode", "combined_alpha", "num_thresholds",
+            "risk_metric", "max_entropy", "question_types", "output_dir",
+        )},
+        "experiments": experiments,
+        "merged_from": experiment_ids,
+    }
+    extra = {
+        **extra_meta,
+        "experiments": experiment_ids,
+        "merged_from": experiment_ids,
+        "note": (
+            "Combined caption/AURC files merge per-experiment artifacts under "
+            "output_dir/<experiment>/. Re-running one experiment updates only that "
+            "subdir and then rebuilds these combined files."
+        ),
+    }
+    _write_outputs(
+        out_dir=out_dir,
+        all_table_rows=table_rows,
+        summary=combined_summary,
+        figure_metas=figures,
+        extra_meta=extra,
+    )
+
+
 def run_best_of_mode(
     *,
     args,
@@ -641,6 +698,8 @@ def run_experiment_spec_mode(
         exp_out = out_dir / experiment
         exp_out.mkdir(parents=True, exist_ok=True)
         summary["experiments"][experiment] = {"label": experiment_label, "datasets": {}}
+        exp_table_rows: List[Dict[str, Any]] = []
+        exp_figure_metas: List[Dict[str, Any]] = []
 
         for dataset in dataset_keys:
             loaded: Dict[str, Dict[str, Any]] = {}
@@ -685,13 +744,44 @@ def run_experiment_spec_mode(
             )
             all_table_rows.extend(table_rows)
             figure_metas.extend(figs)
+            exp_table_rows.extend(table_rows)
+            exp_figure_metas.extend(figs)
             summary["experiments"][experiment]["datasets"][dataset] = ds_summary
 
-    _write_outputs(
-        out_dir=out_dir,
-        all_table_rows=all_table_rows,
-        summary=summary,
-        figure_metas=figure_metas,
+        _write_outputs(
+            out_dir=exp_out,
+            all_table_rows=exp_table_rows,
+            summary={
+                "config": str(config_path),
+                "mode": "experiment_specs",
+                "experiment": experiment,
+                "experiment_label": experiment_label,
+                "combined_alpha": settings["combined_alpha"],
+                "num_thresholds": settings["num_thresholds"],
+                "risk_metric": settings["risk_metric"],
+                "max_entropy": settings["max_entropy"],
+                "question_types": settings["question_types"],
+                "output_dir": str(exp_out),
+                "experiments": {experiment: summary["experiments"][experiment]},
+            },
+            figure_metas=exp_figure_metas,
+            extra_meta={
+                "config": str(config_path),
+                "mode": "experiment_specs",
+                "experiment": experiment,
+                "experiment_label": experiment_label,
+                "combined_alpha": settings["combined_alpha"],
+                "num_thresholds": settings["num_thresholds"],
+                "risk_metric": settings["risk_metric"],
+                "max_entropy": settings["max_entropy"],
+                "question_types": settings["question_types"],
+                "output_dir": str(exp_out),
+                "experiments": [experiment],
+            },
+        )
+
+    _write_combined_from_experiment_dirs(
+        out_dir,
         extra_meta={
             "config": str(config_path),
             "mode": "experiment_specs",
@@ -701,7 +791,6 @@ def run_experiment_spec_mode(
             "max_entropy": settings["max_entropy"],
             "question_types": settings["question_types"],
             "output_dir": str(out_dir),
-            "experiments": experiment_keys,
         },
     )
 
