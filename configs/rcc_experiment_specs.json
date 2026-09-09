@@ -30,15 +30,22 @@
         {
           "id": "qwen2.5_full",
           "label": "Qwen2.5-VL full",
-          "results_template": "06_results/FINAL/noX/full/qwen2.5_full/{dataset}/qwen2.5-vl_{dataset}_all.json",
-          "results": {
-            "vqarad": "06_results/FINAL/noX/full/qwen2.5_full/vqarad_MC_full_vqarad_all.json"
-          }
+          "results_templates": [
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}_MC_full_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json"
+          ]
         },
         {
           "id": "qwen2.5_lora",
           "label": "Qwen2.5-VL LoRA",
-          "results_template": "06_results/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}/qwen2.5-vl_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}_MC_LoRA_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_LoRA/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_lora/qwen2.5-vl_{dataset}_all.json"
+          ]
         },
         {
           "id": "qwen3_full",
@@ -123,12 +130,20 @@
         {
           "id": "llava_rf",
           "label": "LLaVA-1.5 RF (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava/llava_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava/llava_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/llava/{dataset}/llava_{dataset}_all.json"
+          ]
         },
         {
           "id": "llava_af",
           "label": "LLaVA-1.5 AF (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/llava/llava_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/llava/llava_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/llava_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/af/llava/{dataset}/llava_{dataset}_all.json"
+          ]
         },
         {
           "id": "qwen2.5_rf",
@@ -148,22 +163,35 @@
         {
           "id": "qwen3_rf",
           "label": "Qwen3-VL RF (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3-vl_{dataset}_all.json"
+          ]
         },
         {
           "id": "qwen3_af",
           "label": "Qwen3-VL AF (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3/qwen3-vl_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3-vl_{dataset}_all.json"
+          ]
         },
         {
           "id": "qwen3_both",
           "label": "Qwen3-VL RF+AF merged (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen3/qwen3-vl_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen3-vl_{dataset}_all.json"
+          ]
         },
         {
           "id": "qwen2.5_som",
           "label": "Qwen2.5-VL SOM (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_som/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_som/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_som/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_som/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+          ]
         }
       ]
     }

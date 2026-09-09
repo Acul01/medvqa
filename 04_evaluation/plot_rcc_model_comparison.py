@@ -241,36 +241,52 @@ def print_dataset_aurc_table(dataset: str, slot_rows: List[Dict[str, Any]], ques
         print(line)
 
 
-def resolve_run_path(run: Dict[str, Any], dataset: str, repo_root: Path) -> Path | None:
-    """Resolve a results JSON path for one run × dataset (template or override)."""
+def candidate_result_paths(run: Dict[str, Any], dataset: str, repo_root: Path) -> List[Path]:
+    """Collect candidate results JSON paths (overrides, then templates)."""
+    raws: List[str] = []
     results = run.get("results")
-    raw: str | None = None
     if isinstance(results, dict) and dataset in results and results[dataset]:
-        raw = str(results[dataset])
+        value = results[dataset]
+        if isinstance(value, list):
+            raws.extend(str(item) for item in value if item)
+        else:
+            raws.append(str(value))
     elif isinstance(results, str) and results.strip():
-        raw = results
-    elif run.get("results_template"):
-        raw = str(run["results_template"])
-    if raw is None:
-        return None
-    raw = raw.replace("{dataset}", dataset)
-    return resolve_path(raw, repo_root)
+        raws.append(results)
+    if run.get("results_template"):
+        raws.append(str(run["results_template"]))
+    for template in run.get("results_templates") or []:
+        if template:
+            raws.append(str(template))
+
+    paths: List[Path] = []
+    seen: set[str] = set()
+    for raw in raws:
+        resolved = str(resolve_path(raw.replace("{dataset}", dataset), repo_root))
+        if resolved not in seen:
+            seen.add(resolved)
+            paths.append(Path(resolved))
+    return paths
 
 
-def load_results_if_present(
+def load_first_existing_results(
     rce: Any,
-    results_path: Path,
+    candidates: List[Path],
     *,
     skip_missing: bool,
     context: str,
-) -> List[Dict] | None:
-    if not results_path.exists():
-        message = f"Results file not found for {context}: {results_path}"
-        if skip_missing:
-            print(f"skip: {message}")
-            return None
-        raise FileNotFoundError(message)
-    return rce.load_results(results_path)
+) -> tuple[List[Dict] | None, Path | None]:
+    tried: List[Path] = []
+    for path in candidates:
+        tried.append(path)
+        if path.exists():
+            return rce.load_results(path), path
+    detail = "; ".join(str(p) for p in tried) if tried else "(no path configured)"
+    message = f"Results file not found for {context}: {detail}"
+    if skip_missing:
+        print(f"skip: {message}")
+        return None, None
+    raise FileNotFoundError(message)
 
 
 def plot_group_for_dataset(
@@ -525,19 +541,19 @@ def run_best_of_mode(
             if not isinstance(entry, dict) or "results" not in entry:
                 raise ValueError(f"datasets['{dataset}']['{slot}'] must have a 'results' path.")
             results_path = resolve_path(str(entry["results"]), repo_root)
-            rows = load_results_if_present(
+            rows, used_path = load_first_existing_results(
                 rce,
-                results_path,
+                [results_path],
                 skip_missing=skip_missing,
                 context=f"{dataset}/{slot}",
             )
-            if rows is None:
+            if rows is None or used_path is None:
                 continue
             loaded[slot] = {
                 "slot": slot,
                 "label": str(entry.get("label") or slot),
                 "color": entry.get("color"),
-                "results_path": results_path,
+                "results_path": used_path,
                 "results": rows,
             }
         if not loaded:
@@ -632,23 +648,23 @@ def run_experiment_spec_mode(
                 if not isinstance(run, dict) or "id" not in run:
                     raise ValueError(f"Each run in {experiment} needs an 'id'.")
                 slot = str(run["id"])
-                results_path = resolve_run_path(run, dataset, repo_root)
-                if results_path is None:
+                candidates = candidate_result_paths(run, dataset, repo_root)
+                if not candidates:
                     print(f"skip: no path for {experiment}/{dataset}/{slot}")
                     continue
-                rows = load_results_if_present(
+                rows, used_path = load_first_existing_results(
                     rce,
-                    results_path,
+                    candidates,
                     skip_missing=skip_missing,
                     context=f"{experiment}/{dataset}/{slot}",
                 )
-                if rows is None:
+                if rows is None or used_path is None:
                     continue
                 loaded[slot] = {
                     "slot": slot,
                     "label": str(run.get("label") or slot),
                     "color": run.get("color"),
-                    "results_path": results_path,
+                    "results_path": used_path,
                     "results": rows,
                 }
             if not loaded:
