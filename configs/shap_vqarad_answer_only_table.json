@@ -25,17 +25,6 @@
       }
     },
     {
-      "key": "llava-med",
-      "shap_model": "llava-med",
-      "group_label": "LLaVA-Med",
-      "base": {
-        "model_path": "microsoft/llava-med-v1.5-mistral-7b"
-      },
-      "full": {
-        "model_path": "./05_outputs/mc/FINAL/noX/llava-med/vqarad_MC_full"
-      }
-    },
-    {
       "key": "qwen2.5",
       "shap_model": "qwen",
       "group_label": "Qwen2.5",
