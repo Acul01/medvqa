@@ -102,7 +102,14 @@ def load_llava(model_path: str, device: torch.device):
         model_path, torch_dtype=torch.float32, device_map="auto"
     )
     model.eval()
-    processor = AutoProcessor.from_pretrained(model_path)
+    processor_path = model_path
+    if (Path(model_path) / "adapter_config.json").exists():
+        processor_path = LLAVA_DEFAULT
+    if Path(processor_path).exists() and not (Path(processor_path) / "preprocessor_config.json").exists():
+        processor_path = LLAVA_DEFAULT
+    if processor_path != model_path:
+        print(f"Processor not in checkpoint, loading from: {processor_path}")
+    processor = AutoProcessor.from_pretrained(processor_path)
     if getattr(processor, "patch_size", None) is None:
         processor.patch_size = 14
     if getattr(processor, "vision_feature_select_strategy", None) is None:
