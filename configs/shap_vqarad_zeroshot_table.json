@@ -1,0 +1,31 @@
+{
+  "dataset": "vqarad",
+  "split": "test",
+  "seed": 42,
+  "n_closed": 0,
+  "n_open": 4,
+  "max_evals": 300,
+  "experiment": "zeroshot",
+  "shap_root": "06_results/shap_outputs/vqarad_zeroshot_table",
+  "figure_name": "vqarad_zeroshot_shap_table",
+  "variants": [
+    {"tag": "af", "label": "af", "json_order": "answer_first"},
+    {"tag": "rf", "label": "rf", "json_order": "rationale_first"},
+    {"tag": "2s", "label": "2s", "json_order": "rationale_first_2stage"},
+    {"tag": "2s-L", "label": "2s-L", "json_order": "rationale_first_2stage_norat"}
+  ],
+  "models": [
+    {
+      "key": "llava",
+      "shap_model": "llava",
+      "group_label": "llava",
+      "model_path": "llava-hf/llava-1.5-7b-hf"
+    },
+    {
+      "key": "qwen2.5",
+      "shap_model": "qwen",
+      "group_label": "qwen2.5",
+      "model_path": "Qwen/Qwen2.5-VL-7B-Instruct"
+    }
+  ]
+}

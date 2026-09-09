@@ -1,0 +1,50 @@
+{
+  "dataset": "vqarad",
+  "split": "test",
+  "seed": 42,
+  "n_closed": 0,
+  "n_open": 4,
+  "max_evals": 300,
+  "experiment": "answer_only",
+  "shap_root": "06_results/shap_outputs/vqarad_answer_only_table",
+  "figure_name": "vqarad_answer_only_shap_table",
+  "variants": [
+    {"tag": "base", "label": "base", "json_order": "answer_only", "path_key": "base"},
+    {"tag": "full", "label": "full", "json_order": "answer_only", "path_key": "full"}
+  ],
+  "models": [
+    {
+      "key": "llava",
+      "shap_model": "llava",
+      "group_label": "LLaVA",
+      "base": {
+        "model_path": "llava-hf/llava-1.5-7b-hf"
+      },
+      "full": {
+        "model_path": "./05_outputs/mc/FINAL/noX/llava/vqarad_MC_full"
+      }
+    },
+    {
+      "key": "llava-med",
+      "shap_model": "llava-med",
+      "group_label": "LLaVA-Med",
+      "base": {
+        "model_path": "microsoft/llava-med-v1.5-mistral-7b"
+      },
+      "full": {
+        "model_path": "./05_outputs/mc/FINAL/noX/llava-med/vqarad_MC_full"
+      }
+    },
+    {
+      "key": "qwen2.5",
+      "shap_model": "qwen",
+      "group_label": "Qwen2.5",
+      "base": {
+        "model_path": "Qwen/Qwen2.5-VL-7B-Instruct"
+      },
+      "full": {
+        "model_path": "./05_outputs/mc/FINAL/noX/qwen2.5/vqarad_MC_full"
+      }
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "dataset": "vqarad",
+  "split": "test",
+  "seed": 42,
+  "n_closed": 0,
+  "n_open": 4,
+  "max_evals": 300,
+  "experiment": "pseudo",
+  "show_qa_row": true,
+  "shap_root": "06_results/shap_outputs/vqarad_pseudo_sft_table",
+  "figure_name": "vqarad_pseudo_sft_shap_table",
+  "models": [
+    {
+      "key": "llava",
+      "shap_model": "llava",
+      "group_label": "llava",
+      "rows": [
+        {"type": "original", "label": "Images"},
+        {
+          "type": "shap",
+          "tag": "rf",
+          "label": "rf",
+          "json_order": "rationale_first",
+          "path_key": "rf"
+        },
+        {
+          "type": "shap",
+          "tag": "af",
+          "label": "af",
+          "json_order": "answer_first",
+          "path_key": "af"
+        }
+      ],
+      "rf": {
+        "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/llava/llava_vqarad_rf"
+      },
+      "af": {
+        "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/llava/llava_vqarad_af"
+      }
+    },
+    {
+      "key": "qwen2.5",
+      "shap_model": "qwen",
+      "group_label": "qwen2.5",
+      "rows": [
+        {
+          "type": "shap",
+          "tag": "rf",
+          "label": "rf",
+          "json_order": "rationale_first",
+          "path_key": "rf"
+        },
+        {
+          "type": "shap",
+          "tag": "af",
+          "label": "af",
+          "json_order": "answer_first",
+          "path_key": "af"
+        },
+        {
+          "type": "shap",
+          "tag": "rf+af",
+          "label": "rf+af",
+          "json_order": "answer_first",
+          "path_key": "both"
+        }
+      ],
+      "rf": {
+        "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_vqarad_rf"
+      },
+      "af": {
+        "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_vqarad_af"
+      },
+      "both": {
+        "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_vqarad_both"
+      }
+    }
+  ]
+}

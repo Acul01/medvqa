@@ -1,4 +1,4 @@
-"""SHAP-based visual explanation for LLaVA and Qwen MC-VQA inference.
+"""SHAP-based visual explanation for LLaVA, LLaVA-Med, and Qwen MC-VQA inference.
 
 Supports experiment modes that match the inference scripts:
   answer_only  — plain MC letter (noX / answer-only SFT)
@@ -33,6 +33,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -51,8 +52,10 @@ from utils.mc_json_zeroshot import (
     build_qwen_json_conversation,
     build_qwen_stage1_conversation,
     build_qwen_stage2_conversation,
+    build_qwen_stage2_json_conversation,
     build_stage1_rationale_prompt,
     build_stage2_answer_prompt,
+    build_stage2_json_prompt,
     cast_json_single_shot,
     find_answer_token_step,
     get_answer_letter_token_ids,
@@ -64,9 +67,27 @@ from utils.paths import get_data_root, get_mc_data_root
 from utils.save_results import clean_answer
 
 LLAVA_DEFAULT = "llava-hf/llava-1.5-7b-hf"
+LLAVA_MED_DEFAULT = "microsoft/llava-med-v1.5-mistral-7b"
 QWEN_DEFAULT = "Qwen/Qwen2.5-VL-7B-Instruct"
 PSEUDO_JSON_MAX_NEW_TOKENS = 320
 ANSWER_ONLY_MAX_NEW_TOKENS = 10
+TWO_STAGE_ORDERS = ("rationale_first_2stage", "rationale_first_2stage_norat")
+TWO_STAGE_NORAT = "rationale_first_2stage_norat"
+DEFAULT_MODEL_PATHS = {
+    "llava": LLAVA_DEFAULT,
+    "llava-med": LLAVA_MED_DEFAULT,
+    "qwen": QWEN_DEFAULT,
+}
+
+
+def resolve_existing_model_path(model_path: str) -> str:
+    """Use an absolute path when the checkpoint exists locally (avoids HF repo-id errors)."""
+    if not model_path:
+        return model_path
+    path = Path(model_path)
+    if path.exists():
+        return str(path.resolve())
+    return model_path
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +97,7 @@ ANSWER_ONLY_MAX_NEW_TOKENS = 10
 def load_llava(model_path: str, device: torch.device):
     from transformers import AutoProcessor, LlavaForConditionalGeneration
 
+    model_path = resolve_existing_model_path(model_path)
     model = LlavaForConditionalGeneration.from_pretrained(
         model_path, torch_dtype=torch.float32, device_map="auto"
     )
@@ -99,6 +121,7 @@ def load_qwen(model_path: str, device: torch.device):
     )
     from utils.qwen_vl import configure_qwen_processor_pixels, resolve_processor_path
 
+    model_path = resolve_existing_model_path(model_path)
     model, resolved = load_qwen_vl_for_inference(
         model_path, torch_dtype=torch.float32, device_map="auto"
     )
@@ -127,6 +150,29 @@ def load_qwen(model_path: str, device: torch.device):
     return model, processor
 
 
+def load_llava_med(model_path: str, dtype_name: str = "bfloat16"):
+    """Load LLaVA-Med via the inference loader (tokenizer + CLIP image processor)."""
+    import importlib.util
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location(
+        "inference_llava_med_shap",
+        Path(__file__).resolve().parent / "inference_llava-med.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    args = SimpleNamespace(
+        model_path=resolve_existing_model_path(model_path),
+        model_base=None,
+        dtype=dtype_name,
+        mode="eval",
+        use_gradcam=False,
+    )
+    device, model, tokenizer, image_processor = mod.load_llava_med_bundle(args)
+    return device, model, tokenizer, image_processor
+
+
 # ---------------------------------------------------------------------------
 # Prompts (match the corresponding inference script)
 # ---------------------------------------------------------------------------
@@ -145,9 +191,13 @@ def build_qwen_prompt_conversation(
 ) -> list[dict]:
     from utils.qwen_vl import build_mc_conversation, build_mc_reasoning_inference_conversation
 
-    if json_order == "rationale_first_2stage":
+    if json_order == TWO_STAGE_NORAT:
         return build_qwen_stage2_conversation(
             question, options, rationale=rationale or "", image=image
+        )
+    if json_order == "rationale_first_2stage":
+        return build_qwen_stage2_json_conversation(
+            question, options, reasoning=rationale or "", image=image
         )
     if experiment == "answer_only" or json_order == "answer_only":
         return build_mc_conversation(question, options, image=image)
@@ -169,8 +219,10 @@ def build_llava_user_text(
 ) -> str:
     from utils.qwen_vl import format_mc_reasoning_user_text
 
-    if json_order == "rationale_first_2stage":
+    if json_order == TWO_STAGE_NORAT:
         return build_stage2_answer_prompt(question, options, rationale or "")
+    if json_order == "rationale_first_2stage":
+        return build_stage2_json_prompt(question, options, rationale or "")
     if experiment == "answer_only" or json_order == "answer_only":
         return format_mc_user_text(question, options)
     if experiment == "pseudo":
@@ -198,6 +250,39 @@ def _llava_inputs(processor, user_text: str, image: Image.Image, device: torch.d
     conv = _llava_conversation(user_text)
     prompt = processor.apply_chat_template(conv, add_generation_prompt=True)
     return processor(images=image, text=prompt, return_tensors="pt").to(device)
+
+
+def _llava_med_inputs(
+    model,
+    tokenizer,
+    image_processor,
+    user_text: str,
+    image: Image.Image,
+    device: torch.device,
+    conv_template: str = "mistral_instruct",
+) -> dict:
+    from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
+    from llava.conversation import conv_templates
+    from llava.mm_utils import process_images, tokenizer_image_token
+
+    image_tensor = process_images([image.convert("RGB")], image_processor, model.config)
+    if image_tensor.ndim == 3:
+        image_tensor = image_tensor.unsqueeze(0)
+    dtype = next(model.parameters()).dtype
+    image_tensor = image_tensor.to(device=device, dtype=dtype)
+
+    conv = conv_templates[conv_template].copy()
+    conv.append_message(conv.roles[0], f"{DEFAULT_IMAGE_TOKEN}\n{user_text}")
+    conv.append_message(conv.roles[1], None)
+    prompt = conv.get_prompt()
+    input_ids = tokenizer_image_token(
+        prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
+    ).unsqueeze(0).to(device)
+    return {
+        "input_ids": input_ids,
+        "images": image_tensor,
+        "attention_mask": torch.ones_like(input_ids),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +341,8 @@ def _json_answer_token_prob(
     return float(probs[valid_ids].max().item())
 
 
-def _valid_answer_ids(processor, num_opts: int) -> dict[int, str]:
-    answer_token_ids = get_answer_letter_token_ids(processor.tokenizer)
+def _valid_answer_ids_from_tokenizer(tokenizer, num_opts: int) -> dict[int, str]:
+    answer_token_ids = get_answer_letter_token_ids(tokenizer)
     return {
         tid: letter
         for tid, letter in answer_token_ids.items()
@@ -265,7 +350,13 @@ def _valid_answer_ids(processor, num_opts: int) -> dict[int, str]:
     }
 
 
+def _valid_answer_ids(processor, num_opts: int) -> dict[int, str]:
+    return _valid_answer_ids_from_tokenizer(processor.tokenizer, num_opts)
+
+
 def _uses_json_generate(experiment: str, json_order: str) -> bool:
+    if json_order == "rationale_first_2stage":
+        return True
     return experiment in ("zeroshot", "pseudo") and is_json_single_shot(json_order)
 
 
@@ -334,6 +425,34 @@ def make_llava_scorer(
                 )
             else:
                 scores.append(_answer_token_prob(model, inputs, valid_answer_ids))
+        return np.array(scores)
+
+    return score_fn
+
+
+def make_llava_med_scorer(
+    model,
+    tokenizer,
+    image_processor,
+    question: str,
+    options: list[str],
+    experiment: str,
+    json_order: str,
+    device: torch.device,
+    max_new_tokens: int,
+    rationale: str | None = None,
+):
+    if experiment != "answer_only" and json_order != "answer_only":
+        raise NotImplementedError("LLaVA-Med SHAP currently supports --experiment answer_only only.")
+    valid_answer_ids = _valid_answer_ids_from_tokenizer(tokenizer, len(options))
+    user_text = format_mc_user_text(question, options)
+
+    def score_fn(images_np: np.ndarray) -> np.ndarray:
+        scores = []
+        for img_np in images_np:
+            img = Image.fromarray(img_np.astype(np.uint8))
+            inputs = _llava_med_inputs(model, tokenizer, image_processor, user_text, img, device)
+            scores.append(_answer_token_prob(model, inputs, valid_answer_ids))
         return np.array(scores)
 
     return score_fn
@@ -425,8 +544,32 @@ def generate_prediction_llava(
     return _decode_llava_new(processor, out.sequences, input_length)
 
 
+def generate_prediction_llava_med(
+    model,
+    tokenizer,
+    image_processor,
+    image: Image.Image,
+    question: str,
+    options: list[str],
+    device: torch.device,
+    max_new_tokens: int,
+) -> str:
+    user_text = format_mc_user_text(question, options)
+    inputs = _llava_med_inputs(model, tokenizer, image_processor, user_text, image, device)
+    input_length = inputs["input_ids"].shape[1]
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            return_dict_in_generate=True,
+        )
+    generated_ids = out.sequences[0][input_length:]
+    return clean_answer(tokenizer.decode(generated_ids, skip_special_tokens=True).strip())
+
+
 def parse_prediction(raw: str, num_options: int, experiment: str, json_order: str) -> str | None:
-    if json_order == "rationale_first_2stage" or experiment == "answer_only":
+    if json_order == TWO_STAGE_NORAT or experiment == "answer_only":
         return parse_predicted_letter(raw, num_options=num_options)
     if experiment == "pseudo":
         from utils.qwen_vl import parse_mc_reasoning_json_output
@@ -436,7 +579,7 @@ def parse_prediction(raw: str, num_options: int, experiment: str, json_order: st
 
 
 def default_max_new_tokens(experiment: str, json_order: str) -> int:
-    if json_order == "rationale_first_2stage" or experiment == "answer_only":
+    if json_order == TWO_STAGE_NORAT or experiment == "answer_only":
         return ANSWER_ONLY_MAX_NEW_TOKENS
     if experiment == "pseudo":
         return PSEUDO_JSON_MAX_NEW_TOKENS
@@ -448,7 +591,7 @@ def default_max_new_tokens(experiment: str, json_order: str) -> int:
 # ---------------------------------------------------------------------------
 
 def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
-                   output_path: Path, title: str):
+                   output_path: Path, title: str, heatmap_path: Path | None = None):
     import matplotlib.pyplot as plt
 
     img_np = np.array(image.convert("RGB"))
@@ -475,6 +618,15 @@ def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
     plt.close(fig)
     print(f"  Saved: {output_path}")
 
+    if heatmap_path is not None:
+        fig_h, ax_h = plt.subplots(figsize=(4.2, 4.2))
+        ax_h.imshow(img_np, alpha=0.5)
+        ax_h.imshow(heatmap, cmap="RdBu_r", vmin=-vmax, vmax=vmax, alpha=0.6)
+        ax_h.axis("off")
+        fig_h.savefig(heatmap_path, dpi=150, bbox_inches="tight", pad_inches=0.02)
+        plt.close(fig_h)
+        print(f"  Saved: {heatmap_path}")
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -482,7 +634,7 @@ def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SHAP visual explanations for MedVQA")
-    parser.add_argument("--model", required=True, choices=["llava", "qwen"])
+    parser.add_argument("--model", required=True, choices=["llava", "llava-med", "qwen"])
     parser.add_argument("--model_path", type=str, default=None,
                         help="HF model path/ID; defaults to standard path for the chosen model")
     parser.add_argument("--dataset", required=True,
@@ -494,11 +646,23 @@ def parse_args():
         help="Inference setup to match. Default: answer_only if --json_order answer_only, else zeroshot.",
     )
     parser.add_argument("--json_order", required=True,
-                        choices=["answer_only", "answer_first", "rationale_first", "rationale_first_2stage"])
+                        choices=["answer_only", "answer_first", "rationale_first",
+                                 "rationale_first_2stage", "rationale_first_2stage_norat"])
     parser.add_argument("--split", default="test")
     parser.add_argument("--n_samples", type=int, default=5)
     parser.add_argument("--sample_offset", type=int, default=0,
                         help="Skip first N samples (to pick different examples)")
+    parser.add_argument(
+        "--sample_indices",
+        type=str,
+        default=None,
+        help="Comma-separated indices into the MC-filtered split (overrides offset/n_samples).",
+    )
+    parser.add_argument("--run_tag", type=str, default=None,
+                        help="Optional extra output subdir (e.g. base or full) for thesis tables")
+    parser.add_argument("--dtype", type=str, default="bfloat16",
+                        choices=["float32", "float16", "bfloat16"],
+                        help="Used for LLaVA-Med loading (Qwen/LLaVA SHAP stay float32).")
     parser.add_argument("--max_evals", type=int, default=300,
                         help="SHAP partition evaluations (300-500 recommended)")
     parser.add_argument("--mask_type", default="blur(32,32)",
@@ -524,11 +688,30 @@ def resolve_experiment(experiment: str | None, json_order: str) -> str:
     if experiment == "zeroshot" and json_order == "answer_only":
         raise ValueError(
             "--experiment zeroshot requires --json_order answer_first, "
-            "rationale_first, or rationale_first_2stage"
+            "rationale_first, rationale_first_2stage, or rationale_first_2stage_norat"
         )
     if experiment == "pseudo" and json_order not in ("answer_first", "rationale_first"):
         raise ValueError("--experiment pseudo requires --json_order answer_first or rationale_first")
     return experiment
+
+
+def parse_sample_indices(raw: str, n_samples: int) -> list[int]:
+    idxs = [int(part.strip()) for part in raw.split(",") if part.strip()]
+    if not idxs:
+        raise ValueError("--sample_indices is empty")
+    for idx in idxs:
+        if idx < 0 or idx >= n_samples:
+            raise IndexError(f"sample index {idx} out of range 0..{n_samples - 1}")
+    return idxs
+
+
+def choose_samples(all_samples: list, args) -> list[tuple[int, object]]:
+    if args.sample_indices:
+        idxs = parse_sample_indices(args.sample_indices, len(all_samples))
+        return [(i, all_samples[i]) for i in idxs]
+    start = args.sample_offset
+    chosen = all_samples[start: start + args.n_samples]
+    return [(start + i, s) for i, s in enumerate(chosen)]
 
 
 def main():
@@ -537,66 +720,86 @@ def main():
     max_new_tokens = args.max_new_tokens or default_max_new_tokens(experiment, args.json_order)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model_path = args.model_path or (LLAVA_DEFAULT if args.model == "llava" else QWEN_DEFAULT)
+    model_path = args.model_path or DEFAULT_MODEL_PATHS[args.model]
     print(f"Loading {args.model} from {model_path} …")
     print(f"Experiment={experiment}  json_order={args.json_order}  max_new_tokens={max_new_tokens}")
+
+    processor = None
+    tokenizer = None
+    image_processor = None
     if args.model == "llava":
         model, processor = load_llava(model_path, device)
+    elif args.model == "llava-med":
+        if experiment != "answer_only":
+            raise ValueError("LLaVA-Med SHAP currently supports --experiment answer_only only.")
+        device, model, tokenizer, image_processor = load_llava_med(model_path, dtype_name=args.dtype)
     else:
         model, processor = load_qwen(model_path, device)
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
     samples = [s for s in samples if s.mc_options and s.mc_correct_index is not None]
-    samples = samples[args.sample_offset: args.sample_offset + args.n_samples]
+    indexed = choose_samples(samples, args)
+    print(f"Samples: {[i for i, _ in indexed]}")
 
     out_dir = Path(args.output_dir) / args.model / args.dataset / experiment / args.json_order
+    if args.run_tag:
+        out_dir = out_dir / args.run_tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for idx, sample in enumerate(samples):
-        print(f"\n[{idx+1}/{len(samples)}] {sample.image_path}")
+    for sample_idx, sample in indexed:
+        print(f"\n[{sample_idx}] {sample.image_path}")
         image = Image.open(sample.image_path).convert("RGB")
         q, opts = sample.question, sample.mc_options
         rationale = None
 
-        if args.json_order == "rationale_first_2stage":
+        if args.json_order in TWO_STAGE_ORDERS:
             print("  Generating stage-1 rationale …")
             if args.model == "llava":
                 rationale = generate_rationale_llava(
                     model, processor, image, q, opts, device, args.rationale_max_tokens
                 )
-            else:
+            elif args.model == "qwen":
                 rationale = generate_rationale_qwen(
                     model, processor, image, q, opts, device, args.rationale_max_tokens
                 )
+            else:
+                raise NotImplementedError("rationale_first_2stage is not implemented for LLaVA-Med SHAP.")
             print(f"  Rationale: {rationale[:120]} …")
 
-        scorer_kwargs = dict(
-            model=model,
-            processor=processor,
-            question=q,
-            options=opts,
-            experiment=experiment,
-            json_order=args.json_order,
-            device=device,
-            max_new_tokens=max_new_tokens,
-            rationale=rationale,
-        )
-        if args.model == "llava":
-            score_fn = make_llava_scorer(**scorer_kwargs)
+        if args.model == "llava-med":
+            score_fn = make_llava_med_scorer(
+                model, tokenizer, image_processor, q, opts, experiment, args.json_order,
+                device, max_new_tokens, rationale,
+            )
+            pred_raw = generate_prediction_llava_med(
+                model, tokenizer, image_processor, image, q, opts, device, max_new_tokens,
+            )
         else:
-            score_fn = make_qwen_scorer(**scorer_kwargs)
+            scorer_kwargs = dict(
+                model=model,
+                processor=processor,
+                question=q,
+                options=opts,
+                experiment=experiment,
+                json_order=args.json_order,
+                device=device,
+                max_new_tokens=max_new_tokens,
+                rationale=rationale,
+            )
+            if args.model == "llava":
+                score_fn = make_llava_scorer(**scorer_kwargs)
+                pred_raw = generate_prediction_llava(
+                    model, processor, image, q, opts, experiment, args.json_order,
+                    device, max_new_tokens, rationale,
+                )
+            else:
+                score_fn = make_qwen_scorer(**scorer_kwargs)
+                pred_raw = generate_prediction_qwen(
+                    model, processor, image, q, opts, experiment, args.json_order,
+                    device, max_new_tokens, rationale,
+                )
 
-        if args.model == "qwen":
-            pred_raw = generate_prediction_qwen(
-                model, processor, image, q, opts, experiment, args.json_order,
-                device, max_new_tokens, rationale,
-            )
-        else:
-            pred_raw = generate_prediction_llava(
-                model, processor, image, q, opts, experiment, args.json_order,
-                device, max_new_tokens, rationale,
-            )
         pred_letter = parse_prediction(pred_raw, len(opts), experiment, args.json_order)
         pred_text = opts[ord(pred_letter) - 65] if pred_letter else "?"
         print(f"  Predicted: {pred_letter}) {pred_text}")
@@ -609,9 +812,30 @@ def main():
         pred_display = f"{pred_letter}) {pred_text}" if pred_letter else pred_raw[:40]
         title = f"Q: {q}\n{opts_str}\nGT: {gt}   Pred: {pred_display}"
 
-        out_path = out_dir / f"sample_{args.sample_offset + idx:04d}.png"
+        stem = f"sample_{sample_idx:04d}"
+        out_path = out_dir / f"{stem}.png"
+        heatmap_path = out_dir / f"{stem}_heatmap.png"
+        meta = {
+            "index": sample_idx,
+            "image_path": str(sample.image_path),
+            "question": q,
+            "options": opts,
+            "answer": sample.answer,
+            "question_type": sample.question_type,
+            "predicted_letter": pred_letter,
+            "predicted_text": pred_text,
+            "predicted_raw": pred_raw,
+            "model": args.model,
+            "run_tag": args.run_tag,
+            "experiment": experiment,
+            "json_order": args.json_order,
+        }
+        (out_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
         print(f"  Running SHAP ({args.max_evals} evals, mask={args.mask_type}) …")
-        explain_sample(score_fn, image, args.max_evals, args.mask_type, out_path, title)
+        explain_sample(
+            score_fn, image, args.max_evals, args.mask_type, out_path, title,
+            heatmap_path=heatmap_path,
+        )
 
     print(f"\nDone. Outputs in: {out_dir}")
 
