@@ -1,0 +1,31 @@
+{
+  "base_model": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "datasets": ["slake", "vqarad", "medvqa2019"],
+  "split": "test",
+  "checkpoints": {
+    "answer_only_full": [
+      "05_outputs/mc/FINAL/noX/qwen2.5/{dataset}_MC_full",
+      "05_outputs/mc/FINAL/noX/qwen/{dataset}_MC_full",
+      "05_outputs/mc/FINAL/noX/full/qwen2.5_full/{dataset}_MC_full"
+    ],
+    "answer_only_lora": [
+      "05_outputs/mc/FINAL/noX/qwen2.5/{dataset}_MC_LoRA",
+      "05_outputs/mc/FINAL/noX/qwen2.5/{dataset}_MC_lora",
+      "05_outputs/mc/FINAL/noX/qwen/{dataset}_MC_lora",
+      "05_outputs/mc/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}_MC_LoRA",
+      "05_outputs/mc/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}_MC_lora"
+    ],
+    "pseudo_rf": [
+      "05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_{dataset}_rf"
+    ],
+    "pseudo_af": [
+      "05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_{dataset}_af"
+    ],
+    "pseudo_af_rf": [
+      "05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_{dataset}_both"
+    ],
+    "pseudo_som": [
+      "05_outputs/mc/FINAL/withX/pseudo-som_qwen3/qwen2.5/qwen2.5_{dataset}"
+    ]
+  }
+}
