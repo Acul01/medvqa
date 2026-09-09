@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.load_data import MedicalVQALoader
-from utils.paths import get_data_root, get_mc_data_root
+from utils.paths import get_data_root, get_mc_data_root, prepend_llava_med_checkout
 
 from select_shap_table_samples import (  # noqa: E402
     load_config,
@@ -116,6 +116,9 @@ def main():
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
         print(f"CUDA_VISIBLE_DEVICES={args.gpu}", flush=True)
+    checkout = prepend_llava_med_checkout()
+    if checkout is not None:
+        print(f"LLaVA-Med checkout on PYTHONPATH: {checkout}", flush=True)
 
     cfg = load_config(args.config)
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)

@@ -63,7 +63,7 @@ from utils.mc_json_zeroshot import (
     parse_mc_answer_rationale_json,
 )
 from utils.mc_vqa import format_mc_user_text, parse_predicted_letter
-from utils.paths import get_data_root, get_mc_data_root
+from utils.paths import ensure_llava_med_importable, get_data_root, get_mc_data_root
 from utils.save_results import clean_answer
 
 LLAVA_DEFAULT = "llava-hf/llava-1.5-7b-hf"
@@ -162,6 +162,7 @@ def load_llava_med(model_path: str, dtype_name: str = "bfloat16"):
     import importlib.util
     from types import SimpleNamespace
 
+    ensure_llava_med_importable()
     spec = importlib.util.spec_from_file_location(
         "inference_llava_med_shap",
         Path(__file__).resolve().parent / "inference_llava-med.py",
