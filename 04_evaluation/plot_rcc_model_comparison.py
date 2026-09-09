@@ -1,13 +1,16 @@
 """
-Compare risk-coverage curves across experiment slots for each dataset.
+Compare risk-coverage curves.
 
-For every dataset and question type, writes one PDF (no title/legend) with six curves:
-  color = experiment slot (noX / zeroshot / pseudo_sft)
-  solid = entropy ranking, dashed = combined uncertainty ranking
+Two config modes:
 
-Caption/legend details go to rcc_model_compare_meta.json.
+1. Best-of-experiment (configs/rcc_model_compare.json):
+   one figure per dataset × question type with noX / zeroshot / pseudo_sft.
 
-Reuses curve / AURC helpers from risk_coverage_entropy.py.
+2. All specs per experiment (configs/rcc_experiment_specs.json):
+   one figure per experiment × dataset × question type with every listed
+   model-specification combination (missing result files skipped by default).
+
+No title/legend on PDFs; caption details go to rcc_model_compare_meta.json.
 """
 
 from __future__ import annotations
@@ -28,13 +31,12 @@ DEFAULT_SLOTS = ["noX", "zeroshot", "pseudo_sft"]
 DEFAULT_QUESTION_TYPES = ["closed", "open", "overall"]
 ANSWER_TYPE_LABEL = {"closed": "closed", "open": "open", "overall": "all"}
 
-# Color = experiment slot; linestyle = uncertainty measure.
+# Color = experiment slot (best-of mode) or tab20 index (all-specs mode).
 SLOT_COLORS = {
     "noX": "tab:blue",
     "zeroshot": "tab:orange",
     "pseudo_sft": "tab:green",
 }
-FALLBACK_COLORS = ["tab:purple", "tab:red", "tab:brown", "tab:pink", "tab:gray"]
 MEASURE_STYLE = {
     "entropy": {
         "linestyle": "-",
@@ -66,8 +68,12 @@ def load_config(path: Path) -> Dict[str, Any]:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError("Config must be a JSON object.")
+    if "experiments" in data:
+        if not isinstance(data["experiments"], dict) or not data["experiments"]:
+            raise ValueError("Config 'experiments' must be a non-empty object.")
+        return data
     if "datasets" not in data or not isinstance(data["datasets"], dict):
-        raise ValueError("Config must contain a 'datasets' object.")
+        raise ValueError("Config must contain a 'datasets' object or an 'experiments' object.")
     return data
 
 
@@ -78,10 +84,14 @@ def resolve_path(raw: str, repo_root: Path) -> Path:
     return (repo_root / path).resolve()
 
 
-def slot_color(slot: str, index: int) -> str:
+def slot_color(slot: str, index: int, explicit: str | None = None) -> str:
+    if explicit:
+        return explicit
     if slot in SLOT_COLORS:
         return SLOT_COLORS[slot]
-    return FALLBACK_COLORS[index % len(FALLBACK_COLORS)]
+    cmap = plt.get_cmap("tab20")
+    r, g, b, _a = cmap(index % 20)
+    return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
 
 def evaluate_slot_curves(
@@ -121,15 +131,18 @@ def plot_dataset_question_type(
     question_type: str,
     out_path: Path,
     combined_alpha: float,
+    experiment: str | None = None,
+    experiment_label: str | None = None,
 ) -> Dict[str, Any]:
     """Single-axis RCC without title/legend: solid=entropy, dashed=combined."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
+    group_name = experiment_label or experiment or "best-of-experiment"
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     curves_meta: List[Dict[str, Any]] = []
 
     for idx, payload in enumerate(slot_payloads):
-        color = slot_color(payload["slot"], idx)
+        color = slot_color(payload["slot"], idx, payload.get("color"))
         for measure, style in MEASURE_STYLE.items():
             curve = payload.get(style["curve_key"]) or []
             if not curve:
@@ -168,16 +181,18 @@ def plot_dataset_question_type(
     return {
         "file": out_path.name,
         "path": str(out_path),
+        "experiment": experiment,
+        "experiment_label": group_name,
         "dataset": dataset,
         "question_type": question_type,
         "answer_type_label": answer_label,
         "title_suggested": (
-            f"Risk–Coverage comparison — {dataset} / {answer_label} "
+            f"Risk–Coverage — {group_name} — {dataset} / {answer_label} "
             f"(α={combined_alpha:g})"
         ),
         "axis_labels": {"x": "Coverage", "y": "Risk"},
         "encoding": {
-            "color": "experiment slot (model)",
+            "color": "model specification (see curves[].label / color)",
             "linestyle_solid": "entropy ranking",
             "linestyle_dashed": "combined uncertainty ranking",
         },
@@ -188,6 +203,7 @@ def plot_dataset_question_type(
 def write_aurc_table_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "experiment",
         "dataset",
         "question_type",
         "slot",
@@ -225,15 +241,137 @@ def print_dataset_aurc_table(dataset: str, slot_rows: List[Dict[str, Any]], ques
         print(line)
 
 
+def resolve_run_path(run: Dict[str, Any], dataset: str, repo_root: Path) -> Path | None:
+    """Resolve a results JSON path for one run × dataset (template or override)."""
+    results = run.get("results")
+    raw: str | None = None
+    if isinstance(results, dict) and dataset in results and results[dataset]:
+        raw = str(results[dataset])
+    elif isinstance(results, str) and results.strip():
+        raw = results
+    elif run.get("results_template"):
+        raw = str(run["results_template"])
+    if raw is None:
+        return None
+    raw = raw.replace("{dataset}", dataset)
+    return resolve_path(raw, repo_root)
+
+
+def load_results_if_present(
+    rce: Any,
+    results_path: Path,
+    *,
+    skip_missing: bool,
+    context: str,
+) -> List[Dict] | None:
+    if not results_path.exists():
+        message = f"Results file not found for {context}: {results_path}"
+        if skip_missing:
+            print(f"skip: {message}")
+            return None
+        raise FileNotFoundError(message)
+    return rce.load_results(results_path)
+
+
+def plot_group_for_dataset(
+    *,
+    rce: Any,
+    dataset: str,
+    loaded: Dict[str, Dict[str, Any]],
+    question_types: List[str],
+    out_dir: Path,
+    combined_alpha: float,
+    risk_metric: str,
+    max_entropy: float | None,
+    num_thresholds: int,
+    experiment: str,
+    experiment_label: str,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    """Plot all question types for one dataset × experiment group."""
+    all_table_rows: List[Dict[str, Any]] = []
+    figure_metas: List[Dict[str, Any]] = []
+    ds_summary: Dict[str, Any] = {"slots": {}, "figures": {}}
+    dataset_table_rows: List[Dict[str, Any]] = []
+
+    for question_type in question_types:
+        slot_payloads: List[Dict[str, Any]] = []
+        for slot, meta in loaded.items():
+            eval_out = evaluate_slot_curves(
+                rce,
+                meta["results"],
+                question_type,
+                risk_metric=risk_metric,
+                max_entropy=max_entropy,
+                num_thresholds=num_thresholds,
+                combined_alpha=combined_alpha,
+            )
+            payload = {
+                "slot": slot,
+                "label": meta["label"],
+                "color": meta.get("color"),
+                "results_file": str(meta["results_path"]),
+                **eval_out,
+            }
+            slot_payloads.append(payload)
+
+            row = {
+                "experiment": experiment,
+                "dataset": dataset,
+                "question_type": question_type,
+                "slot": slot,
+                "label": meta["label"],
+                "results_file": str(meta["results_path"]),
+                "valid_samples": eval_out["valid_samples"],
+                "filtered_rows": eval_out["filtered_rows"],
+                "aurc_entropy": f"{eval_out['aurc_entropy']:.6f}",
+                "aurc_combined": f"{eval_out['aurc_combined']:.6f}",
+            }
+            all_table_rows.append(row)
+            dataset_table_rows.append(
+                {
+                    **row,
+                    "aurc_entropy": eval_out["aurc_entropy"],
+                    "aurc_combined": eval_out["aurc_combined"],
+                }
+            )
+            ds_summary["slots"].setdefault(slot, {})
+            ds_summary["slots"][slot][question_type] = {
+                "label": meta["label"],
+                "results_file": str(meta["results_path"]),
+                "valid_samples": eval_out["valid_samples"],
+                "filtered_rows": eval_out["filtered_rows"],
+                "aurc_entropy": eval_out["aurc_entropy"],
+                "aurc_combined": eval_out["aurc_combined"],
+            }
+
+        answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
+        fig_path = out_dir / f"{dataset}_{answer_label}.pdf"
+        fig_meta = plot_dataset_question_type(
+            slot_payloads,
+            dataset=dataset,
+            question_type=question_type,
+            out_path=fig_path,
+            combined_alpha=combined_alpha,
+            experiment=experiment,
+            experiment_label=experiment_label,
+        )
+        figure_metas.append(fig_meta)
+        ds_summary["figures"][question_type] = str(fig_path)
+        print(f"Saved: {fig_path}")
+
+    print_dataset_aurc_table(f"{experiment}/{dataset}", dataset_table_rows, question_types)
+    return all_table_rows, figure_metas, ds_summary
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Overlay RCC curves for noX / zeroshot / pseudo-SFT per dataset × question type"
+        description="Overlay RCC curves (best-of-experiment or all specs per experiment)"
     )
     parser.add_argument(
         "--config",
         type=str,
         default="configs/rcc_model_compare.json",
-        help="JSON config with datasets → slot → results path",
+        help="JSON config: datasets→slots (best-of) or experiments→runs (all specs)",
     )
     parser.add_argument(
         "--output_dir",
@@ -246,7 +384,25 @@ def parse_args():
         type=str,
         nargs="*",
         default=None,
-        help="Optional subset of dataset keys from the config",
+        help="Optional subset of dataset keys",
+    )
+    parser.add_argument(
+        "--experiments",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Optional subset of experiment keys (experiment-spec config only)",
+    )
+    parser.add_argument(
+        "--skip_missing",
+        action="store_true",
+        default=None,
+        help="Skip missing result JSONs instead of aborting (default: true for experiment-spec configs)",
+    )
+    parser.add_argument(
+        "--require_all",
+        action="store_true",
+        help="Fail if any configured results file is missing",
     )
     parser.add_argument(
         "--combined_alpha",
@@ -270,15 +426,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    repo_root = Path(__file__).resolve().parents[1]
-    config_path = resolve_path(args.config, repo_root)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config not found: {config_path}")
-
-    config = load_config(config_path)
-    slots: List[str] = list(config.get("slots") or DEFAULT_SLOTS)
+def _plot_settings(args, config: Dict[str, Any]) -> Dict[str, Any]:
     question_types: List[str] = list(config.get("question_types") or DEFAULT_QUESTION_TYPES)
     combined_alpha = float(
         args.combined_alpha if args.combined_alpha is not None else config.get("combined_alpha", 0.5)
@@ -290,14 +438,59 @@ def main() -> None:
     max_entropy = config.get("max_entropy", None)
     if max_entropy is not None:
         max_entropy = float(max_entropy)
-
     if not 0.0 <= combined_alpha <= 1.0:
         raise ValueError(f"combined_alpha must be in [0, 1], got {combined_alpha}")
+    return {
+        "question_types": question_types,
+        "combined_alpha": combined_alpha,
+        "num_thresholds": num_thresholds,
+        "risk_metric": risk_metric,
+        "max_entropy": max_entropy,
+    }
 
-    out_dir_raw = args.output_dir or config.get("output_dir") or get_results_dir()
-    out_dir = resolve_path(str(out_dir_raw), repo_root)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
+def _write_outputs(
+    *,
+    out_dir: Path,
+    all_table_rows: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+    figure_metas: List[Dict[str, Any]],
+    extra_meta: Dict[str, Any],
+) -> None:
+    table_path = out_dir / "rcc_model_compare_aurc.csv"
+    summary_path = out_dir / "rcc_model_compare_summary.json"
+    meta_path = out_dir / "rcc_model_compare_meta.json"
+    write_aurc_table_csv(all_table_rows, table_path)
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    meta = {
+        **extra_meta,
+        "legend_encoding": {
+            "color": "model specification (see curves[].color / label)",
+            "solid": "entropy ranking",
+            "dashed": "combined uncertainty ranking",
+        },
+        "figures": figure_metas,
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+    print(f"\nSaved: {table_path}")
+    print(f"Saved: {summary_path}")
+    print(f"Saved: {meta_path}")
+
+
+def run_best_of_mode(
+    *,
+    args,
+    config: Dict[str, Any],
+    config_path: Path,
+    repo_root: Path,
+    rce: Any,
+    settings: Dict[str, Any],
+    out_dir: Path,
+    skip_missing: bool,
+) -> None:
+    slots: List[str] = list(config.get("slots") or DEFAULT_SLOTS)
     dataset_keys = list(config["datasets"].keys())
     if args.datasets:
         missing = [d for d in args.datasets if d not in config["datasets"]]
@@ -305,17 +498,17 @@ def main() -> None:
             raise KeyError(f"Unknown dataset keys in --datasets: {missing}")
         dataset_keys = list(args.datasets)
 
-    rce = _load_risk_coverage_module()
     all_table_rows: List[Dict[str, Any]] = []
     figure_metas: List[Dict[str, Any]] = []
     summary: Dict[str, Any] = {
         "config": str(config_path),
-        "combined_alpha": combined_alpha,
-        "num_thresholds": num_thresholds,
-        "risk_metric": risk_metric,
-        "max_entropy": max_entropy,
+        "mode": "best_of_experiment",
+        "combined_alpha": settings["combined_alpha"],
+        "num_thresholds": settings["num_thresholds"],
+        "risk_metric": settings["risk_metric"],
+        "max_entropy": settings["max_entropy"],
         "slots": slots,
-        "question_types": question_types,
+        "question_types": settings["question_types"],
         "output_dir": str(out_dir),
         "datasets": {},
     }
@@ -324,8 +517,6 @@ def main() -> None:
         ds_cfg = config["datasets"][dataset]
         if not isinstance(ds_cfg, dict):
             raise ValueError(f"datasets['{dataset}'] must be an object of slots.")
-
-        # Preload results once per slot.
         loaded: Dict[str, Dict[str, Any]] = {}
         for slot in slots:
             if slot not in ds_cfg:
@@ -334,117 +525,209 @@ def main() -> None:
             if not isinstance(entry, dict) or "results" not in entry:
                 raise ValueError(f"datasets['{dataset}']['{slot}'] must have a 'results' path.")
             results_path = resolve_path(str(entry["results"]), repo_root)
-            if not results_path.exists():
-                raise FileNotFoundError(
-                    f"Results file not found for {dataset}/{slot}: {results_path}\n"
-                    "Update configs/rcc_model_compare.json with your chosen best-run paths."
-                )
+            rows = load_results_if_present(
+                rce,
+                results_path,
+                skip_missing=skip_missing,
+                context=f"{dataset}/{slot}",
+            )
+            if rows is None:
+                continue
             loaded[slot] = {
                 "slot": slot,
                 "label": str(entry.get("label") or slot),
+                "color": entry.get("color"),
                 "results_path": results_path,
-                "results": rce.load_results(results_path),
+                "results": rows,
             }
-
-        ds_summary: Dict[str, Any] = {"slots": {}, "figures": {}}
-        dataset_table_rows: List[Dict[str, Any]] = []
-
-        for question_type in question_types:
-            slot_payloads: List[Dict[str, Any]] = []
-            for slot in slots:
-                meta = loaded[slot]
-                eval_out = evaluate_slot_curves(
-                    rce,
-                    meta["results"],
-                    question_type,
-                    risk_metric=risk_metric,
-                    max_entropy=max_entropy,
-                    num_thresholds=num_thresholds,
-                    combined_alpha=combined_alpha,
-                )
-                payload = {
-                    "slot": slot,
-                    "label": meta["label"],
-                    "results_file": str(meta["results_path"]),
-                    **eval_out,
-                }
-                slot_payloads.append(payload)
-
-                row = {
-                    "dataset": dataset,
-                    "question_type": question_type,
-                    "slot": slot,
-                    "label": meta["label"],
-                    "results_file": str(meta["results_path"]),
-                    "valid_samples": eval_out["valid_samples"],
-                    "filtered_rows": eval_out["filtered_rows"],
-                    "aurc_entropy": f"{eval_out['aurc_entropy']:.6f}",
-                    "aurc_combined": f"{eval_out['aurc_combined']:.6f}",
-                }
-                all_table_rows.append(row)
-                dataset_table_rows.append(
-                    {
-                        **row,
-                        "aurc_entropy": eval_out["aurc_entropy"],
-                        "aurc_combined": eval_out["aurc_combined"],
-                    }
-                )
-
-                ds_summary["slots"].setdefault(slot, {})
-                ds_summary["slots"][slot][question_type] = {
-                    "label": meta["label"],
-                    "results_file": str(meta["results_path"]),
-                    "valid_samples": eval_out["valid_samples"],
-                    "filtered_rows": eval_out["filtered_rows"],
-                    "aurc_entropy": eval_out["aurc_entropy"],
-                    "aurc_combined": eval_out["aurc_combined"],
-                }
-
-            answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
-            fig_path = out_dir / f"{dataset}_{answer_label}.pdf"
-            fig_meta = plot_dataset_question_type(
-                slot_payloads,
-                dataset=dataset,
-                question_type=question_type,
-                out_path=fig_path,
-                combined_alpha=combined_alpha,
-            )
-            figure_metas.append(fig_meta)
-            ds_summary["figures"][question_type] = str(fig_path)
-            print(f"Saved: {fig_path}")
-
+        if not loaded:
+            print(f"skip: no result files for dataset '{dataset}'")
+            continue
+        table_rows, figs, ds_summary = plot_group_for_dataset(
+            rce=rce,
+            dataset=dataset,
+            loaded=loaded,
+            question_types=settings["question_types"],
+            out_dir=out_dir,
+            combined_alpha=settings["combined_alpha"],
+            risk_metric=settings["risk_metric"],
+            max_entropy=settings["max_entropy"],
+            num_thresholds=settings["num_thresholds"],
+            experiment="best_of",
+            experiment_label="best-of-experiment",
+        )
+        all_table_rows.extend(table_rows)
+        figure_metas.extend(figs)
         summary["datasets"][dataset] = ds_summary
-        print_dataset_aurc_table(dataset, dataset_table_rows, question_types)
 
-    table_path = out_dir / "rcc_model_compare_aurc.csv"
-    summary_path = out_dir / "rcc_model_compare_summary.json"
-    meta_path = out_dir / "rcc_model_compare_meta.json"
-    write_aurc_table_csv(all_table_rows, table_path)
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
-
-    meta = {
-        "config": str(config_path),
-        "combined_alpha": combined_alpha,
-        "num_thresholds": num_thresholds,
-        "risk_metric": risk_metric,
-        "max_entropy": max_entropy,
-        "slots": slots,
-        "question_types": question_types,
-        "output_dir": str(out_dir),
-        "legend_encoding": {
-            "color": "experiment slot / model (see curves[].color)",
-            "solid": "entropy ranking",
-            "dashed": "combined uncertainty ranking",
+    _write_outputs(
+        out_dir=out_dir,
+        all_table_rows=all_table_rows,
+        summary=summary,
+        figure_metas=figure_metas,
+        extra_meta={
+            "config": str(config_path),
+            "mode": "best_of_experiment",
+            "combined_alpha": settings["combined_alpha"],
+            "num_thresholds": settings["num_thresholds"],
+            "risk_metric": settings["risk_metric"],
+            "max_entropy": settings["max_entropy"],
+            "slots": slots,
+            "question_types": settings["question_types"],
+            "output_dir": str(out_dir),
         },
-        "figures": figure_metas,
-    }
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    )
 
-    print(f"\nSaved: {table_path}")
-    print(f"Saved: {summary_path}")
-    print(f"Saved: {meta_path}")
+
+def run_experiment_spec_mode(
+    *,
+    args,
+    config: Dict[str, Any],
+    config_path: Path,
+    repo_root: Path,
+    rce: Any,
+    settings: Dict[str, Any],
+    out_dir: Path,
+    skip_missing: bool,
+) -> None:
+    experiment_keys = list(config["experiments"].keys())
+    if args.experiments:
+        missing = [e for e in args.experiments if e not in config["experiments"]]
+        if missing:
+            raise KeyError(f"Unknown experiment keys in --experiments: {missing}")
+        experiment_keys = list(args.experiments)
+
+    default_datasets = list(config.get("dataset_list") or ["slake", "vqarad", "medvqa2019"])
+    dataset_keys = list(args.datasets) if args.datasets else default_datasets
+
+    all_table_rows: List[Dict[str, Any]] = []
+    figure_metas: List[Dict[str, Any]] = []
+    summary: Dict[str, Any] = {
+        "config": str(config_path),
+        "mode": "experiment_specs",
+        "combined_alpha": settings["combined_alpha"],
+        "num_thresholds": settings["num_thresholds"],
+        "risk_metric": settings["risk_metric"],
+        "max_entropy": settings["max_entropy"],
+        "question_types": settings["question_types"],
+        "output_dir": str(out_dir),
+        "experiments": {},
+    }
+
+    for experiment in experiment_keys:
+        exp_cfg = config["experiments"][experiment]
+        if not isinstance(exp_cfg, dict) or "runs" not in exp_cfg:
+            raise ValueError(f"experiments['{experiment}'] must contain a 'runs' list.")
+        runs = exp_cfg["runs"]
+        if not isinstance(runs, list) or not runs:
+            raise ValueError(f"experiments['{experiment}'].runs must be a non-empty list.")
+        experiment_label = str(exp_cfg.get("label") or experiment)
+        exp_out = out_dir / experiment
+        exp_out.mkdir(parents=True, exist_ok=True)
+        summary["experiments"][experiment] = {"label": experiment_label, "datasets": {}}
+
+        for dataset in dataset_keys:
+            loaded: Dict[str, Dict[str, Any]] = {}
+            for run in runs:
+                if not isinstance(run, dict) or "id" not in run:
+                    raise ValueError(f"Each run in {experiment} needs an 'id'.")
+                slot = str(run["id"])
+                results_path = resolve_run_path(run, dataset, repo_root)
+                if results_path is None:
+                    print(f"skip: no path for {experiment}/{dataset}/{slot}")
+                    continue
+                rows = load_results_if_present(
+                    rce,
+                    results_path,
+                    skip_missing=skip_missing,
+                    context=f"{experiment}/{dataset}/{slot}",
+                )
+                if rows is None:
+                    continue
+                loaded[slot] = {
+                    "slot": slot,
+                    "label": str(run.get("label") or slot),
+                    "color": run.get("color"),
+                    "results_path": results_path,
+                    "results": rows,
+                }
+            if not loaded:
+                print(f"skip: no result files for {experiment}/{dataset}")
+                continue
+            table_rows, figs, ds_summary = plot_group_for_dataset(
+                rce=rce,
+                dataset=dataset,
+                loaded=loaded,
+                question_types=settings["question_types"],
+                out_dir=exp_out,
+                combined_alpha=settings["combined_alpha"],
+                risk_metric=settings["risk_metric"],
+                max_entropy=settings["max_entropy"],
+                num_thresholds=settings["num_thresholds"],
+                experiment=experiment,
+                experiment_label=experiment_label,
+            )
+            all_table_rows.extend(table_rows)
+            figure_metas.extend(figs)
+            summary["experiments"][experiment]["datasets"][dataset] = ds_summary
+
+    _write_outputs(
+        out_dir=out_dir,
+        all_table_rows=all_table_rows,
+        summary=summary,
+        figure_metas=figure_metas,
+        extra_meta={
+            "config": str(config_path),
+            "mode": "experiment_specs",
+            "combined_alpha": settings["combined_alpha"],
+            "num_thresholds": settings["num_thresholds"],
+            "risk_metric": settings["risk_metric"],
+            "max_entropy": settings["max_entropy"],
+            "question_types": settings["question_types"],
+            "output_dir": str(out_dir),
+            "experiments": experiment_keys,
+        },
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = resolve_path(args.config, repo_root)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+
+    config = load_config(config_path)
+    settings = _plot_settings(args, config)
+    out_dir_raw = args.output_dir or config.get("output_dir") or get_results_dir()
+    out_dir = resolve_path(str(out_dir_raw), repo_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rce = _load_risk_coverage_module()
+
+    spec_mode = "experiments" in config
+    if args.require_all:
+        skip_missing = False
+    elif args.skip_missing is True:
+        skip_missing = True
+    elif spec_mode:
+        skip_missing = bool(config.get("skip_missing", True))
+    else:
+        skip_missing = bool(config.get("skip_missing", False))
+
+    common = dict(
+        args=args,
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+        rce=rce,
+        settings=settings,
+        out_dir=out_dir,
+        skip_missing=skip_missing,
+    )
+    if spec_mode:
+        run_experiment_spec_mode(**common)
+    else:
+        run_best_of_mode(**common)
 
 
 if __name__ == "__main__":

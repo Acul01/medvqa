@@ -130,7 +130,7 @@ flowchart LR
 | `utils/medvlm_r1.py` | MedVLM-R1-Prompt, `<answer>`-Parser, Qwen2-VL-Input-Prep |
 | `04_evaluation/evaluate.py` | Aggregierte Metriken aus JSON |
 | `04_evaluation/risk_coverage_entropy.py` | Entropie-Schwellen, Risk–Coverage, **AURC** |
-| `04_evaluation/plot_rcc_model_comparison.py` | RCC-Vergleich noX / zeroshot / pseudo-SFT (Config) |
+| `04_evaluation/plot_rcc_model_comparison.py` | RCC: best-of-experiment oder alle Specs pro Experiment |
 | `04_evaluation/selector_multimodal.py` | Feature-Extraktion, Selector-Training, Eval |
 | `04_evaluation/plot_entropy.py` | Hilfen zur Entropie-Visualisierung |
 | `utils/build_mc_datasets_openai.py` | MC-Export mit OpenAI-Distraktoren |
@@ -929,6 +929,16 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 ```
 
 Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.pdf` (ohne Titel/Legende), `rcc_model_compare_meta.json` (Labels, Farben, Linienstil, AURC für Captions), `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Nutzt dieselbe Dual-AURC-Logik wie `risk_coverage_entropy.py` (`combined_alpha` aus Config, Default 0.5).
+
+**Alle Specs pro Experiment** (Answer-only / Zeroshot / Pseudo-SFT): Config [`configs/rcc_experiment_specs.json`](configs/rcc_experiment_specs.json) — eine Figur je Experiment × Datensatz × Fragetyp, alle gelisteten Modell-/Order-Kombinationen (fehlende Result-JSONs werden übersprungen). Farbe = Spec, durchgezogen = entropy, gestrichelt = combined.
+
+```bash
+python 04_evaluation/plot_rcc_model_comparison.py \
+  --config configs/rcc_experiment_specs.json
+# optional: --experiments zeroshot --datasets vqarad
+```
+
+Ausgaben unter `06_results/FINAL/rcc_experiment_specs/{answer_only|zeroshot|pseudo_sft}/`. Templates in der Config bei Bedarf an eure echten Dateinamen anpassen.
 
 ### Geplant: ECE & erweiterte Kalibrierung
 
