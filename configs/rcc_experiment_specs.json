@@ -7,7 +7,7 @@
   "dataset_list": ["slake", "vqarad", "medvqa2019"],
   "output_dir": "06_results/FINAL/rcc_experiment_specs",
   "skip_missing": true,
-  "selection_note": "All model × specification combinations per experiment. {dataset} is substituted. Per-dataset 'results' overrides the template. Missing files are skipped. Color = spec, solid = entropy, dashed = combined. Captions: rcc_model_compare_meta.json.",
+  "selection_note": "All model × specification combinations per experiment (no LoRA, no LLaVA-Med, no zeroshot 2s-L). {dataset} is substituted. Missing files are skipped. One combined-ranking curve per spec, reported as AURC. Captions: rcc_model_compare_meta.json.",
   "experiments": {
     "answer_only": {
       "label": "Answer-only",
@@ -16,16 +16,6 @@
           "id": "llava_full",
           "label": "LLaVA-1.5 full",
           "results_template": "06_results/FINAL/noX/full/llava_full/{dataset}/llava_{dataset}_all.json"
-        },
-        {
-          "id": "llava_lora",
-          "label": "LLaVA-1.5 LoRA",
-          "results_template": "06_results/FINAL/noX/LoRA/llava_LoRA/{dataset}/llava_{dataset}_all.json"
-        },
-        {
-          "id": "llava_med_full",
-          "label": "LLaVA-Med full",
-          "results_template": "06_results/FINAL/noX/full/llava-med_full/{dataset}/llava-med_{dataset}_all.json"
         },
         {
           "id": "qwen2.5_full",
@@ -38,24 +28,9 @@
           ]
         },
         {
-          "id": "qwen2.5_lora",
-          "label": "Qwen2.5-VL LoRA",
-          "results_templates": [
-            "06_results/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}/qwen2.5-vl_{dataset}_all.json",
-            "06_results/FINAL/noX/LoRA/qwen2.5_LoRA/{dataset}_MC_LoRA_{dataset}_all.json",
-            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_LoRA/qwen2.5-vl_{dataset}_all.json",
-            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_lora/qwen2.5-vl_{dataset}_all.json"
-          ]
-        },
-        {
           "id": "qwen3_full",
           "label": "Qwen3-VL full",
           "results_template": "06_results/FINAL/noX/full/qwen3_full/{dataset}/qwen3-vl_{dataset}_all.json"
-        },
-        {
-          "id": "qwen3_lora",
-          "label": "Qwen3-VL LoRA",
-          "results_template": "06_results/FINAL/noX/LoRA/qwen3_LoRA/{dataset}/qwen3-vl_{dataset}_all.json"
         }
       ]
     },
@@ -78,11 +53,6 @@
           "results_template": "06_results/FINAL/withX/zeroshot/llava/llava_{dataset}_all_rationale_first_2stage.json"
         },
         {
-          "id": "llava_2sL",
-          "label": "LLaVA-1.5 2s-L",
-          "results_template": "06_results/FINAL/withX/zeroshot/llava/llava_{dataset}_all_rationale_first_2stage_norat.json"
-        },
-        {
           "id": "qwen2.5_af",
           "label": "Qwen2.5-VL AF",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_answer_first.json"
@@ -98,11 +68,6 @@
           "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_rationale_first_2stage.json"
         },
         {
-          "id": "qwen2.5_2sL",
-          "label": "Qwen2.5-VL 2s-L",
-          "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_rationale_first_2stage_norat.json"
-        },
-        {
           "id": "qwen3_af",
           "label": "Qwen3-VL AF",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_{dataset}_all_answer_first.json"
@@ -116,11 +81,6 @@
           "id": "qwen3_2s",
           "label": "Qwen3-VL 2s",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_{dataset}_all_rationale_first_2stage.json"
-        },
-        {
-          "id": "qwen3_2sL",
-          "label": "Qwen3-VL 2s-L",
-          "results_template": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_{dataset}_all_rationale_first_2stage_norat.json"
         }
       ]
     },

@@ -917,9 +917,9 @@ python 04_evaluation/risk_coverage_entropy.py \
 
 ### RCC-Modellvergleich (`plot_rcc_model_comparison.py`)
 
-Vergleicht pro Datensatz und Fragetyp die Risk–Coverage-Kurven der gewählten Runs: **noX**, **bestes zeroshot**, **bestes pseudo-SFT**. Pro Modell zwei Kurven in **derselben Farbe** (durchgezogen = entropy, gestrichelt = combined).
+Vergleicht pro Datensatz und Fragetyp die Risk–Coverage-Kurven der gewählten Runs: **noX**, **bestes zeroshot**, **bestes pseudo-SFT**. Eine Kurve pro Modell (Combined-Ranking, in Captions als **AURC**).
 
-1. Pfade in [`configs/rcc_model_compare.json`](configs/rcc_model_compare.json) setzen (beste Runs manuell wählen, z. B. nach `overall.aurc_combined` / Accuracy in `*_eval.json`; bei both/pseudo die **merged** JSON).
+1. Pfade in [`configs/rcc_model_compare.json`](configs/rcc_model_compare.json) setzen (beste Runs manuell wählen, z. B. nach `overall.aurc` / Accuracy in `*_eval.json`; bei both/pseudo die **merged** JSON).
 2. Ausführen:
 
 ```bash
@@ -928,9 +928,9 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 # optional: --datasets slake vqarad --output_dir 06_results/FINAL/rcc_compare
 ```
 
-Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.pdf` (ohne Titel/Legende), `rcc_model_compare_meta.json` (Labels, Farben, Linienstil, AURC für Captions), `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Nutzt dieselbe Dual-AURC-Logik wie `risk_coverage_entropy.py` (`combined_alpha` aus Config, Default 0.5).
+Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.pdf` (ohne Titel/Legende), `rcc_model_compare_meta.json` (Labels, Farben, AURC für Captions), `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Combined-Ranking (`combined_alpha` aus Config, Default 0.5) wird als AURC berichtet.
 
-**Alle Specs pro Experiment** (Answer-only / Zeroshot / Pseudo-SFT): Config [`configs/rcc_experiment_specs.json`](configs/rcc_experiment_specs.json) — eine Figur je Experiment × Datensatz × Fragetyp, alle gelisteten Modell-/Order-Kombinationen (fehlende Result-JSONs werden übersprungen). Farbe = Spec, durchgezogen = entropy, gestrichelt = combined.
+**Alle Specs pro Experiment** (Answer-only / Zeroshot / Pseudo-SFT): Config [`configs/rcc_experiment_specs.json`](configs/rcc_experiment_specs.json) — eine Figur je Experiment × Datensatz × Fragetyp. Ohne LoRA, LLaVA-Med und Zeroshot-2s-L. Eine Combined-Kurve pro Spec (als **AURC**); fehlende Result-JSONs werden übersprungen.
 
 ```bash
 python 04_evaluation/plot_rcc_model_comparison.py \

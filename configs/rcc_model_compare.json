@@ -38,8 +38,8 @@
     },
     "medvqa2019": {
       "noX": {
-        "label": "Answer-only Qwen3-VL LoRA",
-        "results": "06_results/FINAL/noX/LoRA/qwen3_LoRA/medvqa2019/qwen3-vl_medvqa2019_all.json"
+        "label": "Answer-only Qwen3-VL full",
+        "results": "06_results/FINAL/noX/full/qwen3_full/medvqa2019/qwen3-vl_medvqa2019_all.json"
       },
       "zeroshot": {
         "label": "Zeroshot Qwen3-VL AF",

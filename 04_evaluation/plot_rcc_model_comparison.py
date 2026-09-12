@@ -10,7 +10,8 @@ Two config modes:
    one figure per experiment × dataset × question type with every listed
    model-specification combination (missing result files skipped by default).
 
-No title/legend on PDFs; caption details go to rcc_model_compare_meta.json.
+No title/legend on PDFs; one combined-ranking curve per spec (reported as AURC).
+Caption details go to rcc_model_compare_meta.json.
 """
 
 from __future__ import annotations
@@ -37,20 +38,7 @@ SLOT_COLORS = {
     "zeroshot": "tab:orange",
     "pseudo_sft": "tab:green",
 }
-MEASURE_STYLE = {
-    "entropy": {
-        "linestyle": "-",
-        "linestyle_name": "solid",
-        "curve_key": "curve_entropy",
-        "aurc_key": "aurc_entropy",
-    },
-    "combined": {
-        "linestyle": "--",
-        "linestyle_name": "dashed",
-        "curve_key": "curve_combined",
-        "aurc_key": "aurc_combined",
-    },
-}
+# One curve per spec: combined-uncertainty ranking, reported as AURC.
 
 
 def _load_risk_coverage_module():
@@ -117,10 +105,8 @@ def evaluate_slot_curves(
     return {
         "valid_samples": int(entropy_eval.get("valid_samples", 0)),
         "filtered_rows": int(entropy_eval.get("filtered_rows", 0)),
-        "aurc_entropy": float(entropy_eval.get("aurc", 0.0)),
-        "aurc_combined": float(combined_eval.get("aurc", 0.0)),
-        "curve_entropy": entropy_eval.get("curve") or [],
-        "curve_combined": combined_eval.get("curve") or [],
+        "aurc": float(combined_eval.get("aurc", 0.0)),
+        "curve": combined_eval.get("curve") or [],
     }
 
 
@@ -134,7 +120,7 @@ def plot_dataset_question_type(
     experiment: str | None = None,
     experiment_label: str | None = None,
 ) -> Dict[str, Any]:
-    """Single-axis RCC without title/legend: solid=entropy, dashed=combined."""
+    """Single-axis RCC without title/legend: one combined-ranking curve per spec."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
     group_name = experiment_label or experiment or "best-of-experiment"
@@ -143,33 +129,26 @@ def plot_dataset_question_type(
 
     for idx, payload in enumerate(slot_payloads):
         color = slot_color(payload["slot"], idx, payload.get("color"))
-        for measure, style in MEASURE_STYLE.items():
-            curve = payload.get(style["curve_key"]) or []
-            if not curve:
-                continue
-            x = [row["coverage"] for row in curve]
-            y = [row["risk"] for row in curve]
-            aurc = float(payload.get(style["aurc_key"], float("nan")))
-            ax.plot(
-                x,
-                y,
-                linewidth=2.2,
-                color=color,
-                linestyle=style["linestyle"],
-            )
-            curves_meta.append(
-                {
-                    "slot": payload["slot"],
-                    "label": payload["label"],
-                    "measure": measure,
-                    "linestyle": style["linestyle_name"],
-                    "color": color,
-                    "aurc": None if math.isnan(aurc) else aurc,
-                    "valid_samples": payload.get("valid_samples"),
-                    "filtered_rows": payload.get("filtered_rows"),
-                    "results_file": payload.get("results_file"),
-                }
-            )
+        curve = payload.get("curve") or []
+        if not curve:
+            continue
+        x = [row["coverage"] for row in curve]
+        y = [row["risk"] for row in curve]
+        aurc = float(payload.get("aurc", float("nan")))
+        ax.plot(x, y, linewidth=2.2, color=color, linestyle="-")
+        curves_meta.append(
+            {
+                "slot": payload["slot"],
+                "label": payload["label"],
+                "measure": "aurc",
+                "linestyle": "solid",
+                "color": color,
+                "aurc": None if math.isnan(aurc) else aurc,
+                "valid_samples": payload.get("valid_samples"),
+                "filtered_rows": payload.get("filtered_rows"),
+                "results_file": payload.get("results_file"),
+            }
+        )
 
     ax.set_xlabel("Coverage")
     ax.set_ylabel("Risk")
@@ -193,8 +172,7 @@ def plot_dataset_question_type(
         "axis_labels": {"x": "Coverage", "y": "Risk"},
         "encoding": {
             "color": "model specification (see curves[].label / color)",
-            "linestyle_solid": "entropy ranking",
-            "linestyle_dashed": "combined uncertainty ranking",
+            "curve": "combined uncertainty ranking (reported as AURC)",
         },
         "curves": curves_meta,
     }
@@ -211,8 +189,7 @@ def write_aurc_table_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         "results_file",
         "valid_samples",
         "filtered_rows",
-        "aurc_entropy",
-        "aurc_combined",
+        "aurc",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -223,21 +200,15 @@ def write_aurc_table_csv(rows: List[Dict[str, Any]], path: Path) -> None:
 
 def print_dataset_aurc_table(dataset: str, slot_rows: List[Dict[str, Any]], question_types: List[str]) -> None:
     print(f"\n=== {dataset} AURC ===")
-    header = f"{'slot':<14}" + "".join(f"{qt + '_ent':>12}{qt + '_cmb':>12}" for qt in question_types)
+    header = f"{'slot':<14}" + "".join(f"{qt:>12}" for qt in question_types)
     print(header)
-    by_slot: Dict[str, Dict[str, Dict[str, float]]] = {}
+    by_slot: Dict[str, Dict[str, float]] = {}
     for row in slot_rows:
-        by_slot.setdefault(row["slot"], {})[row["question_type"]] = {
-            "entropy": float(row["aurc_entropy"]),
-            "combined": float(row["aurc_combined"]),
-        }
+        by_slot.setdefault(row["slot"], {})[row["question_type"]] = float(row["aurc"])
     for slot, qt_map in by_slot.items():
         line = f"{slot:<14}"
         for qt in question_types:
-            vals = qt_map.get(qt, {})
-            ent = vals.get("entropy", float("nan"))
-            cmb = vals.get("combined", float("nan"))
-            line += f"{ent:12.6f}{cmb:12.6f}"
+            line += f"{qt_map.get(qt, float('nan')):12.6f}"
         print(line)
 
 
@@ -339,15 +310,13 @@ def plot_group_for_dataset(
                 "results_file": str(meta["results_path"]),
                 "valid_samples": eval_out["valid_samples"],
                 "filtered_rows": eval_out["filtered_rows"],
-                "aurc_entropy": f"{eval_out['aurc_entropy']:.6f}",
-                "aurc_combined": f"{eval_out['aurc_combined']:.6f}",
+                "aurc": f"{eval_out['aurc']:.6f}",
             }
             all_table_rows.append(row)
             dataset_table_rows.append(
                 {
                     **row,
-                    "aurc_entropy": eval_out["aurc_entropy"],
-                    "aurc_combined": eval_out["aurc_combined"],
+                    "aurc": eval_out["aurc"],
                 }
             )
             ds_summary["slots"].setdefault(slot, {})
@@ -356,8 +325,7 @@ def plot_group_for_dataset(
                 "results_file": str(meta["results_path"]),
                 "valid_samples": eval_out["valid_samples"],
                 "filtered_rows": eval_out["filtered_rows"],
-                "aurc_entropy": eval_out["aurc_entropy"],
-                "aurc_combined": eval_out["aurc_combined"],
+                "aurc": eval_out["aurc"],
             }
 
         answer_label = ANSWER_TYPE_LABEL.get(question_type, question_type)
@@ -483,8 +451,7 @@ def _write_outputs(
         **extra_meta,
         "legend_encoding": {
             "color": "model specification (see curves[].color / label)",
-            "solid": "entropy ranking",
-            "dashed": "combined uncertainty ranking",
+            "curve": "combined uncertainty ranking (reported as AURC)",
         },
         "figures": figure_metas,
     }
