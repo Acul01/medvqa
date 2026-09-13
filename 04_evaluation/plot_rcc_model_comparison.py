@@ -6,9 +6,10 @@ Two config modes:
 1. Best-of-experiment (configs/rcc_model_compare.json):
    one figure per dataset × question type with noX / zeroshot / pseudo_sft.
 
-2. All specs per experiment (configs/rcc_experiment_specs.json):
-   one figure per experiment × dataset × question type with every listed
-   model-specification combination (missing result files skipped by default).
+2. Thesis specs per experiment (configs/rcc_experiment_specs.json):
+   18 figures (experiment × dataset × closed/open) with the listed
+   model-specification combinations (missing result files skipped by default).
+   Numbered copies: plot01.pdf … plot18.pdf.
 
 No title/legend on PDFs; one combined-ranking curve per spec (reported as AURC).
 Caption details go to rcc_model_compare_meta.json.
@@ -21,6 +22,7 @@ import csv
 import importlib.util
 import json
 import math
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -476,7 +478,76 @@ def _read_csv_rows(path: Path) -> List[Dict[str, Any]]:
         return list(csv.DictReader(f))
 
 
-def _write_combined_from_experiment_dirs(out_dir: Path, extra_meta: Dict[str, Any]) -> None:
+def thesis_plot_index(
+    experiment: str,
+    dataset: str,
+    question_type: str,
+    experiment_keys: List[str],
+    dataset_keys: List[str],
+    question_types: List[str],
+) -> int | None:
+    """1-based plot id: experiment → dataset → question type."""
+    try:
+        ei = experiment_keys.index(experiment)
+        di = dataset_keys.index(dataset)
+        qi = question_types.index(question_type)
+    except ValueError:
+        return None
+    return ei * len(dataset_keys) * len(question_types) + di * len(question_types) + qi + 1
+
+
+def write_numbered_thesis_plots(
+    *,
+    out_dir: Path,
+    figure_metas: List[Dict[str, Any]],
+    experiment_keys: List[str],
+    dataset_keys: List[str],
+    question_types: List[str],
+) -> List[Dict[str, Any]]:
+    """Copy {experiment}/{dataset}_{closed|open}.pdf to plot01.pdf … plot18.pdf."""
+    copies: List[Dict[str, Any]] = []
+    for fig in figure_metas:
+        plot_id = thesis_plot_index(
+            str(fig.get("experiment") or ""),
+            str(fig.get("dataset") or ""),
+            str(fig.get("question_type") or ""),
+            experiment_keys,
+            dataset_keys,
+            question_types,
+        )
+        src = Path(str(fig.get("path") or ""))
+        fig["plot_id"] = plot_id
+        if plot_id is None or not src.exists():
+            continue
+        numbered = out_dir / f"plot{plot_id:02d}.pdf"
+        descriptive = out_dir / (
+            f"plot{plot_id:02d}_{fig['experiment']}_{fig['dataset']}_{fig['question_type']}.pdf"
+        )
+        shutil.copy2(src, numbered)
+        shutil.copy2(src, descriptive)
+        fig["plot_file"] = numbered.name
+        fig["plot_file_descriptive"] = descriptive.name
+        copies.append(
+            {
+                "plot_id": plot_id,
+                "file": numbered.name,
+                "descriptive_file": descriptive.name,
+                "source": str(src),
+                "experiment": fig.get("experiment"),
+                "dataset": fig.get("dataset"),
+                "question_type": fig.get("question_type"),
+            }
+        )
+        print(f"Saved: {numbered}")
+    copies.sort(key=lambda row: int(row["plot_id"]))
+    return copies
+
+
+def _write_combined_from_experiment_dirs(
+    out_dir: Path,
+    extra_meta: Dict[str, Any],
+    figure_metas: List[Dict[str, Any]] | None = None,
+) -> None:
     """Rebuild top-level JSON/CSV from per-experiment artifacts so subset reruns do not wipe others."""
     table_rows: List[Dict[str, Any]] = []
     figures: List[Dict[str, Any]] = []
@@ -499,6 +570,8 @@ def _write_combined_from_experiment_dirs(out_dir: Path, extra_meta: Dict[str, An
             exp_block = (summary.get("experiments") or {}).get(child.name)
             if exp_block:
                 experiments[child.name] = exp_block
+    if figure_metas:
+        figures = figure_metas
     combined_summary = {
         **{k: extra_meta.get(k) for k in (
             "config", "mode", "combined_alpha", "num_thresholds",
@@ -637,15 +710,17 @@ def run_experiment_spec_mode(
     out_dir: Path,
     skip_missing: bool,
 ) -> None:
-    experiment_keys = list(config["experiments"].keys())
+    plot_experiment_keys = list(config["experiments"].keys())
+    experiment_keys = list(plot_experiment_keys)
     if args.experiments:
         missing = [e for e in args.experiments if e not in config["experiments"]]
         if missing:
             raise KeyError(f"Unknown experiment keys in --experiments: {missing}")
         experiment_keys = list(args.experiments)
 
-    default_datasets = list(config.get("dataset_list") or ["slake", "vqarad", "medvqa2019"])
+    default_datasets = list(config.get("dataset_list") or ["vqarad", "medvqa2019", "slake"])
     dataset_keys = list(args.datasets) if args.datasets else default_datasets
+    plot_question_types = list(config.get("question_types") or settings["question_types"])
 
     all_table_rows: List[Dict[str, Any]] = []
     figure_metas: List[Dict[str, Any]] = []
@@ -754,18 +829,27 @@ def run_experiment_spec_mode(
             },
         )
 
+    numbered = write_numbered_thesis_plots(
+        out_dir=out_dir,
+        figure_metas=figure_metas,
+        experiment_keys=plot_experiment_keys,
+        dataset_keys=default_datasets,
+        question_types=plot_question_types,
+    )
+    extra_meta = {
+        "config": str(config_path),
+        "mode": "experiment_specs",
+        "combined_alpha": settings["combined_alpha"],
+        "num_thresholds": settings["num_thresholds"],
+        "risk_metric": settings["risk_metric"],
+        "max_entropy": settings["max_entropy"],
+        "question_types": settings["question_types"],
+        "datasets": dataset_keys,
+        "output_dir": str(out_dir),
+        "thesis_plots": numbered,
+    }
     _write_combined_from_experiment_dirs(
-        out_dir,
-        extra_meta={
-            "config": str(config_path),
-            "mode": "experiment_specs",
-            "combined_alpha": settings["combined_alpha"],
-            "num_thresholds": settings["num_thresholds"],
-            "risk_metric": settings["risk_metric"],
-            "max_entropy": settings["max_entropy"],
-            "question_types": settings["question_types"],
-            "output_dir": str(out_dir),
-        },
+        out_dir, extra_meta=extra_meta, figure_metas=figure_metas
     )
 
 

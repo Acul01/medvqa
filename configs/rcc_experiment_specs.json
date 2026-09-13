@@ -3,23 +3,47 @@
   "num_thresholds": 200,
   "risk_metric": "match",
   "max_entropy": null,
-  "question_types": ["closed", "open", "overall"],
-  "dataset_list": ["slake", "vqarad", "medvqa2019"],
+  "question_types": ["closed", "open"],
+  "dataset_list": ["vqarad", "medvqa2019", "slake"],
   "output_dir": "06_results/FINAL/rcc_experiment_specs",
   "skip_missing": true,
-  "selection_note": "All model × specification combinations per experiment (no LoRA, no LLaVA-Med, no zeroshot 2s-L). {dataset} is substituted. Missing files are skipped. One combined-ranking curve per spec, reported as AURC. Captions: rcc_model_compare_meta.json.",
+  "selection_note": "18 thesis RCC plots: experiment × dataset × {closed, open}. Answer-only = base + SFT. Zeroshot = AF / RF / 2S. Pseudo-SFT = Qwen3-teacher (no SOM, no Qwen3 AF+RF). One combined-ranking curve per spec, reported as AURC. Numbered copies: plot01.pdf … plot18.pdf. Captions: rcc_model_compare_meta.json.",
   "experiments": {
     "answer_only": {
       "label": "Answer-only",
       "runs": [
         {
-          "id": "llava_full",
-          "label": "LLaVA-1.5 full",
+          "id": "llava_base",
+          "label": "llava_base",
+          "color": "#4C78A8",
+          "results_templates": [
+            "06_results/FINAL/noX/base/llava_base/{dataset}/llava_{dataset}_all.json",
+            "06_results/FINAL/noX/base/llava_base/llava_{dataset}_all.json",
+            "06_results/FINAL/noX/base/llava/{dataset}/llava_{dataset}_all.json",
+            "06_results/FINAL/noX/base/llava/llava_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "llava_SFT",
+          "label": "llava_SFT",
+          "color": "#1F4E79",
           "results_template": "06_results/FINAL/noX/full/llava_full/{dataset}/llava_{dataset}_all.json"
         },
         {
-          "id": "qwen2.5_full",
-          "label": "Qwen2.5-VL full",
+          "id": "qwen2.5_base",
+          "label": "qwen2.5_base",
+          "color": "#F58518",
+          "results_templates": [
+            "06_results/FINAL/noX/base/qwen2.5_base/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen2.5_base/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "qwen2.5_SFT",
+          "label": "qwen2.5_SFT",
+          "color": "#C44E00",
           "results_templates": [
             "06_results/FINAL/noX/full/qwen2.5_full/{dataset}/qwen2.5-vl_{dataset}_all.json",
             "06_results/FINAL/noX/full/qwen2.5_full/{dataset}_MC_full_{dataset}_all.json",
@@ -28,77 +52,90 @@
           ]
         },
         {
-          "id": "qwen3_full",
-          "label": "Qwen3-VL full",
+          "id": "qwen3_base",
+          "label": "qwen3_base",
+          "color": "#54A24B",
+          "results_templates": [
+            "06_results/FINAL/noX/base/qwen3_base/{dataset}/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen3_base/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen3/{dataset}/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen3/qwen3-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "qwen3_SFT",
+          "label": "qwen3_SFT",
+          "color": "#2B6A2B",
           "results_template": "06_results/FINAL/noX/full/qwen3_full/{dataset}/qwen3-vl_{dataset}_all.json"
         }
       ]
     },
     "zeroshot": {
-      "label": "Zeroshot-Reasoning",
+      "label": "Zeroshot-explanation",
       "runs": [
         {
           "id": "llava_af",
-          "label": "LLaVA-1.5 AF",
+          "label": "llava_af",
+          "color": "#4C78A8",
           "results_template": "06_results/FINAL/withX/zeroshot/llava/llava_{dataset}_all_answer_first.json"
         },
         {
           "id": "llava_rf",
-          "label": "LLaVA-1.5 RF",
+          "label": "llava_rf",
+          "color": "#1F4E79",
           "results_template": "06_results/FINAL/withX/zeroshot/llava/llava_{dataset}_all_rationale_first.json"
         },
         {
-          "id": "llava_2s",
-          "label": "LLaVA-1.5 2s",
+          "id": "llava_2S",
+          "label": "llava_2S",
+          "color": "#9ECAE1",
           "results_template": "06_results/FINAL/withX/zeroshot/llava/llava_{dataset}_all_rationale_first_2stage.json"
         },
         {
           "id": "qwen2.5_af",
-          "label": "Qwen2.5-VL AF",
+          "label": "qwen2.5_af",
+          "color": "#F58518",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_answer_first.json"
         },
         {
           "id": "qwen2.5_rf",
-          "label": "Qwen2.5-VL RF",
+          "label": "qwen2.5_rf",
+          "color": "#C44E00",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_rationale_first.json"
         },
         {
-          "id": "qwen2.5_2s",
-          "label": "Qwen2.5-VL 2s",
+          "id": "qwen2.5_2S",
+          "label": "qwen2.5_2S",
+          "color": "#F2C14E",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_rationale_first_2stage.json"
         },
         {
           "id": "qwen3_af",
-          "label": "Qwen3-VL AF",
+          "label": "qwen3_af",
+          "color": "#54A24B",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_{dataset}_all_answer_first.json"
         },
         {
           "id": "qwen3_rf",
-          "label": "Qwen3-VL RF",
+          "label": "qwen3_rf",
+          "color": "#2B6A2B",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_{dataset}_all_rationale_first.json"
         },
         {
-          "id": "qwen3_2s",
-          "label": "Qwen3-VL 2s",
+          "id": "qwen3_2S",
+          "label": "qwen3_2S",
+          "color": "#98D68A",
           "results_template": "06_results/FINAL/withX/zeroshot/qwen3/qwen3-vl_{dataset}_all_rationale_first_2stage.json"
         }
       ]
     },
     "pseudo_sft": {
-      "label": "Pseudo-Reasoning SFT",
+      "label": "Pseudo-explanation SFT (Qwen3-teacher)",
       "runs": [
         {
-          "id": "llava_rf",
-          "label": "LLaVA-1.5 RF (Qwen3-pseudo)",
-          "results_templates": [
-            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava/llava_{dataset}_all.json",
-            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava_{dataset}_all.json",
-            "06_results/FINAL/withX/pseudo_qwen3/rf/llava/{dataset}/llava_{dataset}_all.json"
-          ]
-        },
-        {
           "id": "llava_af",
-          "label": "LLaVA-1.5 AF (Qwen3-pseudo)",
+          "label": "llava_af",
+          "color": "#4C78A8",
           "results_templates": [
             "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/llava/llava_{dataset}_all.json",
             "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/llava_{dataset}_all.json",
@@ -106,51 +143,49 @@
           ]
         },
         {
-          "id": "qwen2.5_rf",
-          "label": "Qwen2.5-VL RF (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
-        },
-        {
-          "id": "qwen2.5_af",
-          "label": "Qwen2.5-VL AF (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
-        },
-        {
-          "id": "qwen2.5_both",
-          "label": "Qwen2.5-VL RF+AF merged (Qwen3-pseudo)",
-          "results_template": "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
-        },
-        {
-          "id": "qwen3_rf",
-          "label": "Qwen3-VL RF (Qwen3-pseudo)",
+          "id": "llava_rf",
+          "label": "llava_rf",
+          "color": "#1F4E79",
           "results_templates": [
-            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
-            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3-vl_{dataset}_all.json"
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava/llava_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/llava_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/llava/{dataset}/llava_{dataset}_all.json"
           ]
         },
         {
+          "id": "qwen2.5_af",
+          "label": "qwen2.5_af",
+          "color": "#F58518",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        },
+        {
+          "id": "qwen2.5_rf",
+          "label": "qwen2.5_rf",
+          "color": "#C44E00",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        },
+        {
+          "id": "qwen2.5_af+rf",
+          "label": "qwen2.5_af+rf",
+          "color": "#F2C14E",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        },
+        {
           "id": "qwen3_af",
-          "label": "Qwen3-VL AF (Qwen3-pseudo)",
+          "label": "qwen3_af",
+          "color": "#54A24B",
           "results_templates": [
             "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
             "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3-vl_{dataset}_all.json"
           ]
         },
         {
-          "id": "qwen3_both",
-          "label": "Qwen3-VL RF+AF merged (Qwen3-pseudo)",
+          "id": "qwen3_rf",
+          "label": "qwen3_rf",
+          "color": "#2B6A2B",
           "results_templates": [
-            "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
-            "06_results/FINAL/withX/pseudo_qwen3/both/merged/{dataset}/qwen3-vl_{dataset}_all.json"
-          ]
-        },
-        {
-          "id": "qwen2.5_som",
-          "label": "Qwen2.5-VL SOM (Qwen3-pseudo)",
-          "results_templates": [
-            "06_results/FINAL/withX/pseudo_som/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json",
-            "06_results/FINAL/withX/pseudo_som/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
-            "06_results/FINAL/withX/pseudo_som/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3-vl_{dataset}_all.json"
           ]
         }
       ]

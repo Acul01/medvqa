@@ -930,7 +930,7 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 
 Ausgaben unter `output_dir` (Default `06_results/FINAL/rcc_compare`): `{dataset}_{closed|open|all}.pdf` (ohne Titel/Legende), `rcc_model_compare_meta.json` (Labels, Farben, AURC für Captions), `rcc_model_compare_aurc.csv`, `rcc_model_compare_summary.json`. Combined-Ranking (`combined_alpha` aus Config, Default 0.5) wird als AURC berichtet.
 
-**Alle Specs pro Experiment** (Answer-only / Zeroshot / Pseudo-SFT): Config [`configs/rcc_experiment_specs.json`](configs/rcc_experiment_specs.json) — eine Figur je Experiment × Datensatz × Fragetyp. Ohne LoRA, LLaVA-Med und Zeroshot-2s-L. Eine Combined-Kurve pro Spec (als **AURC**); fehlende Result-JSONs werden übersprungen.
+**18 Thesis-Plots** (Answer-only / Zeroshot-explanation / Pseudo-explanation SFT): Config [`configs/rcc_experiment_specs.json`](configs/rcc_experiment_specs.json) — eine Figur je Experiment × Datensatz × `{closed, open}`. Answer-only: Base + SFT (LLaVA / Qwen2.5 / Qwen3). Zeroshot: AF / RF / 2S. Pseudo-SFT: Qwen3-Teacher (ohne SOM, ohne Qwen3 AF+RF). Eine Combined-Kurve pro Spec (als **AURC**); fehlende Result-JSONs werden übersprungen.
 
 ```bash
 python 04_evaluation/plot_rcc_model_comparison.py \
@@ -938,7 +938,7 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 # optional: --experiments zeroshot --datasets vqarad
 ```
 
-Ausgaben unter `06_results/FINAL/rcc_experiment_specs/{answer_only|zeroshot|pseudo_sft}/` (PDFs + je Ordner Meta/CSV). Die kombinierten Dateien im Parent-Ordner werden aus den Experiment-Unterordnern zusammengebaut, damit `--experiments pseudo_sft` Answer-only/Zeroshot nicht überschreibt.
+Ausgaben unter `06_results/FINAL/rcc_experiment_specs/{answer_only|zeroshot|pseudo_sft}/` plus nummerierte Kopien `plot01.pdf` … `plot18.pdf` im Parent-Ordner (PDFs + je Ordner Meta/CSV). Die kombinierten Dateien im Parent-Ordner werden aus den Experiment-Unterordnern zusammengebaut, damit `--experiments pseudo_sft` Answer-only/Zeroshot nicht überschreibt.
 
 ### Geplant: ECE & erweiterte Kalibrierung
 
