@@ -39,6 +39,7 @@ Usage:
 """
 
 import argparse
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -317,8 +318,7 @@ class _StopOnAnswerLetter(StoppingCriteria):
 
 def _answer_token_prob(model, inputs: dict, answer_token_ids: dict) -> float:
     """Single forward pass → max P over valid answer tokens (first generated token)."""
-    with torch.no_grad():
-        logits = model(**inputs, return_dict=True).logits[0, -1, :].double()
+    logits = _model_logits(model, inputs)[0, -1, :].double()
     probs = torch.softmax(logits, dim=-1)
     valid_ids = list(answer_token_ids.keys())
     return float(probs[valid_ids].max().item())
@@ -380,6 +380,102 @@ def resolve_shap_target(shap_target: str, experiment: str, json_order: str) -> s
     return shap_target
 
 
+# Processor/generate extras that Qwen VL forward() rejects, plus cached RoPE
+# tensors that must be recomputed for a new (teacher-forced) length.
+_DROP_FORWARD_KEYS = {
+    "position_ids",
+    "cache_position",
+    "past_key_values",
+    "labels",
+    "rope_deltas",
+    "videos",
+}
+_VL_FORWARD_KEYS = {
+    "input_ids",
+    "attention_mask",
+    "pixel_values",
+    "image_grid_thw",
+    "pixel_values_videos",
+    "video_grid_thw",
+    "second_per_grid_ts",
+    "mm_token_type_ids",
+    "image_sizes",
+    "pixel_attention_mask",
+    "images",
+}
+
+
+def _reset_vl_generation_state(model) -> None:
+    """Clear M-RoPE deltas cached by generate(); stale deltas crash later forwards."""
+    seen: set[int] = set()
+    objs = [model]
+    for attr in ("model", "base_model", "language_model"):
+        inner = getattr(model, attr, None)
+        if inner is not None:
+            objs.append(inner)
+    for obj in objs:
+        ident = id(obj)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        if hasattr(obj, "rope_deltas"):
+            obj.rope_deltas = None
+
+
+def _extend_seq_tensor(value, old_len: int, new_len: int):
+    if not torch.is_tensor(value) or new_len <= old_len or value.ndim < 2:
+        return value
+    if value.shape[1] != old_len:
+        return value
+    pad = new_len - old_len
+    filler = value.new_zeros((value.shape[0], pad, *value.shape[2:]))
+    return torch.cat([value, filler], dim=1)
+
+
+def _forward_kwargs(model, inputs: dict, input_ids=None, attention_mask=None) -> dict:
+    old_ids = inputs["input_ids"]
+    old_len = int(old_ids.shape[-1])
+    if input_ids is None:
+        input_ids = old_ids
+    new_len = int(input_ids.shape[-1])
+
+    raw = dict(inputs)
+    raw["input_ids"] = input_ids
+    if attention_mask is not None:
+        raw["attention_mask"] = attention_mask
+    elif raw.get("attention_mask") is not None and new_len != old_len:
+        pad = input_ids.new_ones((input_ids.shape[0], new_len - old_len))
+        raw["attention_mask"] = torch.cat([raw["attention_mask"], pad], dim=1)
+
+    if new_len != old_len:
+        for key, val in list(raw.items()):
+            if key in {"input_ids", "attention_mask"}:
+                continue
+            raw[key] = _extend_seq_tensor(val, old_len, new_len)
+
+    try:
+        params = inspect.signature(model.forward).parameters
+    except (TypeError, ValueError):
+        params = None
+    allowed = set(_VL_FORWARD_KEYS)
+    if params is not None:
+        allowed.update(k for k in params if k not in {"self", "kwargs"})
+
+    out: dict = {"use_cache": False}
+    for key, val in raw.items():
+        if key in _DROP_FORWARD_KEYS or val is None or key not in allowed:
+            continue
+        out[key] = val
+    return out
+
+
+def _model_logits(model, inputs: dict, input_ids=None, attention_mask=None):
+    _reset_vl_generation_state(model)
+    fwd = _forward_kwargs(model, inputs, input_ids=input_ids, attention_mask=attention_mask)
+    with torch.no_grad():
+        return model(**fwd, return_dict=True).logits
+
+
 def _sequence_mean_logprob(model, inputs: dict, target_ids: list[int]) -> float:
     """Teacher-forced mean log P of a fixed generated sequence under a (masked) image."""
     if not target_ids:
@@ -387,13 +483,10 @@ def _sequence_mean_logprob(model, inputs: dict, target_ids: list[int]) -> float:
     prompt = inputs["input_ids"]
     target = torch.tensor([target_ids], device=prompt.device, dtype=prompt.dtype)
     full = torch.cat([prompt, target], dim=1)
-    fwd = dict(inputs)
-    fwd["input_ids"] = full
     attn = inputs.get("attention_mask")
     if attn is not None:
-        fwd["attention_mask"] = torch.cat([attn, torch.ones_like(target)], dim=1)
-    with torch.no_grad():
-        logits = model(**fwd, return_dict=True).logits
+        attn = torch.cat([attn, torch.ones_like(target)], dim=1)
+    logits = _model_logits(model, inputs, input_ids=full, attention_mask=attn)
     prompt_len = prompt.shape[1]
     pred_logits = logits[0, prompt_len - 1: prompt_len - 1 + target.shape[1], :].double()
     log_probs = torch.log_softmax(pred_logits, dim=-1)
