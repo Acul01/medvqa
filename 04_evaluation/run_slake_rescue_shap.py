@@ -11,7 +11,7 @@ plus a root manifest.json.
 
 Example:
   CUDA_VISIBLE_DEVICES=0 python -u 04_evaluation/run_slake_rescue_shap.py \\
-      --config configs/shap_slake_rescue_compare.json --skip_existing
+      --config configs/shap_slake_rescue_compare.json --slots answer_only
 """
 
 from __future__ import annotations
@@ -179,6 +179,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu", type=str, default=None)
     parser.add_argument("--dtype", default="bfloat16", choices=["float32", "float16", "bfloat16"])
     parser.add_argument("--skip_existing", action="store_true")
+    parser.add_argument(
+        "--slots",
+        nargs="+",
+        choices=list(SLOT_ORDER),
+        default=list(SLOT_ORDER),
+        help="Which experiment slots to run on this GPU (default: all)",
+    )
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--data_root", default=get_data_root())
     parser.add_argument("--mc_data_root", default=get_mc_data_root())
@@ -206,9 +213,12 @@ def main() -> None:
         matched.append((spec, idx, sample))
         print(f"{spec['id']}: index={idx}  {sample.image_path}", flush=True)
 
+    active_slots = tuple(args.slots)
+    print(f"Slots on this process: {', '.join(active_slots)}", flush=True)
+
     jobs: dict[tuple, dict] = {}
     for spec, idx, _sample in matched:
-        for slot in SLOT_ORDER:
+        for slot in active_slots:
             slot_cfg = slot_spec(cfg, spec, slot)
             key = job_key(slot_cfg)
             bucket = jobs.setdefault(key, {"spec": slot_cfg, "indices": []})
@@ -263,7 +273,7 @@ def main() -> None:
         if not original.exists() or not args.skip_existing:
             write_original(sample, original)
         if not args.dry_run:
-            for slot in SLOT_ORDER:
+            for slot in active_slots:
                 slot_cfg = slot_spec(cfg, spec, slot)
                 src_dir = shap_out_dir(shap_scratch, slot_cfg, cfg["dataset"])
                 copy_shap_assets(src_dir, idx, case_dir, slot)
