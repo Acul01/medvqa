@@ -37,7 +37,16 @@
             "06_results/FINAL/noX/base/qwen2.5_base/{dataset}/qwen2.5-vl_{dataset}_all.json",
             "06_results/FINAL/noX/base/qwen2.5_base/qwen2.5-vl_{dataset}_all.json",
             "06_results/FINAL/noX/base/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
-            "06_results/FINAL/noX/base/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+            "06_results/FINAL/noX/base/qwen2.5/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5_base/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen2.5_base/{dataset}/Qwen2.5-VL-7B-Instruct_{dataset}_all.json",
+            "06_results/FINAL/noX/base/qwen2.5_base/Qwen2.5-VL-7B-Instruct_{dataset}_all.json",
+            "06_results/FINAL/noX/base/**/qwen2.5*_{dataset}_all.json",
+            "06_results/FINAL/noX/base/**/Qwen2.5*_{dataset}_all.json"
           ]
         },
         {

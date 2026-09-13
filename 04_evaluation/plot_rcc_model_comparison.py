@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import importlib.util
 import json
 import math
@@ -222,7 +223,10 @@ def print_dataset_aurc_table(dataset: str, slot_rows: List[Dict[str, Any]], ques
 
 
 def candidate_result_paths(run: Dict[str, Any], dataset: str, repo_root: Path) -> List[Path]:
-    """Collect candidate results JSON paths (overrides, then templates)."""
+    """Collect candidate results JSON paths (overrides, then templates).
+
+    Templates may contain ``*`` / ``**`` and are expanded with ``Path.glob``.
+    """
     raws: List[str] = []
     results = run.get("results")
     if isinstance(results, dict) and dataset in results and results[dataset]:
@@ -241,11 +245,23 @@ def candidate_result_paths(run: Dict[str, Any], dataset: str, repo_root: Path) -
 
     paths: List[Path] = []
     seen: set[str] = set()
-    for raw in raws:
-        resolved = str(resolve_path(raw.replace("{dataset}", dataset), repo_root))
+
+    def _add(path: Path) -> None:
+        resolved = str(path)
         if resolved not in seen:
             seen.add(resolved)
-            paths.append(Path(resolved))
+            paths.append(path)
+
+    for raw in raws:
+        filled = raw.replace("{dataset}", dataset)
+        if any(ch in filled for ch in "*?["):
+            pattern = filled if Path(filled).is_absolute() else str(repo_root / filled)
+            for match in sorted(glob.glob(pattern, recursive=True)):
+                match_path = Path(match)
+                if match_path.is_file():
+                    _add(match_path.resolve())
+            continue
+        _add(resolve_path(filled, repo_root))
     return paths
 
 
@@ -261,8 +277,8 @@ def load_first_existing_results(
         tried.append(path)
         if path.exists():
             return rce.load_results(path), path
-    detail = "; ".join(str(p) for p in tried) if tried else "(no path configured)"
-    message = f"Results file not found for {context}: {detail}"
+    detail = "\n    ".join(str(p) for p in tried) if tried else "(no path configured)"
+    message = f"Results file not found for {context}:\n    {detail}"
     if skip_missing:
         print(f"skip: {message}")
         return None, None
