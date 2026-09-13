@@ -126,6 +126,10 @@ def plot_dataset_question_type(
     group_name = experiment_label or experiment or "best-of-experiment"
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     curves_meta: List[Dict[str, Any]] = []
+    label_fontsize = 16
+    tick_fontsize = 14
+    spine_width = 2.0
+    curve_width = 3.6
 
     for idx, payload in enumerate(slot_payloads):
         color = slot_color(payload["slot"], idx, payload.get("color"))
@@ -135,7 +139,7 @@ def plot_dataset_question_type(
         x = [row["coverage"] for row in curve]
         y = [row["risk"] for row in curve]
         aurc = float(payload.get("aurc", float("nan")))
-        ax.plot(x, y, linewidth=2.2, color=color, linestyle="-")
+        ax.plot(x, y, linewidth=curve_width, color=color, linestyle="-")
         curves_meta.append(
             {
                 "slot": payload["slot"],
@@ -150,9 +154,12 @@ def plot_dataset_question_type(
             }
         )
 
-    ax.set_xlabel("Coverage")
-    ax.set_ylabel("Risk")
-    ax.grid(alpha=0.25)
+    ax.set_xlabel("Coverage", fontsize=label_fontsize)
+    ax.set_ylabel("Risk", fontsize=label_fontsize)
+    ax.tick_params(axis="both", labelsize=tick_fontsize, width=spine_width, length=6)
+    for spine in ax.spines.values():
+        spine.set_linewidth(spine_width)
+    ax.grid(alpha=0.25, linewidth=1.4)
     fig.tight_layout()
     fig.savefig(out_path, format="pdf")
     plt.close(fig)
