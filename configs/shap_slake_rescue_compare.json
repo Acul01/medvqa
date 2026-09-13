@@ -1,0 +1,86 @@
+{
+  "dataset": "slake",
+  "split": "test",
+  "max_evals": 300,
+  "shap_target": "auto",
+  "output_dir": "06_results/shap_outputs/slake_rescue_compare",
+  "note": "SLAKE rescues: answer-only and zeroshot are the RCC representatives (always wrong on these 5). Pseudo-SFT uses Qwen2.5 AF+RF when that run is correct, otherwise Qwen3 AF.",
+  "slots": {
+    "answer_only": {
+      "label": "answer-only",
+      "shap_model": "llava",
+      "model_path": "./05_outputs/mc/FINAL/noX/llava/slake_MC_full",
+      "experiment": "answer_only",
+      "json_order": "answer_only",
+      "run_tag": "rescue_ao"
+    },
+    "zeroshot": {
+      "label": "zeroshot",
+      "shap_model": "qwen",
+      "model_path": "Qwen/Qwen2.5-VL-7B-Instruct",
+      "experiment": "zeroshot",
+      "json_order": "answer_first",
+      "run_tag": "rescue_zs"
+    }
+  },
+  "pseudo_models": {
+    "qwen2.5_both": {
+      "label": "pseudo-SFT Qwen2.5 AF+RF",
+      "shap_model": "qwen",
+      "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen2.5/qwen2.5_slake_both",
+      "experiment": "pseudo",
+      "json_order": "answer_first",
+      "run_tag": "rescue_ps_qwen25_both"
+    },
+    "qwen3_af": {
+      "label": "pseudo-SFT Qwen3 AF",
+      "shap_model": "qwen",
+      "model_path": "./05_outputs/mc/FINAL/withX/pseudo-reasonings_qwen3/qwen3/qwen3_slake_af",
+      "experiment": "pseudo",
+      "json_order": "answer_first",
+      "run_tag": "rescue_ps_qwen3_af"
+    }
+  },
+  "samples": [
+    {
+      "id": "xmlab401",
+      "image_path": "02_data/SLAKE/slake_images/xmlab401/source.jpg",
+      "question": "Which organs appear in pairs?",
+      "gt_letter": "E",
+      "gt_answer": "Temporal Lobe",
+      "pseudo_model": "qwen3_af"
+    },
+    {
+      "id": "xmlab498",
+      "image_path": "02_data/SLAKE/slake_images/xmlab498/source.jpg",
+      "question": "What is the mr weighting in this image?",
+      "gt_letter": "E",
+      "gt_answer": "T1",
+      "pseudo_model": "qwen2.5_both"
+    },
+    {
+      "id": "xmlab513",
+      "image_path": "02_data/SLAKE/slake_images/xmlab513/source.jpg",
+      "question": "Is this an MRI image with T2 weighted?",
+      "gt_letter": "B",
+      "gt_answer": "No",
+      "pseudo_model": "qwen3_af"
+    },
+    {
+      "id": "xmlab532",
+      "image_path": "02_data/SLAKE/slake_images/xmlab532/source.jpg",
+      "question": "Where are the abnormalities in this image?",
+      "gt_letter": "D",
+      "gt_answer": "Lower Left Lobe",
+      "pseudo_model": "qwen2.5_both"
+    },
+    {
+      "id": "xmlab622",
+      "image_path": "02_data/SLAKE/slake_images/xmlab622/source.jpg",
+      "question": "Are there organs in the picture that can deliver food?",
+      "gt_letter": "B",
+      "gt_answer": "No",
+      "pseudo_model": "qwen2.5_both"
+    }
+  ]
+}
