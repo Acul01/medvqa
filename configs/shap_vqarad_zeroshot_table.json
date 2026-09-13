@@ -6,6 +6,7 @@
   "n_open": 4,
   "max_evals": 300,
   "experiment": "zeroshot",
+  "shap_target": "auto",
   "shap_root": "06_results/shap_outputs/vqarad_zeroshot_table",
   "figure_name": "vqarad_zeroshot_shap_table",
   "variants": [

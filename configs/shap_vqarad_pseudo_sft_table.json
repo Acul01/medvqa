@@ -6,6 +6,7 @@
   "n_open": 4,
   "max_evals": 300,
   "experiment": "pseudo",
+  "shap_target": "auto",
   "show_qa_row": true,
   "shap_root": "06_results/shap_outputs/vqarad_pseudo_sft_table",
   "figure_name": "vqarad_pseudo_sft_shap_table",

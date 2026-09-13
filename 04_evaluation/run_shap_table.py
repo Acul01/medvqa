@@ -76,6 +76,7 @@ def shap_argv(
         "--dtype", args.dtype,
         "--data_root", args.data_root,
         "--mc_data_root", args.mc_data_root,
+        "--shap_target", args.shap_target or cfg.get("shap_target", "auto"),
     ]
     if args.mask_type:
         cmd.extend(["--mask_type", args.mask_type])
@@ -96,6 +97,12 @@ def parse_args():
     parser.add_argument("--dtype", type=str, default="bfloat16",
                         choices=["float32", "float16", "bfloat16"])
     parser.add_argument("--mask_type", type=str, default=None)
+    parser.add_argument(
+        "--shap_target",
+        choices=["auto", "answer", "sequence"],
+        default="auto",
+        help="auto: full JSON sequence for zeroshot/pseudo/2s, letter for answer-only/2s-L",
+    )
     parser.add_argument(
         "--skip_existing",
         action="store_true",

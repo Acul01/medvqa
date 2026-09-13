@@ -9,6 +9,12 @@ Supports experiment modes that match the inference scripts:
 JSON field order is selected with --json_order (answer_first / rationale_first).
 Zeroshot also supports rationale_first_2stage.
 
+SHAP target (``--shap_target``, default auto):
+  answer    — P(MC letter) at the answer token (answer-only / 2s-L)
+  sequence  — mean token log-prob of the original JSON (answer + explanation)
+              teacher-forced under each masked image
+  auto      — sequence for JSON variants, answer otherwise
+
 For finetuned Qwen checkpoints with a spatial filter layer, spatial_filter.pt in
 the model directory is loaded automatically.
 
@@ -294,7 +300,7 @@ def _llava_med_inputs(
 
 
 # ---------------------------------------------------------------------------
-# Score functions: P(answer_letter | masked_image)
+# Score functions: P(answer_letter) or sequence log-prob | masked_image
 # ---------------------------------------------------------------------------
 
 class _StopOnAnswerLetter(StoppingCriteria):
@@ -368,6 +374,33 @@ def _uses_json_generate(experiment: str, json_order: str) -> bool:
     return experiment in ("zeroshot", "pseudo") and is_json_single_shot(json_order)
 
 
+def resolve_shap_target(shap_target: str, experiment: str, json_order: str) -> str:
+    if shap_target == "auto":
+        return "sequence" if _uses_json_generate(experiment, json_order) else "answer"
+    return shap_target
+
+
+def _sequence_mean_logprob(model, inputs: dict, target_ids: list[int]) -> float:
+    """Teacher-forced mean log P of a fixed generated sequence under a (masked) image."""
+    if not target_ids:
+        return 0.0
+    prompt = inputs["input_ids"]
+    target = torch.tensor([target_ids], device=prompt.device, dtype=prompt.dtype)
+    full = torch.cat([prompt, target], dim=1)
+    fwd = dict(inputs)
+    fwd["input_ids"] = full
+    attn = inputs.get("attention_mask")
+    if attn is not None:
+        fwd["attention_mask"] = torch.cat([attn, torch.ones_like(target)], dim=1)
+    with torch.no_grad():
+        logits = model(**fwd, return_dict=True).logits
+    prompt_len = prompt.shape[1]
+    pred_logits = logits[0, prompt_len - 1: prompt_len - 1 + target.shape[1], :].double()
+    log_probs = torch.log_softmax(pred_logits, dim=-1)
+    token_lp = log_probs.gather(1, target[0].unsqueeze(1).long()).squeeze(1)
+    return float(token_lp.mean().item())
+
+
 def make_qwen_scorer(
     model,
     processor,
@@ -378,10 +411,13 @@ def make_qwen_scorer(
     device: torch.device,
     max_new_tokens: int,
     rationale: str | None = None,
+    shap_target: str = "answer",
+    target_token_ids: list[int] | None = None,
 ):
     valid_answer_ids = _valid_answer_ids(processor, len(options))
     json_generate = _uses_json_generate(experiment, json_order)
     stop_on_letter = json_generate and json_order == "answer_first"
+    use_sequence = shap_target == "sequence" and target_token_ids
 
     def score_fn(images_np: np.ndarray) -> np.ndarray:
         scores = []
@@ -391,7 +427,9 @@ def make_qwen_scorer(
                 question, options, img, experiment, json_order, rationale
             )
             inputs = _qwen_inputs(processor, conv, device)
-            if json_generate:
+            if use_sequence:
+                scores.append(_sequence_mean_logprob(model, inputs, target_token_ids))
+            elif json_generate:
                 scores.append(
                     _json_answer_token_prob(
                         model, inputs, valid_answer_ids, max_new_tokens, stop_on_letter
@@ -414,18 +452,23 @@ def make_llava_scorer(
     device: torch.device,
     max_new_tokens: int,
     rationale: str | None = None,
+    shap_target: str = "answer",
+    target_token_ids: list[int] | None = None,
 ):
     valid_answer_ids = _valid_answer_ids(processor, len(options))
     json_generate = _uses_json_generate(experiment, json_order)
     stop_on_letter = json_generate and json_order == "answer_first"
     user_text = build_llava_user_text(question, options, experiment, json_order, rationale)
+    use_sequence = shap_target == "sequence" and target_token_ids
 
     def score_fn(images_np: np.ndarray) -> np.ndarray:
         scores = []
         for img_np in images_np:
             img = Image.fromarray(img_np.astype(np.uint8))
             inputs = _llava_inputs(processor, user_text, img, device)
-            if json_generate:
+            if use_sequence:
+                scores.append(_sequence_mean_logprob(model, inputs, target_token_ids))
+            elif json_generate:
                 scores.append(
                     _json_answer_token_prob(
                         model, inputs, valid_answer_ids, max_new_tokens, stop_on_letter
@@ -508,7 +551,7 @@ def generate_prediction_qwen(
     device: torch.device,
     max_new_tokens: int,
     rationale: str | None = None,
-) -> str:
+) -> tuple[str, list[int]]:
     conv = build_qwen_prompt_conversation(
         question, options, image, experiment, json_order, rationale
     )
@@ -522,7 +565,8 @@ def generate_prediction_qwen(
             return_dict_in_generate=True,
         )
     generated_ids = out.sequences[0][input_length:]
-    return clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
+    text = clean_answer(processor.decode(generated_ids, skip_special_tokens=True).strip())
+    return text, [int(t) for t in generated_ids.tolist()]
 
 
 def generate_prediction_llava(
@@ -536,7 +580,7 @@ def generate_prediction_llava(
     device: torch.device,
     max_new_tokens: int,
     rationale: str | None = None,
-) -> str:
+) -> tuple[str, list[int]]:
     from inference_llava_zeroshot_json import _decode_llava_new
 
     user_text = build_llava_user_text(question, options, experiment, json_order, rationale)
@@ -549,7 +593,9 @@ def generate_prediction_llava(
             do_sample=False,
             return_dict_in_generate=True,
         )
-    return _decode_llava_new(processor, out.sequences, input_length)
+    generated_ids = out.sequences[0][input_length:]
+    text = _decode_llava_new(processor, out.sequences, input_length)
+    return text, [int(t) for t in generated_ids.tolist()]
 
 
 def generate_prediction_llava_med(
@@ -599,7 +645,8 @@ def default_max_new_tokens(experiment: str, json_order: str) -> int:
 # ---------------------------------------------------------------------------
 
 def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
-                   output_path: Path, title: str, heatmap_path: Path | None = None):
+                   output_path: Path, title: str, heatmap_path: Path | None = None,
+                   title_heatmap: str = "SHAP (answer token prob)"):
     import matplotlib.pyplot as plt
 
     img_np = np.array(image.convert("RGB"))
@@ -618,7 +665,7 @@ def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
     axes[1].imshow(img_np, alpha=0.5)
     im = axes[1].imshow(heatmap, cmap="RdBu_r", vmin=-vmax, vmax=vmax, alpha=0.6)
     axes[1].axis("off")
-    axes[1].set_title("SHAP (answer token prob)")
+    axes[1].set_title(title_heatmap)
     plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
     fig.suptitle(title, fontsize=10, wrap=True)
     plt.tight_layout()
@@ -685,6 +732,12 @@ def parse_args():
     parser.add_argument("--data_root", type=str, default=get_data_root())
     parser.add_argument("--mc_data_root", type=str, default=get_mc_data_root())
     parser.add_argument("--output_dir", type=str, default="shap_outputs")
+    parser.add_argument(
+        "--shap_target",
+        choices=["auto", "answer", "sequence"],
+        default="auto",
+        help="auto: letter for answer-only/2s-L, full generated sequence for JSON (answer+explanation)",
+    )
     return parser.parse_args()
 
 
@@ -725,12 +778,16 @@ def choose_samples(all_samples: list, args) -> list[tuple[int, object]]:
 def main():
     args = parse_args()
     experiment = resolve_experiment(args.experiment, args.json_order)
+    shap_target = resolve_shap_target(args.shap_target, experiment, args.json_order)
     max_new_tokens = args.max_new_tokens or default_max_new_tokens(experiment, args.json_order)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model_path = args.model_path or DEFAULT_MODEL_PATHS[args.model]
     print(f"Loading {args.model} from {model_path} …")
-    print(f"Experiment={experiment}  json_order={args.json_order}  max_new_tokens={max_new_tokens}")
+    print(
+        f"Experiment={experiment}  json_order={args.json_order}  "
+        f"shap_target={shap_target}  max_new_tokens={max_new_tokens}"
+    )
 
     processor = None
     tokenizer = None
@@ -775,16 +832,29 @@ def main():
                 raise NotImplementedError("rationale_first_2stage is not implemented for LLaVA-Med SHAP.")
             print(f"  Rationale: {rationale[:120]} …")
 
+        target_token_ids: list[int] = []
         if args.model == "llava-med":
+            pred_raw = generate_prediction_llava_med(
+                model, tokenizer, image_processor, image, q, opts, device, max_new_tokens,
+            )
             score_fn = make_llava_med_scorer(
                 model, tokenizer, image_processor, q, opts, experiment, args.json_order,
                 device, max_new_tokens, rationale,
             )
-            pred_raw = generate_prediction_llava_med(
-                model, tokenizer, image_processor, image, q, opts, device, max_new_tokens,
-            )
         else:
-            scorer_kwargs = dict(
+            if args.model == "llava":
+                pred_raw, target_token_ids = generate_prediction_llava(
+                    model, processor, image, q, opts, experiment, args.json_order,
+                    device, max_new_tokens, rationale,
+                )
+                make_scorer = make_llava_scorer
+            else:
+                pred_raw, target_token_ids = generate_prediction_qwen(
+                    model, processor, image, q, opts, experiment, args.json_order,
+                    device, max_new_tokens, rationale,
+                )
+                make_scorer = make_qwen_scorer
+            score_fn = make_scorer(
                 model=model,
                 processor=processor,
                 question=q,
@@ -794,19 +864,9 @@ def main():
                 device=device,
                 max_new_tokens=max_new_tokens,
                 rationale=rationale,
+                shap_target=shap_target,
+                target_token_ids=target_token_ids,
             )
-            if args.model == "llava":
-                score_fn = make_llava_scorer(**scorer_kwargs)
-                pred_raw = generate_prediction_llava(
-                    model, processor, image, q, opts, experiment, args.json_order,
-                    device, max_new_tokens, rationale,
-                )
-            else:
-                score_fn = make_qwen_scorer(**scorer_kwargs)
-                pred_raw = generate_prediction_qwen(
-                    model, processor, image, q, opts, experiment, args.json_order,
-                    device, max_new_tokens, rationale,
-                )
 
         pred_letter = parse_prediction(pred_raw, len(opts), experiment, args.json_order)
         pred_text = opts[ord(pred_letter) - 65] if pred_letter else "?"
@@ -837,12 +897,23 @@ def main():
             "run_tag": args.run_tag,
             "experiment": experiment,
             "json_order": args.json_order,
+            "shap_target": shap_target,
+            "n_target_tokens": len(target_token_ids),
         }
         (out_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
-        print(f"  Running SHAP ({args.max_evals} evals, mask={args.mask_type}) …")
+        shap_title = (
+            "SHAP (sequence log-prob)"
+            if shap_target == "sequence"
+            else "SHAP (answer token prob)"
+        )
+        print(
+            f"  Running SHAP ({args.max_evals} evals, mask={args.mask_type}, "
+            f"target={shap_target}, tokens={len(target_token_ids)}) …"
+        )
         explain_sample(
             score_fn, image, args.max_evals, args.mask_type, out_path, title,
             heatmap_path=heatmap_path,
+            title_heatmap=shap_title,
         )
 
     print(f"\nDone. Outputs in: {out_dir}")
