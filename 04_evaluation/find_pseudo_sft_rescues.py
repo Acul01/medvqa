@@ -107,10 +107,32 @@ def load_result_rows(path: Path) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+def normalize_image_key(image: str) -> str:
+    """Stable image id across absolute vs repo-relative paths.
+
+    SLAKE files are all named source.jpg, so the parent folder must stay in the key.
+    """
+    parts = [p for p in Path(image.replace("\\", "/")).parts if p not in {".", "/"}]
+    for marker in (
+        "02_data",
+        "SLAKE",
+        "slake_images",
+        "VQA-Rad",
+        "vqarad_images",
+        "PathVQA",
+        "Med-VQA-2019",
+    ):
+        if marker in parts:
+            return "/".join(parts[parts.index(marker) :])
+    if len(parts) >= 2:
+        return "/".join(parts[-2:])
+    return parts[-1] if parts else ""
+
+
 def sample_key(row: dict[str, Any]) -> tuple[str, str]:
     image = str(row.get("source_image_path") or row.get("image_path") or "").strip()
     question = " ".join(str(row.get("question") or "").split())
-    return Path(image).name, question
+    return normalize_image_key(image), question
 
 
 def option_for_letter(row: dict[str, Any], letter: str | None) -> str:
@@ -246,11 +268,12 @@ def is_rescue(runs: list[dict[str, Any]], key: tuple[str, str]) -> bool:
 
 
 def flatten_sample(base: dict[str, Any], runs: list[dict[str, Any]], key: tuple[str, str]) -> dict[str, Any]:
-    image_name, question = key
+    image_key, question = key
     options = base.get("options") or []
     options_str = "  ".join(f"{chr(65 + i)}) {o}" for i, o in enumerate(options))
     row: dict[str, Any] = {
-        "image_name": image_name,
+        "image_key": image_key,
+        "image_name": Path(base.get("image_path") or image_key).name,
         "image_path": base.get("image_path", ""),
         "question": question or base.get("question", ""),
         "question_type": base.get("question_type", ""),
