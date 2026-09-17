@@ -633,7 +633,7 @@ PYTHONPATH=. python 04_evaluation/inference_qwen.py \
 - bei `crop_unsupervised` / `crop_supervised`: zusätzlich `fgr_crop_path` (effektives Crop-Bild; `image_path` ist gleich gesetzt)
 - `entropy`, `entropy_tokens`, `agreement`, `agreement_samples`, `confidence`
 - **Qwen:** `entropy` und `confidence` sind Mittel über `--agreement_samples` (Default 5) stochastische Läufe; `predicted_answer` / `predicted_letter` kommen vom greedy Hauptlauf. Zusätzlich `entropy_samples` (K Einzelwerte pro Zeile).
-- **Qwen** mit `--use_reasoning_json`: `use_reasoning_json`, `predicted_reasoning_text`, `predicted_json_parse_ok`, `entropy_tokens_all` (tokenweise Entropy über die gesamte JSON-Generierung des greedy Hauptlaufs), `entropy_sequence_mean` (Mittel darüber) zusätzlich zu `predicted_answer` / `predicted_letter`. Scalar `entropy` bleibt Antwort-Token-Entropy, Mean über K Agreement-Samples.
+- **Qwen** mit `--use_reasoning_json`: `use_reasoning_json`, `predicted_reasoning_text`, `predicted_json_parse_ok`, `entropy_tokens_all` (tokenweise Entropy über die gesamte JSON-Generierung des greedy Hauptlaufs), `entropy_sequence_mean` (Mittel darüber) zusätzlich zu `predicted_answer` / `predicted_letter`. Scalar `entropy` bleibt Antwort-Token-Entropy, Mean über K Agreement-Samples. Erklärung ohne Answer-Buchstabe: `04_evaluation/explanation_token_stats.py`.
 - optional 2-stage Felder: `reasoning_raw`, `reasoning_region`, `reasoning_observation`, `reasoning_explanation`, `reasoning_parse_mode` (`best_effort`)
 - optionale Strict-Decoding-Felder: `stage2_decoding_mode`, `stage2_option_probs`
 - optionale GradCAM-Felder: `use_gradcam`, `gradcam_status`, `gradcam_error`, `gradcam_overlay_path`, `gradcam_heatmap_path`
