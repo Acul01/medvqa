@@ -137,71 +137,47 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else float("nan")
 
 
+def _split_means(samples: list[dict[str, float]]) -> dict[str, float]:
+    return {
+        "mean_entropy": _mean([s["mean_entropy"] for s in samples]),
+        "mean_confidence": _mean([s["mean_confidence"] for s in samples]),
+    }
+
+
 def summarize_rows(
     rows: list[dict[str, Any]],
     *,
     json_order: JsonOrder = "auto",
-) -> dict[str, Any]:
+) -> dict[str, dict[str, float]]:
     per_sample: list[dict[str, Any]] = []
-    all_ents: list[float] = []
-    skipped = 0
-    for i, row in enumerate(rows):
+    for row in rows:
         toks = parse_entropy_tokens_all(row.get("entropy_tokens_all"))
         if not toks:
-            skipped += 1
             continue
         order = detect_json_order(row, json_order)
         letter = _fmt_letter(row.get("predicted_letter"))
         ents = explanation_entropies(toks, letter=letter, json_order=order)
         if not ents:
-            skipped += 1
             continue
-        confs = [math.exp(-h) for h in ents]
-        rec = {
-            "index": i,
-            "n_explanation_tokens": len(ents),
-            "mean_entropy": _mean(ents),
-            "mean_confidence_proxy": _mean(confs),
-            "json_order": order,
-            "question_type": row.get("question_type") or "unknown",
-        }
-        per_sample.append(rec)
-        all_ents.extend(ents)
-
-    n = len(per_sample)
-    all_confs = [math.exp(-h) for h in all_ents]
-    by_type: dict[str, dict[str, float]] = {}
-    for qtype in ("closed", "open"):
-        subset = [s for s in per_sample if s.get("question_type") == qtype]
-        if not subset:
-            continue
-        by_type[qtype] = {
-            "n_samples": float(len(subset)),
-            "macro_mean_entropy": _mean([s["mean_entropy"] for s in subset]),
-            "macro_mean_confidence_proxy": _mean([s["mean_confidence_proxy"] for s in subset]),
-        }
-
+        per_sample.append(
+            {
+                "mean_entropy": _mean(ents),
+                "mean_confidence": _mean([math.exp(-h) for h in ents]),
+                "question_type": row.get("question_type") or "unknown",
+            }
+        )
+    closed = [s for s in per_sample if s["question_type"] == "closed"]
+    open_rows = [s for s in per_sample if s["question_type"] == "open"]
     return {
-        "n_rows": len(rows),
-        "n_used": n,
-        "n_skipped": skipped,
-        "macro_mean_entropy": _mean([s["mean_entropy"] for s in per_sample]),
-        "macro_mean_confidence_proxy": _mean([s["mean_confidence_proxy"] for s in per_sample]),
-        "micro_mean_entropy": _mean(all_ents),
-        "micro_mean_confidence_proxy": _mean(all_confs),
-        "mean_explanation_tokens": _mean([float(s["n_explanation_tokens"]) for s in per_sample]),
-        "by_question_type": by_type,
-        "confidence_note": (
-            "confidence_proxy = exp(-token_entropy); per-token max-softmax was not stored. "
-            "Row field 'confidence' is the MC-letter max-prob and is excluded."
-        ),
-        "per_sample": per_sample,
+        "open": _split_means(open_rows),
+        "closed": _split_means(closed),
+        "overall": _split_means(per_sample),
     }
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Mean explanation-token entropy and exp(-H) confidence from results JSON/CSV."
+        description="Mean explanation-token entropy and exp(-H) confidence (open / closed / overall)."
     )
     p.add_argument("--results_file", required=True, type=str)
     p.add_argument(
@@ -214,12 +190,7 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=str,
         default=None,
-        help="Optional summary JSON (includes per-sample stats)",
-    )
-    p.add_argument(
-        "--no_per_sample",
-        action="store_true",
-        help="Omit per_sample list in --output",
+        help="Optional JSON with the six values",
     )
     return p.parse_args()
 
@@ -236,30 +207,17 @@ def main() -> None:
     if not path.exists():
         raise FileNotFoundError(path)
     summary = summarize_rows(_load_rows(path), json_order=args.json_order)
-    print(f"file: {path}")
-    print(f"used {summary['n_used']} / {summary['n_rows']} rows (skipped {summary['n_skipped']})")
-    print(f"mean explanation tokens / sample: {_fmt(summary['mean_explanation_tokens'])}")
-    print(f"macro mean token entropy:         {_fmt(summary['macro_mean_entropy'])}")
-    print(f"macro mean confidence (exp(-H)):  {_fmt(summary['macro_mean_confidence_proxy'])}")
-    print(f"micro mean token entropy:         {_fmt(summary['micro_mean_entropy'])}")
-    print(f"micro mean confidence (exp(-H)):  {_fmt(summary['micro_mean_confidence_proxy'])}")
-    for qtype, block in summary["by_question_type"].items():
+    for split in ("open", "closed", "overall"):
+        block = summary[split]
         print(
-            f"  {qtype}: n={int(block['n_samples'])}  "
-            f"entropy={_fmt(block['macro_mean_entropy'])}  "
-            f"conf={_fmt(block['macro_mean_confidence_proxy'])}"
+            f"{split}\tmean_entropy={_fmt(block['mean_entropy'])}\t"
+            f"mean_confidence={_fmt(block['mean_confidence'])}"
         )
-    print(summary["confidence_note"])
-
     if args.output:
-        out = dict(summary)
-        out["results_file"] = str(path)
-        if args.no_per_sample:
-            out.pop("per_sample", None)
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2)
+            json.dump(summary, f, indent=2)
         print(f"wrote {out_path}")
 
 
