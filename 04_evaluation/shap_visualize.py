@@ -36,6 +36,12 @@ Usage:
         --model qwen --model_path path/to/pseudo_both_ckpt \\
         --dataset vqarad --experiment pseudo --json_order answer_first \\
         --n_samples 5 --max_evals 300 --output_dir shap_outputs/
+
+    # black / shuffle image ablation (same semantics as inference_*.py)
+    python 04_evaluation/shap_visualize.py \\
+        --model qwen --model_path Qwen/Qwen2.5-VL-7B-Instruct \\
+        --dataset slake --experiment zeroshot --json_order answer_first \\
+        --sample_indices 778,804 --ablation_mode black --max_evals 300
 """
 
 import argparse
@@ -739,7 +745,8 @@ def default_max_new_tokens(experiment: str, json_order: str) -> int:
 
 def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
                    output_path: Path, title: str, heatmap_path: Path | None = None,
-                   title_heatmap: str = "SHAP (answer token prob)"):
+                   title_heatmap: str = "SHAP (answer token prob)",
+                   input_title: str = "Original"):
     import matplotlib.pyplot as plt
 
     img_np = np.array(image.convert("RGB"))
@@ -750,7 +757,7 @@ def explain_sample(score_fn, image: Image.Image, max_evals: int, mask_type: str,
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     axes[0].imshow(img_np)
     axes[0].axis("off")
-    axes[0].set_title("Original")
+    axes[0].set_title(input_title)
 
     sv = shap_values.values[0]  # H x W x C  (single output → no trailing dim)
     heatmap = sv.mean(axis=-1) # H x W
@@ -831,6 +838,18 @@ def parse_args():
         default="auto",
         help="auto: letter for answer-only/2s-L, full generated sequence for JSON (answer+explanation)",
     )
+    parser.add_argument(
+        "--ablation_mode",
+        choices=["none", "black", "shuffle"],
+        default="none",
+        help="none: original image; black: all-zero RGB; shuffle: permute images over the MC split",
+    )
+    parser.add_argument(
+        "--ablation_seed",
+        type=int,
+        default=42,
+        help="Seed for --ablation_mode shuffle (same as inference_*.py)",
+    )
     return parser.parse_args()
 
 
@@ -868,6 +887,31 @@ def choose_samples(all_samples: list, args) -> list[tuple[int, object]]:
     return [(start + i, s) for i, s in enumerate(chosen)]
 
 
+def shap_run_dir(
+    output_dir: str | Path,
+    model: str,
+    dataset: str,
+    experiment: str,
+    json_order: str,
+    run_tag: str | None = None,
+    ablation_mode: str = "none",
+) -> Path:
+    path = Path(output_dir) / model / dataset / experiment / json_order
+    if run_tag:
+        path = path / run_tag
+    if ablation_mode and ablation_mode != "none":
+        path = path / ablation_mode
+    return path
+
+
+def ablation_input_title(ablation_mode: str) -> str:
+    if ablation_mode == "black":
+        return "Black"
+    if ablation_mode == "shuffle":
+        return "Shuffle"
+    return "Original"
+
+
 def main():
     args = parse_args()
     experiment = resolve_experiment(args.experiment, args.json_order)
@@ -879,7 +923,8 @@ def main():
     print(f"Loading {args.model} from {model_path} …")
     print(
         f"Experiment={experiment}  json_order={args.json_order}  "
-        f"shap_target={shap_target}  max_new_tokens={max_new_tokens}"
+        f"shap_target={shap_target}  max_new_tokens={max_new_tokens}  "
+        f"ablation={args.ablation_mode}"
     )
 
     processor = None
@@ -897,17 +942,42 @@ def main():
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(args.dataset, split=args.split)
     samples = [s for s in samples if s.mc_options and s.mc_correct_index is not None]
+    from utils.ablation import build_shuffle_assignment, load_ablated_image
+
+    shuffle_assignment: dict[int, str] = {}
+    if args.ablation_mode == "shuffle":
+        shuffle_assignment = build_shuffle_assignment(samples, args.ablation_seed)
     indexed = choose_samples(samples, args)
     print(f"Samples: {[i for i, _ in indexed]}")
+    if args.ablation_mode != "none":
+        print(
+            f"Ablation={args.ablation_mode}"
+            + (f"  seed={args.ablation_seed}" if args.ablation_mode == "shuffle" else "")
+        )
 
-    out_dir = Path(args.output_dir) / args.model / args.dataset / experiment / args.json_order
-    if args.run_tag:
-        out_dir = out_dir / args.run_tag
+    out_dir = shap_run_dir(
+        args.output_dir,
+        args.model,
+        args.dataset,
+        experiment,
+        args.json_order,
+        run_tag=args.run_tag,
+        ablation_mode=args.ablation_mode,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for sample_idx, sample in indexed:
         print(f"\n[{sample_idx}] {sample.image_path}")
-        image = Image.open(sample.image_path).convert("RGB")
+        image, effective_image_path = load_ablated_image(
+            ablation_mode=args.ablation_mode,
+            source_image_path=str(sample.image_path),
+            sample_idx=sample_idx,
+            shuffle_assignment=shuffle_assignment,
+        )
+        if args.ablation_mode == "shuffle":
+            print(f"  Shuffle image: {effective_image_path}")
+        elif args.ablation_mode == "black":
+            print(f"  Black image: {image.size[0]}x{image.size[1]}")
         q, opts = sample.question, sample.mc_options
         rationale = None
 
@@ -979,6 +1049,10 @@ def main():
         meta = {
             "index": sample_idx,
             "image_path": str(sample.image_path),
+            "source_image_path": str(sample.image_path),
+            "effective_image_path": effective_image_path,
+            "ablation_mode": args.ablation_mode,
+            "ablation_seed": args.ablation_seed if args.ablation_mode == "shuffle" else None,
             "question": q,
             "options": opts,
             "answer": sample.answer,
@@ -1001,12 +1075,14 @@ def main():
         )
         print(
             f"  Running SHAP ({args.max_evals} evals, mask={args.mask_type}, "
-            f"target={shap_target}, tokens={len(target_token_ids)}) …"
+            f"target={shap_target}, tokens={len(target_token_ids)}, "
+            f"ablation={args.ablation_mode}) …"
         )
         explain_sample(
             score_fn, image, args.max_evals, args.mask_type, out_path, title,
             heatmap_path=heatmap_path,
             title_heatmap=shap_title,
+            input_title=ablation_input_title(args.ablation_mode),
         )
 
     print(f"\nDone. Outputs in: {out_dir}")

@@ -2,7 +2,9 @@
 """SHAP overlays for the 5 SLAKE Pseudo-SFT rescue samples.
 
 For each sample writes into one folder:
-  <id>/original.png
+  <id>/original.png          (source image when ablation_mode=none)
+  <id>/source.png            (question's real image)
+  <id>/input.png             (image actually scored: original / black / shuffled)
   <id>/answer_only.png + _heatmap.png
   <id>/zeroshot.png + _heatmap.png
   <id>/pseudo_sft.png + _heatmap.png
@@ -12,6 +14,9 @@ plus a root manifest.json.
 Example:
   CUDA_VISIBLE_DEVICES=0 python -u 04_evaluation/run_slake_rescue_shap.py \\
       --config configs/shap_slake_rescue_compare.json --slots answer_only
+
+  CUDA_VISIBLE_DEVICES=1 python -u 04_evaluation/run_slake_rescue_shap.py \\
+      --config configs/shap_slake_rescue_ablation.json --ablation_mode black --slots zeroshot
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from find_pseudo_sft_rescues import normalize_image_key
+from utils.ablation import build_shuffle_assignment, load_ablated_image
 from utils.load_data import MedicalVQALoader
 from utils.mc_json_zeroshot import parse_mc_answer_rationale_json
 from utils.paths import get_data_root, get_mc_data_root
@@ -76,10 +82,12 @@ def slot_spec(cfg: dict, sample_cfg: dict, slot: str) -> dict:
     return spec
 
 
-def shap_out_dir(root: Path, spec: dict, dataset: str) -> Path:
+def shap_out_dir(root: Path, spec: dict, dataset: str, ablation_mode: str = "none") -> Path:
     path = root / spec["shap_model"] / dataset / spec["experiment"] / spec["json_order"]
     if spec.get("run_tag"):
         path = path / spec["run_tag"]
+    if ablation_mode and ablation_mode != "none":
+        path = path / ablation_mode
     return path
 
 
@@ -103,10 +111,31 @@ def extract_explanation(raw: str, experiment: str, json_order: str, num_options:
     return parsed.rationale_text or ""
 
 
-def write_original(sample, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    image = Image.open(sample.image_path).convert("RGB")
-    image.save(dest)
+def write_case_images(
+    sample,
+    idx: int,
+    dest: Path,
+    ablation_mode: str,
+    shuffle_assignment: dict[int, str],
+) -> dict[str, str]:
+    dest.mkdir(parents=True, exist_ok=True)
+    source = Image.open(sample.image_path).convert("RGB")
+    source.save(dest / "source.png")
+    image, effective = load_ablated_image(
+        ablation_mode=ablation_mode,
+        source_image_path=str(sample.image_path),
+        sample_idx=idx,
+        shuffle_assignment=shuffle_assignment,
+    )
+    image.save(dest / "input.png")
+    if ablation_mode == "none":
+        image.save(dest / "original.png")
+    return {
+        "source_image_path": str(sample.image_path),
+        "effective_image_path": effective,
+        "source": "source.png",
+        "input": "input.png",
+    }
 
 
 def copy_shap_assets(src_dir: Path, idx: int, dest_dir: Path, slot: str) -> dict[str, str]:
@@ -126,7 +155,17 @@ def copy_shap_assets(src_dir: Path, idx: int, dest_dir: Path, slot: str) -> dict
     return written
 
 
-def build_meta(sample_cfg: dict, sample, idx: int, cfg: dict, dest_dir: Path) -> dict:
+def build_meta(
+    sample_cfg: dict,
+    sample,
+    idx: int,
+    cfg: dict,
+    dest_dir: Path,
+    *,
+    ablation_mode: str,
+    ablation_seed: int,
+    image_info: dict[str, str],
+) -> dict:
     options = list(sample.mc_options or [])
     gt_letter = sample_cfg.get("gt_letter") or (sample.answer or "")
     gt_answer = sample_cfg.get("gt_answer") or ""
@@ -138,7 +177,13 @@ def build_meta(sample_cfg: dict, sample, idx: int, cfg: dict, dest_dir: Path) ->
         "id": sample_cfg["id"],
         "index": idx,
         "image_path": str(sample.image_path),
-        "original": "original.png",
+        "source_image_path": image_info.get("source_image_path", str(sample.image_path)),
+        "effective_image_path": image_info.get("effective_image_path", str(sample.image_path)),
+        "ablation_mode": ablation_mode,
+        "ablation_seed": ablation_seed if ablation_mode == "shuffle" else None,
+        "source": image_info.get("source", "source.png"),
+        "input": image_info.get("input", "input.png"),
+        "original": "original.png" if ablation_mode == "none" else "input.png",
         "question": sample.question,
         "question_type": sample.question_type,
         "options": options,
@@ -186,10 +231,37 @@ def parse_args() -> argparse.Namespace:
         default=list(SLOT_ORDER),
         help="Which experiment slots to run on this GPU (default: all)",
     )
+    parser.add_argument(
+        "--ablation_mode",
+        choices=["none", "black", "shuffle"],
+        default=None,
+        help="Override config ablation_mode (default: config or none)",
+    )
+    parser.add_argument(
+        "--ablation_seed",
+        type=int,
+        default=None,
+        help="Override config ablation_seed (default: config or 42)",
+    )
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--data_root", default=get_data_root())
     parser.add_argument("--mc_data_root", default=get_mc_data_root())
     return parser.parse_args()
+
+
+def resolve_ablation(cfg: dict, args: argparse.Namespace) -> tuple[str, int]:
+    mode = args.ablation_mode or cfg.get("ablation_mode") or "none"
+    seed = args.ablation_seed if args.ablation_seed is not None else int(cfg.get("ablation_seed", 42))
+    if mode not in ("none", "black", "shuffle"):
+        raise SystemExit(f"Unknown ablation_mode {mode!r}")
+    return mode, seed
+
+
+def resolve_output_root(cfg: dict, ablation_mode: str) -> Path:
+    out_root = Path(cfg["output_dir"])
+    if ablation_mode != "none":
+        out_root = out_root / ablation_mode
+    return out_root
 
 
 def main() -> None:
@@ -199,13 +271,19 @@ def main() -> None:
         print(f"CUDA_VISIBLE_DEVICES={args.gpu}", flush=True)
 
     cfg = load_json(args.config)
-    out_root = Path(cfg["output_dir"])
+    ablation_mode, ablation_seed = resolve_ablation(cfg, args)
+    out_root = resolve_output_root(cfg, ablation_mode)
     shap_scratch = out_root / "_shap_runs"
     out_root.mkdir(parents=True, exist_ok=True)
 
     loader = MedicalVQALoader(data_root=args.data_root, mc_data_root=args.mc_data_root)
     samples = loader.load_dataset(cfg["dataset"], split=cfg.get("split", "test"))
     samples = [s for s in samples if s.mc_options and s.mc_correct_index is not None]
+    shuffle_assignment = (
+        build_shuffle_assignment(samples, ablation_seed)
+        if ablation_mode == "shuffle"
+        else {}
+    )
 
     matched = []
     for spec in cfg["samples"]:
@@ -215,6 +293,8 @@ def main() -> None:
 
     active_slots = tuple(args.slots)
     print(f"Slots on this process: {', '.join(active_slots)}", flush=True)
+    print(f"Ablation: {ablation_mode}" + (f" seed={ablation_seed}" if ablation_mode == "shuffle" else ""), flush=True)
+    print(f"Output: {out_root}", flush=True)
 
     jobs: dict[tuple, dict] = {}
     for spec, idx, _sample in matched:
@@ -257,6 +337,8 @@ def main() -> None:
             "--data_root", args.data_root,
             "--mc_data_root", args.mc_data_root,
             "--shap_target", cfg.get("shap_target", "auto"),
+            "--ablation_mode", ablation_mode,
+            "--ablation_seed", str(ablation_seed),
         ]
         print(" ".join(cmd), flush=True)
         if args.dry_run:
@@ -267,26 +349,31 @@ def main() -> None:
 
     manifest_samples = []
     for spec, idx, sample in matched:
+        if args.dry_run:
+            continue
         case_dir = out_root / spec["id"]
-        case_dir.mkdir(parents=True, exist_ok=True)
-        original = case_dir / "original.png"
-        if not original.exists() or not args.skip_existing:
-            write_original(sample, original)
-        if not args.dry_run:
-            for slot in active_slots:
-                slot_cfg = slot_spec(cfg, spec, slot)
-                src_dir = shap_out_dir(shap_scratch, slot_cfg, cfg["dataset"])
-                copy_shap_assets(src_dir, idx, case_dir, slot)
-            meta = build_meta(spec, sample, idx, cfg, case_dir)
-            (case_dir / "meta.json").write_text(
-                json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-            )
-            manifest_samples.append(meta)
-            print(f"Wrote {case_dir}", flush=True)
+        image_info = write_case_images(sample, idx, case_dir, ablation_mode, shuffle_assignment)
+        for slot in active_slots:
+            slot_cfg = slot_spec(cfg, spec, slot)
+            src_dir = shap_out_dir(shap_scratch, slot_cfg, cfg["dataset"], ablation_mode)
+            copy_shap_assets(src_dir, idx, case_dir, slot)
+        meta = build_meta(
+            spec, sample, idx, cfg, case_dir,
+            ablation_mode=ablation_mode,
+            ablation_seed=ablation_seed,
+            image_info=image_info,
+        )
+        (case_dir / "meta.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        manifest_samples.append(meta)
+        print(f"Wrote {case_dir}", flush=True)
 
     manifest = {
         "dataset": cfg["dataset"],
         "output_dir": str(out_root),
+        "ablation_mode": ablation_mode,
+        "ablation_seed": ablation_seed if ablation_mode == "shuffle" else None,
         "n_samples": len(manifest_samples),
         "samples": manifest_samples,
     }

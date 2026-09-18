@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import random
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from PIL import Image
 
 AblationLookupKey = Tuple[str, str]
 FgrCropLookup = Dict[AblationLookupKey, str]
@@ -294,6 +297,50 @@ def prepare_fgr_crop_lookup(
         crop_field=fgr_crop_field_for_mode(ablation_mode),
         data_root=data_root,
     )
+
+
+IMAGE_ABLATION_MODES = ("none", "black", "shuffle")
+
+
+def build_shuffle_assignment(samples, seed: int) -> dict[int, str]:
+    """Permute image paths across *samples*; questions stay at their original index.
+
+    Same assignment as ``inference_*.py --ablation_mode shuffle`` when called on
+    the same sample list and seed.
+    """
+    image_paths = [sample.image_path for sample in samples]
+    shuffled = image_paths.copy()
+    rng = random.Random(seed)
+    rng.shuffle(shuffled)
+    return {idx: shuffled[idx] for idx in range(len(samples))}
+
+
+def load_ablated_image(
+    *,
+    ablation_mode: str,
+    source_image_path: str,
+    sample_idx: int,
+    shuffle_assignment: Optional[dict[int, str]] = None,
+) -> tuple[Image.Image, str]:
+    """Load the RGB image that the model should see under *ablation_mode*.
+
+    Returns ``(image, effective_image_path)``. For ``black`` the path is the
+    source file (size reference); the pixels are all zeros. For ``shuffle`` the
+    path is the swapped image from *shuffle_assignment*.
+    """
+    if ablation_mode not in IMAGE_ABLATION_MODES:
+        raise ValueError(
+            f"Unknown ablation_mode {ablation_mode!r}; expected one of {IMAGE_ABLATION_MODES}"
+        )
+    effective_path = source_image_path
+    if ablation_mode == "shuffle":
+        if shuffle_assignment is None:
+            raise ValueError("shuffle_assignment is required for ablation_mode='shuffle'")
+        effective_path = shuffle_assignment.get(sample_idx, source_image_path)
+    image = Image.open(effective_path).convert("RGB")
+    if ablation_mode == "black":
+        image = Image.new("RGB", image.size, color=(0, 0, 0))
+    return image, str(effective_path)
 
 
 def resolve_ablation_image(
