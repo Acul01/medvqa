@@ -1,0 +1,183 @@
+{
+  "combined_alpha": 0.5,
+  "num_thresholds": 200,
+  "risk_metric": "match",
+  "max_entropy": null,
+  "question_types": ["closed", "open"],
+  "output_dir": "06_results/FINAL/rcc_best_of_split",
+  "skip_missing": true,
+  "selection_note": "Top-3 configurations per dataset × {closed, open} (accuracy / AURC ranking). One combined-ranking curve per spec, reported as AURC. No title/legend; captions: rcc_model_compare_meta.json.",
+  "datasets": {
+    "vqarad": {
+      "closed": [
+        {
+          "id": "zs_qwen25_rf",
+          "label": "Zeroshot · Qwen2.5-VL RF",
+          "color": "#6A3D9A",
+          "results_template": "06_results/FINAL/withX/zeroshot/qwen2.5/qwen2.5-vl_{dataset}_all_rationale_first.json"
+        },
+        {
+          "id": "ps_qwen25_qwen3_af",
+          "label": "Expl. SFT · Qwen2.5-VL, Qwen3 AF",
+          "color": "#E69F00",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        },
+        {
+          "id": "ps_qwen25_gpt4_rf",
+          "label": "Expl. SFT · Qwen2.5-VL, GPT-4o RF",
+          "color": "#56B4E9",
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_gpt4/rf/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4o/rf/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/**/qwen2.5-vl_{dataset}_all.json"
+          ]
+        }
+      ],
+      "open": [
+        {
+          "id": "ps_qwen3_gpt4_rf",
+          "label": "Expl. SFT · Qwen3-VL, GPT-4o RF",
+          "color": "#B15928",
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_gpt4/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/{dataset}/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/qwen3/{dataset}/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4o/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/**/qwen3-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "ao_qwen25_sft",
+          "label": "Answer-only · Qwen2.5-VL SFT",
+          "color": "#0072B2",
+          "results_templates": [
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}_MC_full_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "ps_qwen25_qwen3_af",
+          "label": "Expl. SFT · Qwen2.5-VL, Qwen3 AF",
+          "color": "#E69F00",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        }
+      ]
+    },
+    "medvqa2019": {
+      "closed": [
+        {
+          "id": "ps_qwen3_gpt4_rf",
+          "label": "Expl. SFT · Qwen3-VL, GPT-4o RF",
+          "color": "#B15928",
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_gpt4/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/{dataset}/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/qwen3/{dataset}/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4o/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/rf/**/qwen3-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "ps_qwen25_gpt4_af",
+          "label": "Expl. SFT · Qwen2.5-VL, GPT-4o AF",
+          "color": "#000000",
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_gpt4/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/af/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/af/qwen2.5/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4o/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_gpt4/af/**/qwen2.5-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "ps_qwen25_qwen3_af",
+          "label": "Expl. SFT · Qwen2.5-VL, Qwen3 AF",
+          "color": "#E69F00",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        }
+      ],
+      "open": [
+        {
+          "id": "ao_qwen3_sft",
+          "label": "Answer-only · Qwen3-VL SFT",
+          "color": "#CC79A7",
+          "results_template": "06_results/FINAL/noX/full/qwen3_full/{dataset}/qwen3-vl_{dataset}_all.json"
+        },
+        {
+          "id": "ps_qwen25_qwen3_af",
+          "label": "Expl. SFT · Qwen2.5-VL, Qwen3 AF",
+          "color": "#E69F00",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        },
+        {
+          "id": "ps_qwen3_qwen3_af",
+          "label": "Expl. SFT · Qwen3-VL, Qwen3 AF",
+          "color": "#009E73",
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen3-vl_{dataset}_all.json"
+          ]
+        }
+      ]
+    },
+    "slake": {
+      "closed": [
+        {
+          "id": "ao_qwen25_sft",
+          "label": "Answer-only · Qwen2.5-VL SFT",
+          "color": "#0072B2",
+          "results_templates": [
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}_MC_full_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json"
+          ]
+        },
+        {
+          "id": "ao_llava_sft",
+          "label": "Answer-only · LLaVA-1.5 SFT",
+          "color": "#D55E00",
+          "results_template": "06_results/FINAL/noX/full/llava_full/{dataset}/llava_{dataset}_all.json"
+        },
+        {
+          "id": "ps_qwen3_qwen3_rf",
+          "label": "Expl. SFT · Qwen3-VL, Qwen3 RF",
+          "color": "#CC79A7",
+          "results_templates": [
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3/qwen3-vl_{dataset}_all.json",
+            "06_results/FINAL/withX/pseudo_qwen3/rf/{dataset}/qwen3-vl_{dataset}_all.json"
+          ]
+        }
+      ],
+      "open": [
+        {
+          "id": "ao_llava_sft",
+          "label": "Answer-only · LLaVA-1.5 SFT",
+          "color": "#D55E00",
+          "results_template": "06_results/FINAL/noX/full/llava_full/{dataset}/llava_{dataset}_all.json"
+        },
+        {
+          "id": "ps_qwen25_qwen3_af",
+          "label": "Expl. SFT · Qwen2.5-VL, Qwen3 AF",
+          "color": "#E69F00",
+          "results_template": "06_results/FINAL/withX/pseudo_qwen3/af/{dataset}/qwen2.5/qwen2.5-vl_{dataset}_all.json"
+        },
+        {
+          "id": "ao_qwen25_sft",
+          "label": "Answer-only · Qwen2.5-VL SFT",
+          "color": "#0072B2",
+          "results_templates": [
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/full/qwen2.5_full/{dataset}_MC_full_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen2.5/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json",
+            "06_results/FINAL/noX/qwen/{dataset}_MC_full/qwen2.5-vl_{dataset}_all.json"
+          ]
+        }
+      ]
+    }
+  }
+}

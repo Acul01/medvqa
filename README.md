@@ -940,6 +940,16 @@ python 04_evaluation/plot_rcc_model_comparison.py \
 
 Ausgaben unter `06_results/FINAL/rcc_experiment_specs/{answer_only|zeroshot|pseudo_sft}/` plus nummerierte Kopien `plot01.pdf` … `plot18.pdf` im Parent-Ordner (PDFs + je Ordner Meta/CSV). Die kombinierten Dateien im Parent-Ordner werden aus den Experiment-Unterordnern zusammengebaut, damit `--experiments pseudo_sft` Answer-only/Zeroshot nicht überschreibt.
 
+**Top-3 pro Datensatz × Split:** Config [`configs/rcc_best_of_split.json`](configs/rcc_best_of_split.json) — eine Figur je Datensatz × `{closed, open}` mit den drei besten Konfigurationen dieses Splits (Answer-only / Zeroshot / Expl. SFT inkl. GPT-4o-Teacher).
+
+```bash
+python 04_evaluation/plot_rcc_model_comparison.py \
+  --config configs/rcc_best_of_split.json
+# optional: --datasets vqarad slake
+```
+
+Ausgaben unter `06_results/FINAL/rcc_best_of_split/`: `{dataset}_{closed|open}.pdf` plus Meta/CSV. Fehlende Result-JSONs werden übersprungen.
+
 ### Geplant: ECE & erweiterte Kalibrierung
 
 - **ECE:** z. B. Zuverlässigkeitsdiagramm für eine aus Path 1 abgeleitete **Konfidenz** (Binning) gegen empirische Genauigkeit – derzeit **nicht** im Repo; dokumentieren als geplante Erweiterung neben AURC.

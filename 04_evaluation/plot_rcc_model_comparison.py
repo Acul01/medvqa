@@ -1,7 +1,7 @@
 """
 Compare risk-coverage curves.
 
-Two config modes:
+Three config modes:
 
 1. Best-of-experiment (configs/rcc_model_compare.json):
    one figure per dataset × question type with noX / zeroshot / pseudo_sft.
@@ -10,6 +10,10 @@ Two config modes:
    18 figures (experiment × dataset × closed/open) with the listed
    model-specification combinations (missing result files skipped by default).
    Numbered copies: plot01.pdf … plot18.pdf.
+
+3. Best-of-split (configs/rcc_best_of_split.json):
+   one figure per dataset × {closed, open} with the three chosen
+   configurations for that split (missing result files skipped by default).
 
 No title/legend on PDFs; one combined-ranking curve per spec (reported as AURC).
 Caption details go to rcc_model_compare_meta.json.
@@ -52,6 +56,19 @@ def _load_risk_coverage_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def is_split_best_config(config: Dict[str, Any]) -> bool:
+    """True when datasets[name] uses closed/open lists instead of shared slots."""
+    if "experiments" in config:
+        return False
+    datasets = config.get("datasets")
+    if not isinstance(datasets, dict) or not datasets:
+        return False
+    sample = next(iter(datasets.values()))
+    if not isinstance(sample, dict):
+        return False
+    return any(isinstance(sample.get(key), list) for key in ("closed", "open", "overall"))
 
 
 def load_config(path: Path) -> Dict[str, Any]:
@@ -374,13 +391,13 @@ def plot_group_for_dataset(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Overlay RCC curves (best-of-experiment or all specs per experiment)"
+        description="Overlay RCC curves (best-of-experiment, split-best, or all specs per experiment)"
     )
     parser.add_argument(
         "--config",
         type=str,
         default="configs/rcc_model_compare.json",
-        help="JSON config: datasets→slots (best-of) or experiments→runs (all specs)",
+        help="JSON config: datasets→slots (best-of), datasets→closed/open lists (split-best), or experiments→runs",
     )
     parser.add_argument(
         "--output_dir",
@@ -612,6 +629,125 @@ def _write_combined_from_experiment_dirs(
         summary=combined_summary,
         figure_metas=figures,
         extra_meta=extra,
+    )
+
+
+def run_split_best_mode(
+    *,
+    args,
+    config: Dict[str, Any],
+    config_path: Path,
+    repo_root: Path,
+    rce: Any,
+    settings: Dict[str, Any],
+    out_dir: Path,
+    skip_missing: bool,
+) -> None:
+    dataset_keys = list(config["datasets"].keys())
+    if args.datasets:
+        missing = [d for d in args.datasets if d not in config["datasets"]]
+        if missing:
+            raise KeyError(f"Unknown dataset keys in --datasets: {missing}")
+        dataset_keys = list(args.datasets)
+
+    all_table_rows: List[Dict[str, Any]] = []
+    figure_metas: List[Dict[str, Any]] = []
+    summary: Dict[str, Any] = {
+        "config": str(config_path),
+        "mode": "split_best",
+        "combined_alpha": settings["combined_alpha"],
+        "num_thresholds": settings["num_thresholds"],
+        "risk_metric": settings["risk_metric"],
+        "max_entropy": settings["max_entropy"],
+        "question_types": settings["question_types"],
+        "output_dir": str(out_dir),
+        "datasets": {},
+    }
+
+    for dataset in dataset_keys:
+        ds_cfg = config["datasets"][dataset]
+        if not isinstance(ds_cfg, dict):
+            raise ValueError(f"datasets['{dataset}'] must be an object of question-type run lists.")
+        ds_summary: Dict[str, Any] = {"slots": {}, "figures": {}}
+        dataset_table_rows: List[Dict[str, Any]] = []
+
+        for question_type in settings["question_types"]:
+            runs = ds_cfg.get(question_type)
+            if not isinstance(runs, list) or not runs:
+                print(f"skip: no runs for {dataset}/{question_type}")
+                continue
+            loaded: Dict[str, Dict[str, Any]] = {}
+            for run in runs:
+                if not isinstance(run, dict) or "id" not in run:
+                    raise ValueError(f"Each run in {dataset}/{question_type} needs an 'id'.")
+                slot = str(run["id"])
+                candidates = candidate_result_paths(run, dataset, repo_root)
+                if not candidates:
+                    print(f"skip: no path for {dataset}/{question_type}/{slot}")
+                    continue
+                rows, used_path = load_first_existing_results(
+                    rce,
+                    candidates,
+                    skip_missing=skip_missing,
+                    context=f"{dataset}/{question_type}/{slot}",
+                )
+                if rows is None or used_path is None:
+                    continue
+                loaded[slot] = {
+                    "slot": slot,
+                    "label": str(run.get("label") or slot),
+                    "color": run.get("color"),
+                    "results_path": used_path,
+                    "results": rows,
+                }
+            if not loaded:
+                print(f"skip: no result files for {dataset}/{question_type}")
+                continue
+            table_rows, figs, part_summary = plot_group_for_dataset(
+                rce=rce,
+                dataset=dataset,
+                loaded=loaded,
+                question_types=[question_type],
+                out_dir=out_dir,
+                combined_alpha=settings["combined_alpha"],
+                risk_metric=settings["risk_metric"],
+                max_entropy=settings["max_entropy"],
+                num_thresholds=settings["num_thresholds"],
+                experiment="split_best",
+                experiment_label="best-of-split",
+            )
+            all_table_rows.extend(table_rows)
+            figure_metas.extend(figs)
+            dataset_table_rows.extend(
+                {**row, "aurc": float(row["aurc"])} for row in table_rows
+            )
+            ds_summary["slots"].setdefault(question_type, {})
+            ds_summary["slots"][question_type].update(part_summary.get("slots") or {})
+            ds_summary["figures"].update(part_summary.get("figures") or {})
+
+        if dataset_table_rows:
+            print_dataset_aurc_table(
+                f"split_best/{dataset}",
+                dataset_table_rows,
+                settings["question_types"],
+            )
+        summary["datasets"][dataset] = ds_summary
+
+    _write_outputs(
+        out_dir=out_dir,
+        all_table_rows=all_table_rows,
+        summary=summary,
+        figure_metas=figure_metas,
+        extra_meta={
+            "config": str(config_path),
+            "mode": "split_best",
+            "combined_alpha": settings["combined_alpha"],
+            "num_thresholds": settings["num_thresholds"],
+            "risk_metric": settings["risk_metric"],
+            "max_entropy": settings["max_entropy"],
+            "question_types": settings["question_types"],
+            "output_dir": str(out_dir),
+        },
     )
 
 
@@ -884,11 +1020,12 @@ def main() -> None:
     rce = _load_risk_coverage_module()
 
     spec_mode = "experiments" in config
+    split_best_mode = is_split_best_config(config)
     if args.require_all:
         skip_missing = False
     elif args.skip_missing is True:
         skip_missing = True
-    elif spec_mode:
+    elif spec_mode or split_best_mode:
         skip_missing = bool(config.get("skip_missing", True))
     else:
         skip_missing = bool(config.get("skip_missing", False))
@@ -905,6 +1042,8 @@ def main() -> None:
     )
     if spec_mode:
         run_experiment_spec_mode(**common)
+    elif split_best_mode:
+        run_split_best_mode(**common)
     else:
         run_best_of_mode(**common)
 
