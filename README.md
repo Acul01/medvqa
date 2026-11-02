@@ -1,10 +1,12 @@
-# MedVQA
+# Improving Reliability of Vision-Language Reasoning in Medical VQA through Uncertainty Calibration
 
-Training and evaluation code for medical visual question answering on **PathVQA**, **SLAKE**, **VQA-Rad**, and **Med-VQA-2019**.
+Master's thesis by Luca Rippe, M.Sc. Applied Economics and Data Science, Carl von Ossietzky Universität Oldenburg, September 2026. Supervisors: Prof. Dr.-Ing. Daniel Sonntag and Prof. Dr. Lars Schwettmann. Advisor: Siting Liang.
 
-The repository fine-tunes and evaluates **LLaVA 1.5**, **LLaVA-Med**, **Qwen2.5-VL**, and **Qwen3-VL**, and can score an off-the-shelf **MedVLM-R1** checkpoint. Questions are cast as multiple choice. Runs record answer accuracy together with uncertainty signals (token entropy, sample agreement, confidence) and support selective prediction via risk–coverage curves and AURC. A second set of experiments supervises short JSON rationales (region, observation, reasoning, answer letter), including rationales distilled from GPT-4o or Qwen3-VL.
+The thesis is available as [docs/thesis.pdf](docs/thesis.pdf). This repository is the code behind it.
 
-This is the code reference for a master's thesis. Model weights, datasets, and result dumps are not in the repository.
+The experiments cover medical visual question answering on **PathVQA**, **SLAKE**, **VQA-Rad**, and **Med-VQA-2019**. The code fine-tunes and evaluates **LLaVA 1.5**, **LLaVA-Med**, **Qwen2.5-VL**, and **Qwen3-VL**, and can score an off-the-shelf **MedVLM-R1** checkpoint. Questions are cast as multiple choice. Runs record answer accuracy together with uncertainty signals (token entropy, sample agreement, confidence) and support selective prediction via risk–coverage curves and AURC. A second set of experiments supervises short JSON rationales (region, observation, reasoning, answer letter), including rationales distilled from GPT-4o or Qwen3-VL.
+
+Model weights, datasets, and result dumps are not in the repository.
 
 ## Layout
 
