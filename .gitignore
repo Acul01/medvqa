@@ -1,49 +1,40 @@
-02_data/
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/
+.claude/
+.cursor/
 
-01_external/
-
-# Trainings-Outputs (können sehr groß sein!)
-05_outputs/
-*.pt
-*.pth
-*.ckpt
-*.safetensors
-
-# Ergebnisse
-results_*.json
-
-# Python Cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.venv/
+venv/
+*.egg-info/
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Guide-Dateien (persönliche Notizen)
+# Local secrets and personal notes
+.env
 general_guide.md
 HPC_JUPYTERLAB_GPU_ANLEITUNG.md
 setup.txt
 cmds.md
 cmds2.md
 THESIS_METHODS.md
-results
-
-# local/cluster secrets
-.env
-
-# experiment artifacts
-logs/
-06_results/
-results_debug/
-wandb/
-
-
-# local generated datasets
-02_data/data_mc_openai/
-
-# local external clone
-01_external/LLaVA-Med/
 commands.txt
 test.ipynb
+
+# Data, weights, and run artifacts (not part of the public code reference)
+01_external/
+02_data/
+05_outputs/
+06_results/
+results/
+results_debug/
+logs/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+results_*.json

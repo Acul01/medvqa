@@ -2,10 +2,9 @@
 Download PathVQA, SLAKE, and VQA-Rad from HuggingFace into the data root
 (``MEDVQA_DATA_ROOT`` or default ``02_data/``; layout matches MedicalVQALoader).
 
-Usage on cluster:
-    conda activate llava_env
+Usage (from the repository root):
     pip install datasets huggingface_hub pandas
-    python download_datasets.py
+    python utils/download_datasets.py
 """
 
 import json

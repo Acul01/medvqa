@@ -1,0 +1,26 @@
+# Core training and evaluation
+torch
+transformers>=4.57
+accelerate
+pillow
+pandas
+numpy
+matplotlib
+tqdm
+wandb
+qwen-vl-utils
+peft
+
+# Optional, used by specific scripts
+bitsandbytes
+openai
+python-dotenv
+shap
+openpyxl
+datasets
+huggingface_hub
+nltk
+
+# Free-text metrics, only if you score open answers that way
+# rouge-score
+# bert-score
